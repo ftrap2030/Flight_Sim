@@ -170,8 +170,34 @@ class TestApproachGuidance(unittest.TestCase):
         self.assertAlmostEqual(approach.distance_nm, 5.0, delta=0.2)
 
     def test_on_the_glidepath_reads_near_zero(self):
+        """Placed on a path aimed at the touchdown point, deviation is nil.
+
+        `place_on_final` positions the aircraft on a path aimed at the
+        *threshold*, so the reading is offset by exactly the threshold crossing
+        height -- correct, and worth measuring rather than papering over.
+        """
         session, _f, _d = place_on_final(distance_nm=5.0)
-        self.assertLess(abs(session.sim.readout().approach.glideslope_dev_ft), 30.0)
+        deviation = session.sim.readout().approach.glideslope_dev_ft
+        aim_offset = landing.AIM_POINT_FT * math.tan(
+            math.radians(landing.GLIDESLOPE_DEG)
+        )
+        self.assertAlmostEqual(deviation, -aim_offset, delta=20.0)
+
+    def test_the_glidepath_crosses_the_threshold_at_about_fifty_feet(self):
+        """The aim point is what gives a real approach its 50 ft TCH."""
+        session, field, direction = place_on_final(distance_nm=5.0)
+        state = session.sim.state
+        # Put the aircraft exactly over the threshold, on the path.
+        rad = math.radians(direction)
+        half = field.runway_length_nm / 2.0
+        state.x_nm = field.x_nm - math.sin(rad) * half
+        state.y_nm = field.y_nm - math.cos(rad) * half
+        approach = session.sim.readout().approach
+        crossing_height = approach.target_altitude_ft - field.elevation_ft
+        self.assertTrue(
+            35.0 < crossing_height < 70.0,
+            "threshold crossing height is {:.0f} ft".format(crossing_height),
+        )
 
     def test_high_and_low_are_signed_correctly(self):
         high, _f, _d = place_on_final(distance_nm=5.0, height_offset_ft=400.0)

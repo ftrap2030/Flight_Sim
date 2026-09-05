@@ -76,6 +76,7 @@ Commands are typed the way a pilot would say them:
 | On the ground | `max brakes`, `release brakes`, `reverse thrust`, `stow reversers` |
 | Time | `hold`, `wait 60 seconds`, `wait 2 minutes` |
 | Time of day | `time 0530`, `dawn`, `midday`, `dusk`, `night` |
+| Autopilot | `autopilot on/off`, `set altitude 12000`, `set speed 280`, `vertical speed 1500`, `approach mode` |
 | Navigation | `direct to KEBR`, `show plan`, `clear route`, `airfields`, `debrief` |
 | Other | `map`, `status`, `help`, `quit` |
 
@@ -127,6 +128,32 @@ the sidestick and drops its nose, so a stall is recoverable if you have the
 height and the discipline to unload it. You can also overspeed past Vmo,
 overstress the airframe, and run the tanks dry, at which point you are flying a
 very large glider.
+
+## The autopilot
+
+Hand-flying every ten seconds is right for a valley run and tedious for a cruise
+leg. `set altitude 12000`, `set speed 280`, `heading 200`, `vertical speed 1500`
+— and `approach mode` to fly the ILS.
+
+These are controllers, not a bypass: each writes the same commanded pitch, bank
+and throttle a pilot would, so the control law, the rate limits and the stall
+behaviour are all unchanged. An autopilot that wrote straight to the state could
+fly an aeroplane the pilot cannot.
+
+It captures 12,000 ft to within a few feet, holds a commanded speed exactly, and
+settles a turn onto a heading without oscillating — including through extreme
+turbulence, where it holds altitude to a couple of hundred feet.
+
+Channels engage independently, and **a manual input on a channel disengages it**:
+touch the sidestick and vertical guidance drops while the autothrottle keeps
+working. An autopilot silently fighting the pilot for the elevator is worse than
+no autopilot at all.
+
+`approach mode` flies the glideslope and localiser down to about 50 feet above
+the runway, then hands the elevator back — on the centreline, at Vref, descending
+— and retards the thrust levers at 28 feet, as a real autoland does. **The flare
+is still yours.** That is the part worth flying by hand, and it is the part that
+decides whether you get a greaser or a hard landing.
 
 ## Somewhere to go
 
@@ -251,7 +278,7 @@ Other flags: `--seed` picks the world, `--altitude` the starting height,
 python -m unittest discover -s tests -t .
 ```
 
-283 tests, no dependencies. They check the atmosphere against published ISA
+309 tests, no dependencies. They check the atmosphere against published ISA
 tables, stall speed against its closed form, cruise fuel flow and service
 ceiling against published figures for all five aircraft, terrain determinism,
 save/load fidelity, that every prose template renders against a live context,

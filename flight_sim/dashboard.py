@@ -6,6 +6,7 @@ displays are laid out (PFD on the left, systems on the right).
 """
 
 from . import aircraft as fleet
+from . import autopilot
 from . import atmosphere as atm
 
 HORIZON_WIDTH = 33
@@ -101,6 +102,10 @@ def render(sim, readout, title=None):
 
     if r.warnings:
         lines.append("> **{}**".format("  |  ".join(r.warnings)))
+        lines.append("")
+
+    if s.ap_engaged:
+        lines.append("`{}`".format(autopilot.status_text(s)))
         lines.append("")
 
     lines.append("```")

@@ -31,6 +31,11 @@ VREF_FACTOR = 1.3  # Vref is 1.3 x the stall speed in the landing configuration
 # The glidepath every instrument approach flies.
 GLIDESLOPE_DEG = 3.0
 APPROACH_RANGE_NM = 20.0
+# A real glidepath does not aim at the threshold -- it aims at a touchdown point
+# some way down the runway, which is what gives a threshold crossing height of
+# about fifty feet. Aiming at the threshold makes the guidance run out exactly
+# where the aircraft still has the last fifty feet to descend, and it floats.
+AIM_POINT_FT = 1000.0
 MAX_LOCALISER_DEG = 12.0
 MAX_APPROACH_CRAB_DEG = 45.0
 
@@ -200,7 +205,10 @@ def approach_guidance(sim, field=None):
     to_threshold_ft = -along
     distance_nm = math.hypot(to_threshold_ft, across) / FT_PER_NM
 
-    target = field.elevation_ft + max(0.0, to_threshold_ft) * math.tan(
+    # Height is flown against the aim point, so the path keeps descending across
+    # the threshold and meets the runway where it should.
+    to_aim_ft = AIM_POINT_FT - along
+    target = field.elevation_ft + max(0.0, to_aim_ft) * math.tan(
         math.radians(GLIDESLOPE_DEG)
     )
     deviation = state.altitude_ft - target
@@ -222,8 +230,14 @@ def approach_guidance(sim, field=None):
         # "On approach" has to mean *positioned to land on this runway*, not
         # merely somewhere near it. A cruising aircraft five miles abeam a field
         # is not on its approach, and showing it guidance is noise.
+        # Guidance runs until the far end of the runway, not until the aim
+        # point. Ending it at the aim point is a race the aircraft can lose: a
+        # touch high on short final and the guidance quits with fifty feet still
+        # to descend, leaving whatever catches it next to float the length of
+        # the runway. Past the aim point the target is simply runway level, so
+        # the guidance keeps flying it down onto the concrete.
         on_approach=(
-            to_threshold_ft > 0.0
+            along < field.runway_length_ft
             and distance_nm < APPROACH_RANGE_NM
             and abs(localiser) < MAX_LOCALISER_DEG
             and abs(_wrap180(state.heading_deg - direction)) < MAX_APPROACH_CRAB_DEG

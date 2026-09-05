@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass
 
 from . import aircraft as fleet
+from . import autopilot
 from .physics import clamp, wrap360
 
 
@@ -254,6 +255,45 @@ def _match_engines(text, raw):
     return None
 
 
+def _match_autopilot(text, raw):
+    if re.match(r"^(?:autopilot|ap)\s*(?:on|engage|engaged)$", text):
+        return Command("ap_on", text=raw, advances_time=False)
+    if re.match(r"^(?:autopilot|ap)\s*(?:off|disengage|disconnect)$", text):
+        return Command("ap_off", text=raw, advances_time=False)
+
+    m = re.match(
+        r"^(?:set\s+|maintain\s+|climb to\s+|descend to\s+)?"
+        r"(?:altitude|alt|flight level|fl)\s*(?:to\s+)?" + _NUMBER + r"$",
+        text,
+    )
+    if m:
+        value = float(m.group(1))
+        # "FL350" and "flight level 350" mean 35,000 ft.
+        if value < 600 and re.search(r"flight level|\bfl\b", text):
+            value *= 100.0
+        return Command("ap_altitude", value, raw, advances_time=False)
+
+    m = re.match(
+        r"^(?:set\s+|maintain\s+|hold\s+)?(?:speed|ias|airspeed)\s*"
+        r"(?:to\s+)?" + _NUMBER + r"$",
+        text,
+    )
+    if m:
+        return Command("ap_speed", float(m.group(1)), raw, advances_time=False)
+
+    m = re.match(
+        r"^(?:set\s+)?(?:vertical speed|v/s|vs|climb rate)\s*(?:to\s+)?"
+        + _NUMBER + r"$",
+        text,
+    )
+    if m:
+        return Command("ap_vs", float(m.group(1)), raw, advances_time=False)
+
+    if re.match(r"^(?:arm\s+)?(?:approach|appr|ils)(?:\s+mode)?$", text):
+        return Command("ap_approach", text=raw, advances_time=False)
+    return None
+
+
 def _match_time_of_day(text, raw):
     m = re.match(r"^(?:set\s+)?(?:local\s+)?time\s+(?:to\s+)?(\d{1,2}):?(\d{2})?$", text)
     if m:
@@ -339,6 +379,7 @@ _MATCHERS = [
     _match_rudder,
     _match_engines,
     _match_ground,
+    _match_autopilot,
     _match_time_of_day,
     # Lateral before navigation: "fly to heading 270" is a heading command, and
     # the destination pattern would otherwise swallow "heading 270" as a name.
@@ -352,6 +393,10 @@ def apply(sim, command):
     """Mutate the simulator's commanded state. Does not advance time."""
     s = sim.state
     kind = command.kind
+
+    # A manual input on a channel takes it back from the autopilot. An
+    # autopilot quietly fighting the pilot for the elevator is worse than none.
+    autopilot.disengage_for(s, kind)
 
     if kind == "throttle_set":
         s.throttle_pct = clamp(command.value, 0.0, 100.0)
@@ -371,6 +416,8 @@ def apply(sim, command):
         s.cmd_heading_deg = None
     elif kind == "heading":
         s.cmd_heading_deg = wrap360(command.value)
+        if s.ap_engaged:
+            s.ap_heading_deg = s.cmd_heading_deg
     elif kind == "heading_delta":
         s.cmd_heading_deg = wrap360(s.heading_deg + command.value)
     elif kind == "rudder_set":
@@ -396,6 +443,35 @@ def apply(sim, command):
         pass
     elif kind == "time_of_day":
         s.time_of_day_h = command.value % 24.0
+    elif kind == "ap_on":
+        s.ap_engaged = True
+        if s.ap_altitude_ft is None and s.ap_vs_fpm is None:
+            s.ap_altitude_ft = s.altitude_ft
+        if s.ap_heading_deg is None:
+            s.ap_heading_deg = s.heading_deg
+    elif kind == "ap_off":
+        s.ap_engaged = False
+        s.ap_altitude_ft = None
+        s.ap_vs_fpm = None
+        s.ap_heading_deg = None
+        s.ap_speed_kt = None
+        s.ap_approach = False
+    elif kind == "ap_altitude":
+        s.ap_engaged = True
+        s.ap_altitude_ft = clamp(command.value, 0.0, 45000.0)
+        s.ap_vs_fpm = None
+        s.ap_approach = False
+    elif kind == "ap_vs":
+        s.ap_engaged = True
+        s.ap_vs_fpm = clamp(command.value, -6000.0, 6000.0)
+        s.ap_altitude_ft = None
+        s.ap_approach = False
+    elif kind == "ap_speed":
+        s.ap_engaged = True
+        s.ap_speed_kt = clamp(command.value, 100.0, 400.0)
+    elif kind == "ap_approach":
+        s.ap_engaged = True
+        s.ap_approach = True
         pass
 
 
@@ -412,6 +488,7 @@ HELP_TEXT = """\
 | **On the ground** | `brakes`, `max brakes`, `release brakes`, `reverse thrust`, `stow reversers` |
 | **Configuration** | `flaps 1`, `flaps full`, `flaps up`, `gear down`, `gear up`, `speedbrakes out`, `speedbrakes in` |
 | **Time** | `hold` (advance 10 s unchanged), `wait 60 seconds`, `wait 2 minutes` |
+| **Autopilot** | `autopilot on/off`, `set altitude 12000`, `set speed 280`, `vertical speed 1500`, `approach mode` |
 | **Time of day** | `time 0530`, `dawn`, `midday`, `dusk`, `night` |
 | **Navigation** | `direct to KEBR`, `show plan`, `clear route`, `airfields`, `debrief` |
 | **Other** | `map` (terrain plan view), `status`, `help`, `quit` |

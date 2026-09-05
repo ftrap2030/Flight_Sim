@@ -101,14 +101,17 @@ class Terrain:
         threshold_y_nm,
         direction_deg,
         base_elevation_ft,
-        length_nm=6.0,
+        length_nm=12.0,
         half_width_nm=0.35,
-        slope_deg=2.0,
+        slope_deg=2.4,
     ):
         """Protect the final approach path to a runway threshold.
 
         The slope is shallower than the 3-degree glidepath, so an aircraft flown
-        down the glideslope has clearance the whole way in.
+        down the glideslope has clearance the whole way in. The corridor runs
+        well past a normal final approach because the taper fades the protection
+        out over its last fifth -- an aircraft joining the glideslope right at
+        the published limit would otherwise find a mountain waiting there.
         """
         self.approach_surfaces.append(
             (

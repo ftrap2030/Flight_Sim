@@ -16,6 +16,7 @@ from dataclasses import dataclass, field, asdict
 
 from . import aircraft as fleet
 from . import atmosphere as atm
+from . import autopilot
 from . import landing
 from . import navigation
 from . import weather as wx
@@ -127,6 +128,14 @@ class FlightState:
     # Turbulence filter state. Persisted so that a session resumed from disk
     # keeps its gust correlation instead of snapping back to still air.
     turb: list = field(default_factory=lambda: [0.0, 0.0, 0.0])
+
+    # Autopilot. Each channel is independent and None when disengaged.
+    ap_engaged: bool = False
+    ap_altitude_ft: float = None
+    ap_vs_fpm: float = None
+    ap_heading_deg: float = None
+    ap_speed_kt: float = None
+    ap_approach: bool = False
 
     # Local time in hours, for the sun and the narrator's sense of light.
     time_of_day_h: float = 10.0
@@ -660,6 +669,10 @@ class Simulator:
         s = self.state
         craft = self.aircraft
         self._update_turbulence(dt)
+
+        # The autopilot writes the same commanded pitch, bank and throttle a
+        # pilot would, so everything below is unchanged by its presence.
+        autopilot.update(self, dt)
 
         # --- lateral-directional: sideslip, before the roll law reads it ---
         self._update_sideslip(dt)
