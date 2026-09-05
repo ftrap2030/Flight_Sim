@@ -208,6 +208,48 @@ def _match_lateral(text, raw):
     return None
 
 
+def _match_rudder(text, raw):
+    if re.match(r"^(?:centre|center|neutral|zero)\s+(?:the\s+)?rudder$", text) or \
+       re.match(r"^rudder\s+(?:centre|center|neutral|zero|off)$", text):
+        return Command("rudder_set", 0.0, raw)
+
+    m = re.match(
+        r"^(?:full\s+)?(left|right)\s+rudder$", text
+    )
+    if m:
+        sign = -1.0 if m.group(1) == "left" else 1.0
+        return Command("rudder_set", sign * 30.0, raw)
+
+    m = re.match(
+        r"^rudder\s+(left|right)\s*(?:by\s+)?" + _NUMBER + r"?$", text
+    )
+    if m:
+        amount = float(m.group(2)) if m.group(2) else 15.0
+        sign = -1.0 if m.group(1) == "left" else 1.0
+        return Command("rudder_set", sign * amount, raw)
+
+    m = re.match(r"^(?:set\s+)?rudder\s*(?:to\s+)?" + _NUMBER + r"$", text)
+    if m:
+        return Command("rudder_set", float(m.group(1)), raw)
+    return None
+
+
+def _match_engines(text, raw):
+    m = re.match(
+        r"^(?:shut ?down|kill|fail|cut)\s+(?:the\s+)?engine\s*(\d)$", text
+    )
+    if m:
+        return Command("engine_fail", float(m.group(1)) - 1, raw)
+
+    if re.match(r"^engine\s*(?:failure|out|fire)$", text):
+        # No engine named: fail the leftmost, the classic asymmetric case.
+        return Command("engine_fail", 0.0, raw)
+
+    if re.match(r"^(?:restart|relight|restore)\s+(?:all\s+)?engines?$", text):
+        return Command("engine_restart", text=raw)
+    return None
+
+
 def _match_config(text, raw):
     m = re.match(r"^(?:set\s+)?flaps?\s*(up|0|1|2|3|full|4)$", text)
     if m:
@@ -232,6 +274,9 @@ _MATCHERS = [
     _match_wait,
     _match_throttle,
     _match_pitch,
+    # Rudder before lateral: "left rudder" must not be eaten by the bank patterns.
+    _match_rudder,
+    _match_engines,
     _match_lateral,
     _match_config,
 ]
@@ -254,6 +299,7 @@ def apply(sim, command):
         s.cmd_pitch_deg = sim.level_flight_pitch_deg()
         s.cmd_bank_deg = 0.0
         s.cmd_heading_deg = None
+        s.rudder_deg = 0.0
     elif kind == "bank_set":
         s.cmd_bank_deg = clamp(command.value, -60.0, 60.0)
         s.cmd_heading_deg = None
@@ -261,6 +307,14 @@ def apply(sim, command):
         s.cmd_heading_deg = wrap360(command.value)
     elif kind == "heading_delta":
         s.cmd_heading_deg = wrap360(s.heading_deg + command.value)
+    elif kind == "rudder_set":
+        s.rudder_deg = clamp(command.value, -60.0, 60.0)
+    elif kind == "engine_fail":
+        index = int(clamp(command.value, 0, sim.aircraft.engine_count - 1))
+        if index not in s.engines_failed:
+            s.engines_failed.append(index)
+    elif kind == "engine_restart":
+        s.engines_failed.clear()
     elif kind == "flaps":
         s.flaps = int(clamp(command.value, 0, len(fleet.FLAP_CL_BONUS) - 1))
     elif kind == "gear":
@@ -279,6 +333,8 @@ HELP_TEXT = """\
 | **Throttle** | `increase throttle 10%`, `reduce throttle 15`, `throttle 85`, `full power`, `idle`, `climb power` |
 | **Pitch** | `pitch nose down 5`, `pitch up 3`, `set pitch 10`, `climb`, `descend`, `level off` |
 | **Turning** | `turn left heading 180`, `heading 090`, `bank right 25`, `turn left`, `roll level` |
+| **Rudder** | `rudder left 10`, `rudder right 5`, `full left rudder`, `centre rudder` |
+| **Engines** | `engine failure`, `shutdown engine 2`, `restart engines` |
 | **Configuration** | `flaps 1`, `flaps full`, `flaps up`, `gear down`, `gear up`, `speedbrakes out`, `speedbrakes in` |
 | **Time** | `hold` (advance 10 s unchanged), `wait 60 seconds`, `wait 2 minutes` |
 | **Other** | `map` (terrain plan view), `status` (re-read the panel), `help`, `quit` |

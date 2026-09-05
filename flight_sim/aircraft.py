@@ -63,7 +63,21 @@ class Aircraft:
     roll_rate_deg_s: float = 15.0
     pitch_rate_deg_s: float = 3.0
 
+    # Lateral-directional. The engine arms are real lateral offsets from the
+    # centreline, so the yawing moment after an engine failure -- and therefore
+    # Vmc -- comes out of the geometry instead of being typed in.
+    engine_arms_m: tuple = (-5.75, 5.75)
+    rudder_power: float = 0.0022  # yaw coefficient per degree of rudder
+    directional_stability: float = 0.0035  # weathercock restoring, per degree
+    dihedral_effect: float = 0.50  # bank degrees held per degree of sideslip
+    yaw_tau_s: float = 2.2  # sideslip response time constant
+    max_rudder_deg: float = 30.0
+
     handling: str = ""
+
+    @property
+    def engine_count(self):
+        return len(self.engine_arms_m)
 
     @property
     def aspect_ratio(self):
@@ -165,6 +179,9 @@ A320 = Aircraft(
     cruise_mach=0.78,
     roll_rate_deg_s=15.0,
     pitch_rate_deg_s=3.2,
+    engine_arms_m=(-5.75, 5.75),
+    dihedral_effect=0.60,
+    yaw_tau_s=2.0,
     handling=(
         "The classic narrowbody. Light, eager and honest -- rolls into a turn the "
         "instant you ask and holds an altitude with almost no attention. Shortest "
@@ -196,6 +213,9 @@ A320NEO = Aircraft(
     cruise_mach=0.78,
     roll_rate_deg_s=15.0,
     pitch_rate_deg_s=3.2,
+    engine_arms_m=(-5.75, 5.75),
+    dihedral_effect=0.60,
+    yaw_tau_s=2.0,
     handling=(
         "Same airframe as the A320, transformed by the engines and sharklets. "
         "Aspect ratio 10.5 against the ceo's 9.5 means noticeably less induced "
@@ -227,6 +247,9 @@ A321 = Aircraft(
     cruise_mach=0.78,
     roll_rate_deg_s=12.0,
     pitch_rate_deg_s=2.7,
+    engine_arms_m=(-5.75, 5.75),
+    dihedral_effect=0.55,
+    yaw_tau_s=2.2,
     handling=(
         "The stretch. Fifteen tonnes heavier on the same wing, so wing loading "
         "and every speed that depends on it -- stall, approach, manoeuvre margin "
@@ -258,6 +281,10 @@ A350 = Aircraft(
     cruise_mach=0.85,
     roll_rate_deg_s=10.0,
     pitch_rate_deg_s=2.3,
+    engine_arms_m=(-10.6, 10.6),
+    rudder_power=0.0024,
+    dihedral_effect=0.50,
+    yaw_tau_s=2.8,
     handling=(
         "Long-legged and beautifully damped. The composite wing flexes visibly in "
         "turbulence and soaks up gusts the narrowbodies would pass straight to "
@@ -289,6 +316,11 @@ A380 = Aircraft(
     cruise_mach=0.85,
     roll_rate_deg_s=7.0,
     pitch_rate_deg_s=1.8,
+    engine_arms_m=(-21.6, -12.4, 12.4, 21.6),
+    rudder_power=0.0020,
+    directional_stability=0.0038,
+    dihedral_effect=0.40,
+    yaw_tau_s=3.5,
     handling=(
         "Five hundred tonnes of deliberate calm. The lowest aspect ratio in the "
         "fleet at 7.5, so it pays for lift in induced drag, but the sheer inertia "

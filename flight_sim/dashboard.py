@@ -24,6 +24,24 @@ def _arrow(vs_fpm):
     return "="
 
 
+SLIP_BALL_WIDTH = 13
+
+
+def slip_ball(sideslip_deg, max_deg=15.0):
+    """A turn-coordinator ball.
+
+    The ball swings *opposite* to the sideslip, which is what gives the old
+    instruction its meaning: step on the ball. Yaw the nose right and the ball
+    goes left, and left rudder is what centres it.
+    """
+    centre = SLIP_BALL_WIDTH // 2
+    offset = -sideslip_deg / max_deg * centre
+    position = int(round(centre + max(-centre, min(centre, offset))))
+    cells = ["-"] * SLIP_BALL_WIDTH
+    cells[position] = "O"
+    return "[" + "".join(cells) + "]"
+
+
 def attitude_indicator(pitch_deg, bank_deg):
     """A small ASCII artificial horizon: the horizon line tilts with bank."""
     rows = []
@@ -93,6 +111,14 @@ def render(sim, readout, title=None):
             r.mach, r.agl_ft, r.vertical_speed_fpm, _arrow(r.vertical_speed_fpm)
         )
     )
+    lines.append(
+        "  SLIP  {}   b {:>+5.1f}   RUD {:>+5.1f} of {:.0f}".format(
+            slip_ball(r.sideslip_deg),
+            r.sideslip_deg,
+            r.rudder_deg,
+            r.rudder_limit_deg,
+        )
+    )
     lines.append("```")
     lines.append("")
 
@@ -109,8 +135,8 @@ def render(sim, readout, title=None):
         )
     )
     lines.append(
-        "| Ground speed | {:,.0f} kt | Yaw / drift | {:+.1f}° | Fuel flow | {:,.0f} kg/h |".format(
-            r.ground_speed_kt, r.drift_deg, r.fuel_flow_kgh
+        "| Ground speed | {:,.0f} kt | Sideslip (β) | **{:+.1f}°** | Fuel flow | {:,.0f} kg/h |".format(
+            r.ground_speed_kt, r.sideslip_deg, r.fuel_flow_kgh
         )
     )
     lines.append(
@@ -138,6 +164,14 @@ def render(sim, readout, title=None):
             r.terrain_ft, r.stall_ias_kt, weather.turbulence_label()
         )
     )
+    lines.append(
+        "| Wind drift | {:+.1f}° | Rudder | {:+.1f}° / {:.0f}° | Engines | {} |".format(
+            r.wind_drift_deg,
+            r.rudder_deg,
+            r.rudder_limit_deg,
+            _engine_text(sim, r),
+        )
+    )
     lines.append("")
 
     lines.append(
@@ -160,6 +194,14 @@ def render(sim, readout, title=None):
     )
 
     return "\n".join(lines)
+
+
+def _engine_text(sim, readout):
+    total = sim.aircraft.engine_count
+    running = readout.engines_running_count
+    if running == total:
+        return "{}/{} OK".format(running, total)
+    return "**{}/{} — {} OUT**".format(running, total, total - running)
 
 
 def _config_text(state):

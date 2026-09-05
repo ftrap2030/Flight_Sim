@@ -30,6 +30,17 @@ STALL_WARNING_MARGIN_DEG = 3.0
 # whatever the pilot asks for; control authority collapses with it.
 STALL_NOSE_DROP_DEG_S = 4.5
 STALL_CONTROL_AUTHORITY = 0.30
+
+# Lateral-directional
+MAX_SIDESLIP_DEG = 25.0
+SIDESLIP_DRAG_K = 8.0e-5  # added CD per degree of beta squared
+RUDDER_DRAG_K = 1.2e-4  # added CD per degree of rudder deflection
+# Rudder travel limiter: full deflection is only available at low speed. Real
+# airliners do exactly this, and without it full rudder at cruise produces an
+# absurd (and fin-detaching) sideslip.
+RUDDER_LIMIT_REF_KT = 160.0
+MIN_RUDDER_TRAVEL_DEG = 4.0
+VMC_SIDESLIP_DEG = 12.0  # beta beyond this with an engine out is losing it
 LOW_FUEL_FRACTION = 0.05
 GPWS_HARD_FT = 500.0
 GPWS_SOFT_FT = 1000.0
@@ -78,6 +89,12 @@ class FlightState:
     gear_down: bool = False
     spoilers: bool = False
 
+    # Lateral-directional. sideslip_deg is beta: positive means the nose points
+    # right of the flight path through the air mass.
+    sideslip_deg: float = 0.0
+    rudder_deg: float = 0.0
+    engines_failed: list = field(default_factory=list)
+
     cmd_pitch_deg: float = 0.0
     cmd_bank_deg: float = 0.0
     cmd_heading_deg: float = None
@@ -123,6 +140,11 @@ class Readout:
     track_deg: float
     drift_deg: float
     alpha_deg: float
+    sideslip_deg: float
+    wind_drift_deg: float
+    rudder_deg: float
+    rudder_limit_deg: float
+    engines_running_count: int
     load_factor: float
     throttle_pct: float
     thrust_n: float
@@ -264,12 +286,45 @@ class Simulator:
         * The certified ceiling, faded in over the last 2,000 ft. Without it the
           model happily climbs an A320 to 50,000 ft.
         """
+        return self._thrust_per_engine_n() * len(self._running_engines())
+
+    def _running_engines(self):
+        """Indices of the engines still turning."""
+        failed = set(self.state.engines_failed or ())
+        return [i for i in range(self.aircraft.engine_count) if i not in failed]
+
+    def _thrust_per_engine_n(self):
+        """Thrust from one running engine."""
         if not self.state.engines_running or self.state.fuel_kg <= 0.0:
             return 0.0
         fraction = max(
             self.aircraft.idle_thrust_fraction, self.state.throttle_pct / 100.0
         )
-        return self._thrust_available_n() * fraction
+        return self._thrust_available_n() * fraction / self.aircraft.engine_count
+
+    def _asymmetric_yaw_moment(self):
+        """Yawing moment from thrust, in newton-metres.
+
+        Zero with every engine running, since the arms cancel. An engine at a
+        positive (right-hand) arm pushes the aircraft forward on the right and
+        so yaws the nose left -- hence the negation, and hence the aircraft
+        yawing *toward* the dead engine.
+        """
+        arms = self.aircraft.engine_arms_m
+        live_arm_sum = sum(arms[i] for i in self._running_engines())
+        return -self._thrust_per_engine_n() * live_arm_sum
+
+    def max_rudder_deg(self):
+        """Rudder travel available at the current airspeed."""
+        ias_kt = max(
+            atm.tas_to_ias(max(self.state.tas_ms, 1.0), self.state.altitude_ft)
+            * atm.KT_PER_MS,
+            1.0,
+        )
+        travel = self.aircraft.max_rudder_deg * min(
+            1.0, (RUDDER_LIMIT_REF_KT / ias_kt) ** 2.0
+        )
+        return clamp(travel, MIN_RUDDER_TRAVEL_DEG, self.aircraft.max_rudder_deg)
 
     def _thrust_available_n(self):
         """Maximum thrust at the current altitude and Mach, all engines.
@@ -315,6 +370,10 @@ class Simulator:
         cd += craft.induced_drag_factor * cl * cl
         if mach_number > craft.mach_crit:
             cd += craft.wave_drag_k * (mach_number - craft.mach_crit) ** 3
+        # Flying sideways is expensive: the fuselage presents its flank to the
+        # airflow, and the deflected rudder adds its own profile drag.
+        cd += SIDESLIP_DRAG_K * s.sideslip_deg ** 2
+        cd += RUDDER_DRAG_K * abs(s.rudder_deg)
 
         q = 0.5 * rho * v * v
         return Aero(
@@ -328,6 +387,62 @@ class Simulator:
             drag=q * craft.wing_area_m2 * cd,
             thrust=self._thrust_n(),
         )
+
+    def _velocity_over_ground_ms(self, tas_ms):
+        """Ground velocity components (east, north) in m/s.
+
+        Air-relative motion is along (heading - beta), the flight path through
+        the air mass, which is only the same as the nose when beta is zero.
+        Wind is then added on top.
+        """
+        s = self.state
+        horizontal_ms = tas_ms * math.cos(math.radians(s.gamma_deg))
+        air_track_rad = math.radians(s.heading_deg - s.sideslip_deg)
+        wind_ms = self.weather.wind_speed_kt * atm.MS_PER_KT
+        wind_to_rad = math.radians(self.weather.wind_dir_deg + 180.0)
+        return (
+            horizontal_ms * math.sin(air_track_rad) + wind_ms * math.sin(wind_to_rad),
+            horizontal_ms * math.cos(air_track_rad) + wind_ms * math.cos(wind_to_rad),
+        )
+
+    def _update_sideslip(self, dt):
+        """Advance beta toward the sideslip the yaw moments are asking for.
+
+        Steady-state yaw balance: rudder moment plus asymmetric-thrust moment is
+        opposed by weathercock stability, which is proportional to beta. Solving
+        for equilibrium and lagging toward it with a first-order time constant
+        gives the right feel without needing a yaw moment of inertia.
+
+        Vmc falls out of this rather than being coded. The thrust moment is
+        normalised by dynamic pressure, so as speed decays the same dead engine
+        demands ever more rudder; below some speed the available travel simply
+        cannot balance it, and the nose goes.
+        """
+        s = self.state
+        craft = self.aircraft
+
+        s.rudder_deg = clamp(
+            s.rudder_deg, -self.max_rudder_deg(), self.max_rudder_deg()
+        )
+
+        v = max(s.tas_ms, 25.0)
+        reference_moment = (
+            0.5
+            * atm.density(s.altitude_ft)
+            * v * v
+            * craft.wing_area_m2
+            * craft.wing_span_m
+        )
+        cn_thrust = self._asymmetric_yaw_moment() / max(reference_moment, 1.0)
+        cn_rudder = craft.rudder_power * s.rudder_deg
+
+        target = (cn_rudder + cn_thrust) / craft.directional_stability
+        target = clamp(target, -MAX_SIDESLIP_DEG, MAX_SIDESLIP_DEG)
+
+        s.sideslip_deg += (target - s.sideslip_deg) * min(
+            1.0, dt / craft.yaw_tau_s
+        )
+        s.sideslip_deg = clamp(s.sideslip_deg, -MAX_SIDESLIP_DEG, MAX_SIDESLIP_DEG)
 
     def _update_turbulence(self, dt):
         """Ornstein-Uhlenbeck-ish filtered noise: correlated, bounded gusts."""
@@ -370,6 +485,9 @@ class Simulator:
         craft = self.aircraft
         self._update_turbulence(dt)
 
+        # --- lateral-directional: sideslip, before the roll law reads it ---
+        self._update_sideslip(dt)
+
         # A departed wing does not obey the sidestick. Establish that first,
         # because it governs how much of the pilot's command gets through.
         departed = (s.pitch_deg - s.gamma_deg) > craft.alpha_crit_deg
@@ -388,8 +506,19 @@ class Simulator:
                 target = clamp(abs(error) * 1.4, 5.0, 25.0)
                 s.cmd_bank_deg = math.copysign(target, error)
 
+        # Dihedral effect: sideslip rolls the aircraft. With the nose yawed
+        # right, the left wing becomes the upwind wing, makes more lift, and
+        # rolls you right -- which is why rudder and roll go the same way.
+        #
+        # Modelled as an offset on the bank the control law is holding, not as a
+        # roll rate: a roll rate of a degree or two per second is simply erased
+        # by 15 deg/s of roll authority on the very next substep, which would
+        # make rudder produce no visible roll at all. As an offset it is what a
+        # pilot actually sees -- a steady wing-down attitude the FBW trims to.
+        bank_target = s.cmd_bank_deg + craft.dihedral_effect * s.sideslip_deg
+
         roll_step = craft.roll_rate_deg_s * dt * authority
-        s.bank_deg += clamp(s.cmd_bank_deg - s.bank_deg, -roll_step, roll_step)
+        s.bank_deg += clamp(bank_target - s.bank_deg, -roll_step, roll_step)
 
         pitch_step = craft.pitch_rate_deg_s * dt * authority
         s.pitch_deg += clamp(s.cmd_pitch_deg - s.pitch_deg, -pitch_step, pitch_step)
@@ -438,12 +567,9 @@ class Simulator:
         s.altitude_ft += vs_ms * atm.FT_PER_M * dt + gust_fpm / 60.0 * dt
 
         # --- ground track: air mass velocity plus wind ---
-        horizontal_ms = v * math.cos(math.radians(s.gamma_deg))
-        heading_rad = math.radians(s.heading_deg)
-        wind_ms = self.weather.wind_speed_kt * atm.MS_PER_KT
-        wind_to_rad = math.radians(self.weather.wind_dir_deg + 180.0)
-        vx = horizontal_ms * math.sin(heading_rad) + wind_ms * math.sin(wind_to_rad)
-        vy = horizontal_ms * math.cos(heading_rad) + wind_ms * math.cos(wind_to_rad)
+        # The aircraft travels along its flight path, not along its nose: with
+        # sideslip, those differ by beta.
+        vx, vy = self._velocity_over_ground_ms(v)
         s.x_nm += vx * dt * atm.NM_PER_M
         s.y_nm += vy * dt * atm.NM_PER_M
 
@@ -506,16 +632,14 @@ class Simulator:
         agl_ft = s.altitude_ft - terrain_ft
         vs_fpm = v * math.sin(math.radians(s.gamma_deg)) * atm.FPM_PER_MS
 
-        # Ground track including wind, for the drift readout.
-        horizontal_ms = v * math.cos(math.radians(s.gamma_deg))
-        heading_rad = math.radians(s.heading_deg)
-        wind_ms = self.weather.wind_speed_kt * atm.MS_PER_KT
-        wind_to_rad = math.radians(self.weather.wind_dir_deg + 180.0)
-        vx = horizontal_ms * math.sin(heading_rad) + wind_ms * math.sin(wind_to_rad)
-        vy = horizontal_ms * math.cos(heading_rad) + wind_ms * math.cos(wind_to_rad)
+        # Ground track including both sideslip and wind.
+        vx, vy = self._velocity_over_ground_ms(v)
         ground_speed_kt = math.hypot(vx, vy) * atm.KT_PER_MS
         track_deg = wrap360(math.degrees(math.atan2(vx, vy)))
+        # Total angle between where the nose points and where the aircraft goes.
+        # Sideslip is the part the pilot caused; the rest is wind.
         drift_deg = wrap180(track_deg - s.heading_deg)
+        wind_drift_deg = wrap180(drift_deg + s.sideslip_deg)
 
         thrust = aero.thrust
         load_factor = aero.lift / (s.mass_kg * atm.G0)
@@ -547,6 +671,11 @@ class Simulator:
             track_deg=track_deg,
             drift_deg=drift_deg,
             alpha_deg=alpha_deg,
+            sideslip_deg=s.sideslip_deg,
+            wind_drift_deg=wind_drift_deg,
+            rudder_deg=s.rudder_deg,
+            rudder_limit_deg=self.max_rudder_deg(),
+            engines_running_count=len(self._running_engines()),
             load_factor=load_factor,
             throttle_pct=s.throttle_pct,
             thrust_n=thrust,
@@ -589,6 +718,20 @@ class Simulator:
             out.append("TERRAIN")
         elif r.terrain_ahead_ft > s.altitude_ft and r.terrain_ahead_nm < 8.0:
             out.append("TERRAIN AHEAD")
+
+        if s.engines_failed:
+            out.append(
+                "ENGINE FAILURE ({}/{})".format(
+                    r.engines_running_count, craft.engine_count
+                )
+            )
+            # Losing directional control on the remaining engines: either beta
+            # has run away, or the rudder is on the stops and still not enough.
+            if abs(r.sideslip_deg) > VMC_SIDESLIP_DEG or (
+                abs(r.rudder_deg) >= r.rudder_limit_deg - 0.5
+                and abs(r.sideslip_deg) > 6.0
+            ):
+                out.append("VMC -- DIRECTIONAL CONTROL")
 
         if not s.engines_running:
             out.append("ENGINES OUT")

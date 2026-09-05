@@ -46,9 +46,11 @@ Commands are typed the way a pilot would say them:
 | Throttle | `increase throttle 10%`, `throttle 85`, `full power`, `idle`, `climb power` |
 | Pitch | `pitch nose down 5 degrees`, `pitch up 3`, `set pitch 10`, `level off` |
 | Turning | `turn left heading 180`, `heading 090`, `bank right 25`, `roll level` |
+| Rudder | `rudder left 10`, `full right rudder`, `centre rudder` |
+| Engines | `engine failure`, `shutdown engine 2`, `restart engines` |
 | Configuration | `flaps 2`, `flaps full`, `gear down`, `speedbrakes out` |
 | Time | `hold`, `wait 60 seconds`, `wait 2 minutes` |
-| Other | `status`, `help`, `quit` |
+| Other | `map`, `status`, `help`, `quit` |
 
 Each command advances the simulation ten seconds. `status` and `help` cost no
 time, and an unrecognised command costs no time either — you get a hint instead.
@@ -75,6 +77,22 @@ at 0.1 s substeps. The substepping matters: turn rate and flight path angle are
 coupled through airspeed, and a single ten-second Euler step on that coupling
 diverges badly at low speed.
 
+**Three axes, and the third one is real.** Sideslip is genuine state, not a
+derived wind angle. The rudder yaws the aircraft against weathercock stability;
+sideslip costs drag and rolls you through dihedral effect, which is why rudder
+and roll go the same way and why a rudder-only turn works. Rudder travel is
+limited with airspeed, as on the real aircraft -- without it, full rudder at
+cruise produces a fin-detaching slip.
+
+Lose an engine and the thrust asymmetry yaws you toward the dead one, from the
+engine's real lateral offset: 5.75 m on the A320 family, 10.6 m on the A350,
+21.6 m for an A380 outer. **Vmc is not a coded number** -- the thrust moment is
+normalised by dynamic pressure, so as you slow down the same dead engine demands
+ever more rudder until the available travel simply runs out. For the A320neo
+that crossing lands near 110 kt, against a real Vmca of about 115. The A380 is
+the most controllable of the five on an engine failure, because losing one of
+four is half the asymmetry of losing one of two, against far more fin and wing.
+
 **The envelope is real.** The wing stalls past its critical angle of attack and
 lift collapses progressively, which is what makes a stall self-reinforcing —
 less lift, steeper descent, higher alpha still. A departed wing stops obeying
@@ -82,6 +100,10 @@ the sidestick and drops its nose, so a stall is recoverable if you have the
 height and the discipline to unload it. You can also overspeed past Vmo,
 overstress the airframe, and run the tanks dry, at which point you are flying a
 very large glider.
+
+**The terrain map** — a track-up ASCII plan view (`map`) drawing the ground
+*relative to your own altitude*, because at low level the only question is what
+you can hit. Ground far below and ground about to kill you should not look alike.
 
 **Terrain** — ridged multifractal noise: `1 - |value noise|` folded at the
 midline and squared, four octaves, modulated by a slow massif field so the world
@@ -130,8 +152,11 @@ Other flags: `--seed` picks the world, `--altitude` the starting height,
 python -m unittest discover -s tests -t .
 ```
 
-103 tests, no dependencies. They check the atmosphere against published ISA
+149 tests, no dependencies. They check the atmosphere against published ISA
 tables, stall speed against its closed form, cruise fuel flow and service
 ceiling against published figures for all five aircraft, terrain determinism,
 save/load fidelity, that every prose template renders against a live context,
-and that the artificial horizon is not upside down.
+that the artificial horizon is not upside down, and that Vmc falls out of the
+engine geometry rather than being asserted.
+
+CI runs them on Python 3.9, 3.11 and 3.12.
