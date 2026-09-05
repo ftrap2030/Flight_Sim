@@ -211,8 +211,11 @@ def debrief(sim):
     minutes = state.elapsed_s / 60.0
     lines.append("| | |")
     lines.append("| --- | ---: |")
-    lines.append("| Time airborne | {:.0f} min {:.0f} s |".format(
-        minutes // 1, state.elapsed_s % 60.0))
+    # Round to whole seconds first: 119.9999 s split independently gives the
+    # minutes as 1 and the seconds as 60.
+    total_seconds = int(round(state.elapsed_s))
+    lines.append("| Time airborne | {:d} min {:02d} s |".format(
+        total_seconds // 60, total_seconds % 60))
     lines.append("| Distance flown | {:,.1f} nm |".format(state.distance_flown_nm))
     lines.append("| Fuel burned | {:,.0f} kg of {:,.0f} |".format(
         burned, state.initial_fuel_kg))

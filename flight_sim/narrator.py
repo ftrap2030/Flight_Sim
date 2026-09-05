@@ -65,8 +65,15 @@ class Narrator:
         sky_pool = SKY[band].get(weather_key, SKY[band]["clear"])
         parts.append(self._pick(sky_pool))
 
-        terrain_pool = TERRAIN_OBSCURED[band] if obscured else TERRAIN[band]
-        parts.append(self._pick(terrain_pool))
+        # On the runway, or on final: the outside view stops being scenery and
+        # becomes a set of cues, so those registers replace the terrain clause.
+        if sim.state.on_ground:
+            parts.append(self._pick(ROLLOUT))
+        elif readout.approach is not None and readout.approach.on_approach:
+            parts.append(self._pick(APPROACH))
+        else:
+            terrain_pool = TERRAIN_OBSCURED[band] if obscured else TERRAIN[band]
+            parts.append(self._pick(terrain_pool))
 
         parts.append(self._pick(_motion_pool(readout)))
         parts.append(self._pick(SENSORY[weather_key]))
@@ -175,6 +182,7 @@ def _context(sim, r):
         ),
         "light": wx.light_phase(s.time_of_day_h),
         "sun_elev": wx.solar_elevation_deg(s.time_of_day_h),
+        "vref": r.vref_kt,
         "rotor": sim._mechanical_turbulence,
         "wave_fpm": sim._orographic_fpm,
         "wave_abs": abs(sim._orographic_fpm),
@@ -560,7 +568,7 @@ MOTION = {
         ("m_d2", "Descending {vs_abs:,.0f} feet a minute. The horizon climbs the "
                  "windscreen and the terrain grows — not gradually, but with the "
                  "unnerving accelerating swell of something approaching fast."),
-        ("m_d3", "Going down at {vs:+,.0f} fpm, {ias:,.0f} knots, the altimeter "
+        ("m_d3", "Going down at {vs_abs:,.0f} feet a minute, {ias:,.0f} knots, the altimeter "
                  "unwinding through {alt:,.0f} feet."),
     ],
     "turning": [
@@ -775,7 +783,7 @@ ENDING_STRUCTURAL = [
 
 ENDING_LANDED = {
     "greaser": [
-        ("l_g1", "You never feel it.\n\nThe runway comes up, the sink stops, and "
+        ("td_g1", "You never feel it.\n\nThe runway comes up, the sink stops, and "
                  "somewhere in the last few feet the wheels simply start turning "
                  "— **{sink:,.0f} feet a minute**, which is to say almost "
                  "nothing at all. The nose settles. Somebody in the back "
@@ -783,7 +791,7 @@ ENDING_LANDED = {
                  "**{field}** — {centreline:,.0f} ft off the centreline, "
                  "{runway_left:,.0f} ft of runway still ahead.\n\n"
                  "**— SIMULATION ENDED: LANDED —**"),
-        ("l_g2", "A greaser.\n\nThe main gear kisses the concrete at "
+        ("td_g2", "A greaser.\n\nThe main gear kisses the concrete at "
                  "**{sink:,.0f} fpm** and the transition from flying to rolling "
                  "happens without a seam in it. The spoilers deploy, the nose "
                  "comes down, and the {aircraft} is a ground vehicle again.\n\n"
@@ -791,14 +799,14 @@ ENDING_LANDED = {
                  "**— SIMULATION ENDED: LANDED —**"),
     ],
     "normal landing": [
-        ("l_n1", "The wheels find the runway.\n\n**{sink:,.0f} feet a minute**, "
+        ("td_n1", "The wheels find the runway.\n\n**{sink:,.0f} feet a minute**, "
                  "{td_ias:,.0f} knots, {centreline:,.0f} ft off the centreline "
                  "— a clean, unremarkable arrival, which is the highest praise "
                  "there is for a landing. The airframe settles onto its gear, "
                  "the spoilers come up, and the deceleration presses you gently "
                  "into the straps.\n\n**{field}**, {runway_left:,.0f} ft "
                  "remaining.\n\n**— SIMULATION ENDED: LANDED —**"),
-        ("l_n2", "Down, and properly done.\n\nA solid, positive touchdown at "
+        ("td_n2", "Down, and properly done.\n\nA solid, positive touchdown at "
                  "**{sink:,.0f} fpm** and {vref_pct:.0f}% of Vref. The nose "
                  "lowers, reverse thrust builds to a roar behind you, and the "
                  "runway lights slow from a blur to a procession.\n\n"
@@ -806,7 +814,7 @@ ENDING_LANDED = {
                  "**— SIMULATION ENDED: LANDED —**"),
     ],
     "firm landing": [
-        ("l_f1", "It arrives.\n\n**{sink:,.0f} feet a minute** is firm — the "
+        ("td_f1", "It arrives.\n\n**{sink:,.0f} feet a minute** is firm — the "
                  "kind of touchdown that goes through the airframe as a single "
                  "hard thump and makes the overhead bins complain. Nothing is "
                  "broken. Nobody is impressed.\n\n**{field}**, "
@@ -814,7 +822,7 @@ ENDING_LANDED = {
                  "**— SIMULATION ENDED: LANDED —**"),
     ],
     "hard landing": [
-        ("l_h1", "You arrive rather than land.\n\n**{sink:,.0f} feet a minute** "
+        ("td_h1", "You arrive rather than land.\n\n**{sink:,.0f} feet a minute** "
                  "into the concrete: the gear compresses to its stops, the whole "
                  "aeroplane bangs and rings, and loose articles leave the "
                  "shelves. The oleos survive it. The engineers will want to look "
@@ -823,7 +831,7 @@ ENDING_LANDED = {
                  "**— SIMULATION ENDED: LANDED (HARD) —**"),
     ],
     "runway excursion": [
-        ("l_e1", "You are down, but not where you meant to be.\n\nThe wheels "
+        ("td_e1", "You are down, but not where you meant to be.\n\nThe wheels "
                  "meet the ground **{centreline:,.0f} feet** off the centreline "
                  "— off the paving, onto the graded surface beside it. The ride "
                  "goes instantly from smooth to a violent rumble, mud and grass "
@@ -858,4 +866,483 @@ ENDING_PILOT = [
              "— the {aircraft} suspended at {alt:,.0f} feet, {ias:,.0f} knots, the "
              "ridges of {impact_feature} holding their shadows below.\n\n"
              "**— SIMULATION ENDED —**"),
+]
+
+
+# ---------------------------------------------------------------------------
+# Corpus expansion
+# ---------------------------------------------------------------------------
+#
+# Kept as extensions rather than folded into the literals above so the shape of
+# each corpus stays readable at the top of the file. The weighting is
+# deliberate: the low-altitude and critical bands were thinnest and are where a
+# pilot spends the most attention, so they get the most new writing.
+
+SKY[HIGH]["clear"].extend([
+    ("h_c7", "Contrails from something far above cross the sky in two dead "
+             "straight lines, already fraying at the edges. Below them the air "
+             "is glass-clear all the way down to a landscape that looks less "
+             "like country than like a relief model of it."),
+    ("h_c8", "A river of cumulus runs along a valley thirty miles off, marking "
+             "where the warm air is rising, each cloud anchored over its own "
+             "patch of ground and drifting only slowly. Everything else is "
+             "empty blue."),
+    ("h_c9", "The horizon is so sharp it looks cut. At {alt:,.0f} feet the "
+             "atmosphere has thinned to the point where distance stops adding "
+             "haze, and forty miles of country arrives with the same clarity "
+             "as four."),
+])
+
+SKY[HIGH]["crosswind"].extend([
+    ("h_x5", "Cloud shadows race across the ground far faster than they have "
+             "any right to — the whole sky is on the move, and the landscape "
+             "beneath it is being strobed by it."),
+    ("h_x6", "Wave cloud stands in rank after motionless rank downwind of the "
+             "range, each bar smooth and lens-shaped and utterly still while "
+             "sixty knots of air pours through it."),
+    ("h_x7", "Dust is up over the dry country to the {away_side}, a brown pall "
+             "leaning away from the wind, and where it thins you can see the "
+             "wind lines combed into the sand beneath."),
+])
+
+SKY[HIGH]["stormy"].extend([
+    ("h_s5", "The cell ahead has an overshooting top — a dome of cloud punched "
+             "up through its own anvil by an updraught strong enough to beat "
+             "the stratosphere. Whatever is happening inside it, you want no "
+             "part of."),
+    ("h_s6", "Beneath the anvil the light has failed to a dim green, and the "
+             "rain shafts hang from the cloud base in visible grey columns, "
+             "leaning as they fall."),
+    ("h_s7", "Static crackles continuously in the headset. Between the "
+             "discharges the windscreen carries a shifting blue filigree of St "
+             "Elmo's fire that reassembles itself every time it is wiped away "
+             "by the rain."),
+])
+
+SKY[HIGH]["foggy"].extend([
+    ("h_f5", "The fog surface below has a slow swell to it, like a sea "
+             "photographed at a very long exposure, and where it laps against "
+             "the higher ground it is piled into a soft white surf."),
+    ("h_f6", "Your own shadow sits on the cloud top far below, ringed by a "
+             "faint circular rainbow that keeps perfect station with the "
+             "aircraft. A glory. It will follow you the whole way."),
+    ("h_f7", "Above the fog the air is astonishingly clear and completely "
+             "empty. There is no ground, no horizon in the usual sense, and no "
+             "reference at all except that flat white plain and the sun."),
+])
+
+SKY[LOW]["clear"].extend([
+    ("l_c5", "Individual trees now. Individual field walls. The ground has "
+             "stopped being a texture and become a place, with the particular "
+             "untidy specificity of somewhere real."),
+    ("l_c6", "Sunlight comes off a river directly below in a single unbearable "
+             "flash and is gone, and for a second afterwards there is a purple "
+             "shape burnt into the middle of the windscreen."),
+    ("l_c7", "The shadow of the aircraft runs along the slope to the "
+             "{away_side}, small and sharp and keeping exact pace, rippling as "
+             "it crosses gullies."),
+    ("l_c8", "At {agl:,.0f} feet the scale finally lands. That is not a hill: "
+             "it is two thousand feet of mountainside, and you are looking up "
+             "at the top of it."),
+])
+
+SKY[LOW]["crosswind"].extend([
+    ("l_x4", "A plume of spray tears off the top of a waterfall on the "
+             "{away_side} wall and never reaches the bottom — the wind takes it "
+             "sideways and disperses it into nothing halfway down."),
+    ("l_x5", "Trees on the exposed shoulder are all leaning the same way, "
+             "permanently, shaped by years of this. The living ones have given "
+             "up growing into the wind entirely."),
+    ("l_x6", "The aircraft crabs along the valley at {drift_abs:.0f} degrees to "
+             "its own track, so the far wall appears to slide past the nose at "
+             "an angle that makes no sense until you remember why."),
+    ("l_x7", "Every gust arrives first as a visible dark patch racing across "
+             "the grass below and then, a beat later, as a thump through the "
+             "airframe."),
+])
+
+SKY[LOW]["stormy"].extend([
+    ("l_s4", "Cloud is tearing across the ridge line above at a speed that "
+             "makes the mountain itself seem to be moving. Rain hammers, "
+             "eases, hammers again."),
+    ("l_s5", "Lightning strikes the high ground somewhere off the "
+             "{away_side}, close enough that the flash and the crack arrive "
+             "together, and for an instant the whole valley is lit flat white "
+             "with no shadows in it at all."),
+    ("l_s6", "The valley floor is a torrent. Every gully is running, the river "
+             "is brown and over its banks, and the rock faces are sheeted with "
+             "water that the wind lifts back off them in smoke."),
+    ("l_s7", "Hail, briefly — a rattling roar across the windscreen and the "
+             "leading edges, loud enough to drown the engines, and then rain "
+             "again as suddenly as it started."),
+])
+
+SKY[LOW]["foggy"].extend([
+    ("l_f4", "The fog is thinner in patches here and thicker in others, so the "
+             "world arrives in fragments: a wall of rock, gone; a stand of "
+             "trees below the wingtip, gone; grey."),
+    ("l_f5", "The landing lights make it worse. All they do is light the fog "
+             "itself, throwing back a solid luminous wall a few feet ahead of "
+             "the aircraft."),
+    ("l_f6", "Somewhere in this there is a valley with sides. You are flying "
+             "between them on the strength of a terrain readout and an "
+             "assumption."),
+    ("l_f7", "Water streams backwards across the windows in fine horizontal "
+             "threads. Beyond them, at {agl:,.0f} feet above ground, there is "
+             "nothing to see and no way to know that until you can."),
+])
+
+SKY[CRITICAL]["clear"].extend([
+    ("c_c4", "Every rock below has a shadow and you can see the shape of each "
+             "one. That is the wrong amount of detail to be able to make out "
+             "from an airliner."),
+    ("c_c5", "The ground fills the windscreen from edge to edge and the sky is "
+             "a strip along the top. Whatever happens next happens in the next "
+             "few seconds."),
+    ("c_c6", "A hillside goes past the {away_side} window close enough that "
+             "the individual trees separate out and flick by one at a time."),
+    ("c_c7", "The shadow of the aircraft is no longer a shape running along "
+             "the ground somewhere below. It is directly beneath, and it is the "
+             "same size as the aircraft."),
+    ("c_c8", "Birds. Below and to the {away_side}, scattering. You are in "
+             "their airspace now, and this is not where a hundred and forty "
+             "tonnes of aeroplane belongs."),
+])
+
+SKY[CRITICAL]["crosswind"].extend([
+    ("c_x3", "Rotor off the ridge slams the aircraft sideways and the valley "
+             "wall jumps in the window. At {agl:,.0f} feet there is no room to "
+             "absorb that."),
+    ("c_x4", "The wind is pouring over the ridge above and coming down the "
+             "face on the far side — the same face the aircraft is flying "
+             "alongside — and it is taking you with it."),
+    ("c_x5", "Grass, scree and a hard blue sky, all of it going past at an "
+             "angle because the aeroplane is crabbed {drift_abs:.0f} degrees "
+             "into a wind that will not let it point where it is going."),
+    ("c_x6", "The wingtip on the {turn_side} is closer to the slope than "
+             "anything about this situation should permit."),
+    ("c_x7", "Every correction is being undone by the next gust before you "
+             "have finished making it. This is not flying any more, it is "
+             "arguing."),
+])
+
+SKY[CRITICAL]["stormy"].extend([
+    ("c_s3", "Black rock in the lightning flashes, gone again in the dark "
+             "between them, and no way to tell how far away any of it is."),
+    ("c_s4", "The rain is coming off the windscreen faster than the wipers can "
+             "clear it, and what little arrives through the gaps is dark, "
+             "close and moving."),
+    ("c_s5", "A downdraught takes the aircraft and the altimeter unwinds "
+             "through numbers there is no ground clearance left to give away."),
+    ("c_s6", "The whole airframe is being shaken hard enough that the "
+             "instruments are difficult to read, at the exact moment when "
+             "reading them is the only thing that matters."),
+    ("c_s7", "Something enormous and darker than the rain fills the lower "
+             "windows. It does not resolve into anything before it is gone. "
+             "That is not reassuring; it means it was close."),
+])
+
+SKY[CRITICAL]["foggy"].extend([
+    ("c_f3", "Grey. The radio altimeter is counting down and the grey does not "
+             "change at all, which is the worst thing it could do."),
+    ("c_f4", "There is no outside world. There is a windscreen with nothing "
+             "behind it and a number falling toward zero."),
+    ("c_f5", "For one second the fog opens and there is wet black rock, filling "
+             "everything, close. Then it closes again and you are left with the "
+             "memory of it and no idea whether it is still there."),
+    ("c_f6", "{agl:,.0f} feet. Whatever is out there is out there whether you "
+             "can see it or not, and it is not moving."),
+    ("c_f7", "The instruments are the only thing in the universe that knows "
+             "where the ground is. Believe them."),
+])
+
+TERRAIN[HIGH].extend([
+    ("th6", "Cloud shadow and sunlight move across the high ground in slow "
+            "patches, and where the light lands the rock goes from grey to a "
+            "warm ochre and back again."),
+    ("th7", "A lake sits in a hollow below, so still that it holds a perfect "
+            "inverted copy of the peaks around it, and the two ranges meet at "
+            "a shoreline that is impossible to place."),
+    ("th8", "The country is on the turn ahead: the rolling ground gives out "
+            "and something serious begins, {ridge_name} at {ridge_ft:,.0f} "
+            "feet standing at the head of it like a gate."),
+    ("th9", "Old glacial valleys run parallel below, all scooped to the same "
+            "U-section by the same ice, all pointing the same way — a "
+            "signature left ten thousand years ago and still perfectly legible "
+            "from up here."),
+])
+
+TERRAIN[LOW].extend([
+    ("tl6", "The valley narrows ahead. The walls converge and the gap between "
+            "them is not obviously wider than the wingspan, which is the sort "
+            "of judgement best made early."),
+    ("tl7", "A spur juts into the valley from the {away_side}, forcing the "
+            "track around it, and the ground rises to {ridge_ft:,.0f} feet "
+            "immediately behind."),
+    ("tl8", "Terraces of old moraine step down the valley side, each one "
+            "sharp-edged and level, and the aircraft crosses them one after "
+            "another with the AGL readout stepping down in sympathy."),
+    ("tl9", "A road threads the valley floor {terrain_ft:,.0f} feet below, "
+            "switchbacking up the far side in a dozen hairpins, and a vehicle "
+            "on it is a bright moving dot small enough to lose."),
+])
+
+TERRAIN[CRITICAL].extend([
+    ("tc5", "The gap ahead is a notch in the ridge, and it is narrow, and it "
+            "is the only thing lower than {ridge_ft:,.0f} feet anywhere in the "
+            "windscreen."),
+    ("tc6", "Ground either side, ground below, and a ridge across the front at "
+            "{ridge_nm:.1f} miles. The options are running out in every "
+            "direction but up."),
+    ("tc7", "Rock, close enough to see the water running down it. The "
+            "clearance is {agl:,.0f} feet and the trend is the wrong way."),
+    ("tc8", "You are below the tops. The horizon is not the horizon any more, "
+            "it is the ridge line, and it is above you on both sides."),
+])
+
+TERRAIN_OBSCURED[HIGH].extend([
+    ("oh4", "Under all that white there are valleys and there are mountains, "
+            "and from here they look identical: a flat, calm, entirely "
+            "featureless surface with nine thousand feet of difference hidden "
+            "underneath it."),
+    ("oh5", "{ridge_name} is the only thing that has managed to break through, "
+            "a black wedge {ridge_nm:.1f} miles ahead standing out of the "
+            "cloud like a rock at low tide. Its neighbours are down there too."),
+    ("oh6", "The terrain display is drawing a picture the windscreen refuses "
+            "to confirm. One of them is right, and it is not the windscreen."),
+])
+
+TERRAIN_OBSCURED[LOW].extend([
+    ("ol4", "Down here the fog and the ground have the same colour and the "
+            "same texture, and the transition between them will not announce "
+            "itself."),
+    ("ol5", "{ridge_ft:,.0f} feet of rock, {ridge_nm:.1f} miles ahead, "
+            "completely invisible. The instruments are not guessing; they know."),
+    ("ol6", "Something passes below the wing — a darker patch in the grey, "
+            "there and gone. Tree tops, probably. Probably."),
+])
+
+TERRAIN_OBSCURED[CRITICAL].extend([
+    ("oc3", "{agl:,.0f} feet, and the only difference between flying and not "
+            "flying is a number on a screen."),
+    ("oc4", "The grey outside is completely uniform, and will stay completely "
+            "uniform, right up until it is rock."),
+    ("oc5", "The GPWS is the only thing in the aircraft that can see, and it "
+            "does not like what it can see."),
+])
+
+MOTION["level"].extend([
+    ("m_l4", "Hands off, near enough. The aircraft is doing exactly what it was "
+             "last asked to do and shows no interest in doing anything else."),
+    ("m_l5", "{ias:,.0f} knots, {alt:,.0f} feet, heading {heading:03.0f}. Three "
+             "numbers, all of them steady, and the small satisfaction of an "
+             "aeroplane in trim."),
+    ("m_l6", "The engines have settled into that particular unvarying note that "
+             "means nothing needs attention, and the airframe is quiet around "
+             "it."),
+])
+
+MOTION["climbing"].extend([
+    ("m_u4", "Up. {vs:+,.0f} feet a minute, and the altimeter needle sweeping "
+             "round with the steady patience of an aeroplane doing the one "
+             "thing it most wants to do."),
+    ("m_u5", "The ground is letting go. Detail flattens, shadows shorten, and "
+             "what was terrain becomes topography."),
+    ("m_u6", "Nose {pitch_abs:.1f} degrees up, {ias:,.0f} knots and bleeding "
+             "slowly — every foot of altitude is being bought with airspeed, "
+             "which is the only currency there is."),
+])
+
+MOTION["descending"].extend([
+    ("m_d4", "Down at {vs_abs:,.0f} a minute. Detail returns to the ground the "
+             "way focus returns to a lens, all at once and faster than "
+             "expected."),
+    ("m_d5", "The nose is down and the aircraft has gone quiet in the way that "
+             "means it is accelerating: {ias:,.0f} knots and climbing, engines "
+             "back, wind noise taking over."),
+    ("m_d6", "Descending through {alt:,.0f} feet. The ground clearance is "
+             "{agl:,.0f} feet and that is the number that matters now, not the "
+             "altimeter."),
+])
+
+MOTION["turning"].extend([
+    ("m_t4", "Coming {turn_side} with {bank_word}. The wingtip traces a slow "
+             "arc across the terrain and the heading unwinds through "
+             "{heading:03.0f}."),
+    ("m_t5", "In the turn the seat pushes up at {load:.2f} g and the horizon "
+             "sits across the windscreen at an angle. The {turn_side} wing "
+             "points at ground you would rather it did not."),
+    ("m_t6", "The aircraft is banked {bank_abs:.0f} degrees and carving round, "
+             "and the whole landscape is rotating slowly about a point "
+             "somewhere off the {turn_side} wingtip."),
+])
+
+MOTION["stalled"].extend([
+    ("m_s3", "The controls have gone dead in your hands. The aircraft is "
+             "descending in a mush, nose high, buffeting, and none of the "
+             "usual inputs mean anything until the wing is flying again."),
+    ("m_s4", "Angle of attack {alpha:.1f} degrees. The wing gave up somewhere "
+             "back there and everything since has been argument with physics."),
+    ("m_s5", "Stalled and sinking. The only thing that will fix this is "
+             "lowering the nose, and the only thing that costs is height."),
+])
+
+SENSORY["clear"].extend([
+    ("s_c4", "Warm sun through the side window, the smell of the air "
+             "conditioning, and the deep unvarying note of two engines doing "
+             "nothing difficult."),
+    ("s_c5", "A cup on the coaming has not moved in ten minutes. That is the "
+             "kind of day it is."),
+    ("s_c6", "The airframe makes small sounds as it settles — a tick from the "
+             "structure somewhere aft, the faint sigh of the packs — and "
+             "nothing else."),
+])
+
+SENSORY["crosswind"].extend([
+    ("s_x4", "The aircraft never quite settles. There is always a small "
+             "correction going in, and always another one needed a second "
+             "later."),
+    ("s_x5", "A gust hits hard enough to lift the charts off the pedestal, and "
+             "the wing drops fifteen degrees before it is caught."),
+    ("s_x6", "The controls are alive under your hand, loading and unloading as "
+             "the air changes its mind."),
+])
+
+SENSORY["stormy"].extend([
+    ("s_s4", "The airframe is groaning. Not creaking: groaning, a long low "
+             "structural complaint from somewhere in the wing root every time "
+             "the aircraft is hit."),
+    ("s_s5", "The lightning is close enough now that the flash and the noise "
+             "arrive as a single event, felt as much through the seat as heard."),
+    ("s_s6", "You have both hands on the controls and are getting nowhere. The "
+             "aeroplane is going where the air puts it and your inputs are "
+             "suggestions."),
+])
+
+SENSORY["foggy"].extend([
+    ("s_f4", "The silence is the strange part. Extreme danger is supposed to "
+             "be loud, and this is the quietest flying you have ever done."),
+    ("s_f5", "Your eyes keep going to the windscreen out of habit and keep "
+             "finding nothing, and each time it takes a moment to drag them "
+             "back to where the information actually is."),
+    ("s_f6", "The panel glow is the brightest thing in the world. Beyond the "
+             "glass there is a grey that could be six inches away or six "
+             "miles."),
+])
+
+THREAT["stall"].extend([
+    ("x_st3", "**STALL.** The stick shaker is a physical hammering through the "
+              "controls. Nose down, wings level, thrust up — and accept the "
+              "height it costs, because the alternative costs all of it."),
+])
+THREAT["pull_up"].extend([
+    ("x_pu3", "**PULL UP.** Maximum thrust, wings level, pull. Not a turn — a "
+              "turn costs lift you do not have. Straight up, now."),
+])
+THREAT["terrain"].extend([
+    ("x_tr3", "The terrain ahead is higher than you are and {ridge_nm:.1f} "
+              "miles away at {gs:,.0f} knots over the ground. That is under two "
+              "minutes to have made a decision in."),
+])
+THREAT["overspeed"].extend([
+    ("x_os3", "**OVERSPEED.** {ias:,.0f} knots against a limit of rather less "
+              "than that. Thrust back, nose up, gently — a sharp pull at this "
+              "speed is its own emergency."),
+])
+THREAT["low_speed"].extend([
+    ("x_ls3", "The speed tape is shrinking toward the amber. {ias:,.0f} knots "
+              "with the wing letting go at {stall_ias:,.0f}, and the controls "
+              "have gone vague."),
+])
+THREAT["overstress"].extend([
+    ("x_ov2", "**{load:.2f} g.** The wings are visibly bowed and the airframe "
+              "is telling you about it. Unload."),
+])
+THREAT["engines_out"].extend([
+    ("x_eo2", "**Silence.** Both engines out, the windmilling rumble the only "
+              "thing left, and every foot of altitude now buys about two miles "
+              "of glide. Spend it deliberately."),
+])
+THREAT["rotor"].extend([
+    ("x_ro3", "The lee of the ridge is a washing machine. Nothing about the "
+              "next thirty seconds is going to be smooth, and the ground is "
+              "{agl:,.0f} feet below."),
+])
+THREAT["downdraught"].extend([
+    ("x_dw2", "The air is going down at {wave_abs:,.0f} feet a minute and it "
+              "does not care what the throttles are doing. Turn toward the "
+              "lower ground and fly out of it sideways — you will not outclimb "
+              "it."),
+])
+THREAT["low_fuel"].extend([
+    ("x_lf2", "{fuel_pct:.1f}% remaining. The question has changed from where "
+              "you would like to land to where you can."),
+])
+
+LIGHT["dawn"].append(
+    ("li_d3", "The sky is going from black to a deep transparent blue and the "
+              "brightest stars are still holding on in it. Below, nothing is "
+              "lit yet at all.")
+)
+LIGHT["golden"].append(
+    ("li_g3", "Everything has an edge of gold on the sunward side and is "
+              "practically black on the other. The country has more relief in "
+              "it now than it will have all day.")
+)
+LIGHT["dusk"].append(
+    ("li_k3", "The shadow of the range is racing east across the plain below, "
+              "eating the light as it goes, and it will reach the horizon in "
+              "about a minute.")
+)
+LIGHT["night"].append(
+    ("li_n4", "The cockpit is red-lit and everything beyond the glass is black. "
+              "It is {hour}. The instruments and the engines are the entire "
+              "world.")
+)
+
+
+# Flying an approach is a distinct register: the outside view stops being
+# scenery and becomes a set of cues.
+APPROACH = [
+    ("ap_1", "The runway is a pale grey stripe laid across the valley floor "
+             "ahead, foreshortened almost to a line from here, and it does not "
+             "look nearly long enough. It never does."),
+    ("ap_2", "Configured and committed: gear down, flaps out, the aircraft "
+             "slow and stable and heavy-feeling in the way a jet gets when it "
+             "is doing the one thing it is worst at."),
+    ("ap_3", "Approach lights, sequenced, running toward the threshold in a "
+             "chain of white that pulls the eye down the last mile."),
+    ("ap_4", "The picture is steady: the runway sitting still in the "
+             "windscreen, neither rising nor falling. Hold that and the "
+             "arithmetic takes care of itself."),
+    ("ap_5", "Vref is {vref:,.0f} knots and the wing is telling you about every one "
+             "of them. Down here the margins are counted in single figures."),
+    ("ap_6", "The threshold markings resolve, then the touchdown zone stripes, "
+             "then the individual joints in the concrete. Each one arrives "
+             "faster than the last."),
+    ("ap_7", "Ground rush begins — that sudden acceleration of everything in "
+             "the periphery that means the last hundred feet has started."),
+    ("ap_8", "The aircraft is crabbed into the wind and the runway is arriving "
+             "slightly sideways. That will have to be taken out, and taken out "
+             "late."),
+    ("ap_9", "Over the threshold. Power coming back, the nose coming up, and "
+             "the runway widening out beneath into something that finally "
+             "looks like somewhere you could land."),
+]
+
+ROLLOUT = [
+    ("ro_1", "Down. The rumble of the mains on concrete, the nose lowering, "
+             "and the spoilers standing up on the wing to kill what is left of "
+             "the lift."),
+    ("ro_2", "Reverse thrust builds to a roar behind you and the deceleration "
+             "presses you forward into the straps. The runway edge lights slow "
+             "from a blur into a procession."),
+    ("ro_3", "The centreline stripes stop flicking past and start passing, and "
+             "then start crawling. {ias:,.0f} knots and falling."),
+    ("ro_4", "Brakes on. The aircraft is heavy and it does not want to stop, "
+             "and the far end of the runway is closer than it was."),
+    ("ro_5", "Rolling out, straight and slowing. The valley walls that were an "
+             "obstacle five minutes ago are just scenery again."),
+    ("ro_6", "The end of the runway approaches at a rate that is either fine "
+             "or is not, and there will not be much warning about which."),
 ]

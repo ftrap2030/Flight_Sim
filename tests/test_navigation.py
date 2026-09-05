@@ -276,6 +276,13 @@ class TestDebrief(unittest.TestCase):
         self.assertIn("Touchdown sink rate", text)
         self.assertIn("44 fpm", text)
 
+    def test_the_clock_never_reads_sixty_seconds(self):
+        """119.9999 s split independently reads as 1 min 60 s."""
+        session = Session.new("a320neo", "clear", seed=SEED)
+        for elapsed in (119.9999, 60.0, 179.9999, 0.0):
+            session.sim.state.elapsed_s = elapsed
+            self.assertNotIn("60 s", navigation.debrief(session.sim))
+
     def test_a_clean_flight_says_so(self):
         session = Session.new("a350", "clear", seed=SEED)
         session.sim.state.warnings_seen = []

@@ -8,6 +8,26 @@ from flight_sim import weather as wx
 from flight_sim.game import Session
 
 
+def all_pools():
+    """Every clause pool in the corpus.
+
+    Collected in one place so a newly added corpus cannot quietly escape the
+    template-rendering and unique-id checks -- which are the only thing standing
+    between a placeholder typo and prose silently vanishing at runtime.
+    """
+    pools = []
+    for band in nar.SKY.values():
+        pools.extend(band.values())
+    for mapping in (nar.TERRAIN, nar.TERRAIN_OBSCURED, nar.MOTION,
+                    nar.SENSORY, nar.THREAT, nar.LIGHT, nar.ENDING_LANDED):
+        pools.extend(mapping.values())
+    pools.append(nar.APPROACH)
+    pools.append(nar.ROLLOUT)
+    pools.extend([nar.ENDING_TERRAIN, nar.ENDING_STRUCTURAL, nar.ENDING_PILOT,
+                  nar.ENDING_OVERRUN, nar.ENDING_BOTCHED_LANDING])
+    return pools
+
+
 class TestBands(unittest.TestCase):
     def test_band_thresholds_follow_the_brief(self):
         self.assertEqual(nar.band_for(9000), nar.HIGH)
@@ -28,17 +48,7 @@ class TestCorpusIntegrity(unittest.TestCase):
 
     def test_clause_ids_are_unique(self):
         seen = set()
-        pools = []
-        for band_map in (nar.SKY,):
-            for band in band_map.values():
-                pools.extend(band.values())
-        pools.extend(nar.TERRAIN.values())
-        pools.extend(nar.TERRAIN_OBSCURED.values())
-        pools.extend(nar.MOTION.values())
-        pools.extend(nar.SENSORY.values())
-        pools.extend(nar.THREAT.values())
-        pools.extend([nar.ENDING_TERRAIN, nar.ENDING_STRUCTURAL, nar.ENDING_PILOT])
-        for pool in pools:
+        for pool in all_pools():
             for key, _template in pool:
                 self.assertNotIn(key, seen, "duplicate clause id {!r}".format(key))
                 seen.add(key)
@@ -48,17 +58,7 @@ class TestCorpusIntegrity(unittest.TestCase):
         session = Session.new("a320neo", "clear", seed=42)
         context = nar._context(session.sim, session.sim.readout())
 
-        pools = []
-        for band in nar.SKY.values():
-            pools.extend(band.values())
-        pools.extend(nar.TERRAIN.values())
-        pools.extend(nar.TERRAIN_OBSCURED.values())
-        pools.extend(nar.MOTION.values())
-        pools.extend(nar.SENSORY.values())
-        pools.extend(nar.THREAT.values())
-        pools.extend([nar.ENDING_TERRAIN, nar.ENDING_STRUCTURAL, nar.ENDING_PILOT])
-
-        for pool in pools:
+        for pool in all_pools():
             for key, template in pool:
                 try:
                     rendered = template.format(**context)
@@ -97,6 +97,40 @@ class TestDescription(unittest.TestCase):
         for _ in range(6):
             session.narrator.describe(session.sim, session.sim.readout())
         self.assertTrue(obscured_ids & set(session.narrator._recent))
+
+    def test_the_critical_band_has_enough_to_say(self):
+        """It was the thinnest cell and the one a pilot reads most closely."""
+        for profile in wx.WEATHER_OPTIONS:
+            self.assertGreaterEqual(
+                len(nar.SKY[nar.CRITICAL][profile.key]), 6, profile.key
+            )
+
+    def test_a_long_low_run_does_not_start_repeating(self):
+        session = Session.new("a320", "clear", seed=42)
+        session.sim.state.altitude_ft = session.sim.readout().terrain_ft + 700.0
+        outputs = [
+            session.narrator.describe(session.sim, session.sim.readout())
+            for _ in range(12)
+        ]
+        self.assertGreaterEqual(len(set(outputs)), 11)
+
+    def test_an_approach_uses_the_approach_register(self):
+        """On final the outside view is cues, not scenery."""
+        from tests.test_landing import place_on_final
+
+        session, _field, _direction = place_on_final(distance_nm=4.0)
+        approach_ids = {key for key, _ in nar.APPROACH}
+        for _ in range(6):
+            session.narrator.describe(session.sim, session.sim.readout())
+        self.assertTrue(approach_ids & set(session.narrator._recent))
+
+    def test_the_rollout_has_its_own_register(self):
+        session = Session.new("a320neo", "clear", seed=42)
+        session.sim.state.on_ground = True
+        rollout_ids = {key for key, _ in nar.ROLLOUT}
+        for _ in range(6):
+            session.narrator.describe(session.sim, session.sim.readout())
+        self.assertTrue(rollout_ids & set(session.narrator._recent))
 
     def test_ending_prose_is_produced_for_each_terminal_status(self):
         for status in ("crashed_terrain", "structural_failure", "ended_by_pilot"):

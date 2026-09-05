@@ -248,6 +248,13 @@ separate corpora for sky, terrain, motion, sensory and threat clauses; one is
 weighted-sampled from each, live instrument values are spliced in, and a
 16-entry deque suppresses recently used clauses so a long flight does not loop.
 
+**251 clauses**, weighted toward where a pilot actually spends attention: the
+critical band — below 1,000 feet, where the writing matters most — went from two
+or three clauses per weather to seven or eight. Time of day adds dawn, golden,
+dusk and night registers on top. Flying an approach or rolling out swaps the
+terrain clause for its own register, because on final the outside world stops
+being scenery and becomes a set of cues.
+
 Altitude bands select on height above *ground*, which is what actually decides
 whether you are looking at a horizon or at rock:
 
@@ -278,7 +285,7 @@ Other flags: `--seed` picks the world, `--altitude` the starting height,
 python -m unittest discover -s tests -t .
 ```
 
-309 tests, no dependencies. They check the atmosphere against published ISA
+313 tests, no dependencies. They check the atmosphere against published ISA
 tables, stall speed against its closed form, cruise fuel flow and service
 ceiling against published figures for all five aircraft, terrain determinism,
 save/load fidelity, that every prose template renders against a live context,
