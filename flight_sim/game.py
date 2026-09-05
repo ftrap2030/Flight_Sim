@@ -89,6 +89,37 @@ class Session:
         ]
         return "\n".join(blocks)
 
+    def airfield_list(self, radius_nm=120.0):
+        """Airfields within reach, nearest first, with bearing and distance."""
+        state = self.sim.state
+        found = self.sim.airfields.near(state.x_nm, state.y_nm, radius_nm)
+        if not found:
+            return "No airfield within {:.0f} nm.".format(radius_nm)
+
+        lines = ["### Airfields within {:.0f} nm".format(radius_nm), ""]
+        lines.append("| Ident | Name | Bearing | Distance | Elev | Runway | Approach |")
+        lines.append("| --- | --- | ---: | ---: | ---: | ---: | --- |")
+        for a in found[:10]:
+            lines.append(
+                "| **{}** | {} | {:03.0f}° | {:.1f} nm | {:,.0f} ft | "
+                "{:02.0f} / {:,.0f} ft | {} |".format(
+                    a.ident,
+                    a.name,
+                    a.bearing_from(state.x_nm, state.y_nm),
+                    a.distance_nm(state.x_nm, state.y_nm),
+                    a.elevation_ft,
+                    a.runway_heading_deg / 10.0,
+                    a.runway_length_ft,
+                    "ILS" if a.has_ils else "visual",
+                )
+            )
+        notes = [a for a in found[:10] if a.note]
+        if notes:
+            lines.append("")
+            for a in notes:
+                lines.append("**{}** — {}".format(a.name, a.note))
+        return "\n".join(lines)
+
     def report(self, readout, title=None):
         blocks = [dashboard.render(self.sim, readout, title=title), ""]
         if self.finished:
@@ -121,6 +152,9 @@ class Session:
 
         if command.kind == "map":
             return (mapview.render(self.sim, self.sim.readout()), False)
+
+        if command.kind == "airfields":
+            return (self.airfield_list(), False)
 
         if command.kind == "quit":
             self.sim.state.status = physics.ENDED_BY_PILOT

@@ -17,6 +17,8 @@ from dataclasses import dataclass, field, asdict
 from . import aircraft as fleet
 from . import atmosphere as atm
 from . import weather as wx
+from . import airfield
+from .airfield import Airfields
 from .terrain import Terrain
 
 TICK_SECONDS = 10.0
@@ -44,6 +46,9 @@ VMC_SIDESLIP_DEG = 12.0  # beta beyond this with an engine out is losing it
 LOW_FUEL_FRACTION = 0.05
 GPWS_HARD_FT = 500.0
 GPWS_SOFT_FT = 1000.0
+
+# How far the aircraft may travel before the surrounding airfields are refreshed.
+AIRFIELD_RELOAD_NM = 40.0
 
 # Status values
 FLYING = "flying"
@@ -165,6 +170,28 @@ Aero = namedtuple(
 )
 
 
+_WORLDS = {}
+
+
+def world_for_seed(seed):
+    """The Terrain and Airfields for a seed, built once.
+
+    Both are deterministic functions of the seed alone, so every Simulator on a
+    given seed should see the same world -- and generating airfields is the most
+    expensive thing in the whole simulator, since each one searches for flat
+    ground. Sharing turns that from per-session work into per-seed work.
+    """
+    if seed not in _WORLDS:
+        terrain = Terrain(seed=seed)
+        _WORLDS[seed] = (terrain, Airfields(terrain))
+    return _WORLDS[seed]
+
+
+def forget_worlds():
+    """Drop the cached worlds. For tests that need a pristine terrain."""
+    _WORLDS.clear()
+
+
 class Simulator:
     """Owns the aircraft, the weather, the world and the mutable flight state."""
 
@@ -172,7 +199,15 @@ class Simulator:
         self.state = state
         self.aircraft = fleet.FLEET_BY_KEY[state.aircraft_key]
         self.weather = wx.WEATHER_BY_KEY[state.weather_key]
-        self.terrain = terrain or Terrain(seed=state.seed)
+        if terrain is None:
+            self.terrain, self.airfields = world_for_seed(state.seed)
+        else:
+            self.terrain = terrain
+            self.airfields = Airfields(self.terrain)
+        # Generating a field grades its site, so the world near the aircraft has
+        # to be realised before anything queries terrain there.
+        self.airfields.ensure_loaded(state.x_nm, state.y_nm)
+        self._loaded_at = (state.x_nm, state.y_nm)
         # Turbulence is a filtered random walk rather than white noise, so gusts
         # have believable duration instead of flickering every substep. The
         # filter state lives on FlightState so it survives serialisation.
@@ -189,8 +224,16 @@ class Simulator:
         tas_ms = atm.ias_to_tas(ias_kt * atm.MS_PER_KT, altitude_ft)
 
         heading_deg = 90.0
-        world = Terrain(seed=seed)
-        start_x, start_y = world.find_start(altitude_ft, heading_deg)
+        world, _fields = world_for_seed(seed)
+        # Start inside the authored home region, so the hand-designed fields are
+        # somewhere a pilot will actually meet rather than a corner of an
+        # infinite world they would never fly to.
+        start_x, start_y = world.find_start(
+            altitude_ft,
+            heading_deg,
+            centre=airfield.HOME_CENTRE_NM,
+            span_nm=airfield.HOME_RADIUS_NM * 0.55,
+        )
 
         state = FlightState(
             aircraft_key=aircraft_key,
@@ -208,7 +251,7 @@ class Simulator:
             x_nm=start_x,
             y_nm=start_y,
         )
-        sim = cls(state, terrain=world)
+        sim = cls(state)
         # Trim: set pitch to whatever holds level flight at this speed and mass,
         # and set thrust to match drag, so the aeroplane genuinely starts stable.
         trim_pitch = sim.level_flight_pitch_deg()
@@ -476,6 +519,13 @@ class Simulator:
             self._substep(dt)
             if s.status != FLYING:
                 break
+
+        # Keep the surrounding world realised as the aircraft moves.
+        if math.hypot(
+            s.x_nm - self._loaded_at[0], s.y_nm - self._loaded_at[1]
+        ) > AIRFIELD_RELOAD_NM:
+            self.airfields.ensure_loaded(s.x_nm, s.y_nm)
+            self._loaded_at = (s.x_nm, s.y_nm)
 
         s.tick += 1
         return self.readout()

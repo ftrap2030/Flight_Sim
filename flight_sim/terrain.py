@@ -83,6 +83,22 @@ class Terrain:
 
     def __init__(self, seed=20260905):
         self.seed = int(seed) & 0x7FFFFFFF
+        # Graded sites: airports are bulldozed flat, and a runway laid over raw
+        # ridged noise would have a two-hundred-foot hump in it. Each entry is
+        # (x_nm, y_nm, elevation_ft, inner_nm, outer_nm) -- flat within the
+        # inner radius, blended back to natural ground by the outer one.
+        self.graded_sites = []
+
+    def add_graded_site(self, x_nm, y_nm, elevation_ft, inner_nm, outer_nm):
+        for site in self.graded_sites:
+            if abs(site[0] - x_nm) < 1e-6 and abs(site[1] - y_nm) < 1e-6:
+                return
+        self.graded_sites.append(
+            (x_nm, y_nm, elevation_ft, inner_nm, max(outer_nm, inner_nm + 0.1))
+        )
+
+    def clear_graded_sites(self):
+        self.graded_sites = []
 
     def relief(self, x_nm, y_nm):
         """Local relief scale in feet -- how mountainous this region is."""
@@ -91,10 +107,37 @@ class Terrain:
         )
         return MIN_RELIEF_FT + (MAX_RELIEF_FT - MIN_RELIEF_FT) * _smoothstep(massif)
 
-    def elevation(self, x_nm, y_nm):
-        """Ground elevation in feet MSL at a point."""
+    def natural_elevation(self, x_nm, y_nm):
+        """Ground elevation before any earthmoving.
+
+        Site selection must use this rather than `elevation`, or a graded runway
+        would feed back into the search that placed it.
+        """
         ridges = _ridged_fbm(x_nm / RIDGE_SCALE_NM, y_nm / RIDGE_SCALE_NM, self.seed)
         return BASE_ELEVATION_FT + ridges * self.relief(x_nm, y_nm)
+
+    def elevation(self, x_nm, y_nm):
+        """Ground elevation in feet MSL, including graded airfield sites."""
+        natural = self.natural_elevation(x_nm, y_nm)
+        if not self.graded_sites:
+            return natural
+        for site_x, site_y, site_elev, inner_nm, outer_nm in self.graded_sites:
+            # Bounding-box reject first: this runs for every graded site on
+            # every elevation query, and the map makes six hundred of those.
+            dx = x_nm - site_x
+            if dx > outer_nm or dx < -outer_nm:
+                continue
+            dy = y_nm - site_y
+            if dy > outer_nm or dy < -outer_nm:
+                continue
+            distance = math.hypot(dx, dy)
+            if distance >= outer_nm:
+                continue
+            if distance <= inner_nm:
+                return site_elev
+            blend = _smoothstep((distance - inner_nm) / (outer_nm - inner_nm))
+            natural = site_elev + (natural - site_elev) * blend
+        return natural
 
     def height_above_ground(self, x_nm, y_nm, altitude_ft):
         """AGL in feet. Negative means you are inside the rock."""
@@ -145,6 +188,8 @@ class Terrain:
         corridor_nm=18.0,
         corridor_margin_ft=900.0,
         attempts=2000,
+        centre=(0.0, 0.0),
+        span_nm=1500.0,
     ):
         """Pick an opening position with room to fly.
 
@@ -162,8 +207,8 @@ class Terrain:
         max_ridge_ft = altitude_ft - corridor_margin_ft
 
         for attempt in range(attempts):
-            x = (_hash01(attempt, 11, self.seed + 4409) - 0.5) * 3000.0
-            y = (_hash01(attempt, 22, self.seed + 8821) - 0.5) * 3000.0
+            x = centre[0] + (_hash01(attempt, 11, self.seed + 4409) - 0.5) * 2.0 * span_nm
+            y = centre[1] + (_hash01(attempt, 22, self.seed + 8821) - 0.5) * 2.0 * span_nm
             if self.elevation(x, y) > max_ground_ft:
                 continue
             _distance, highest = self.highest_ahead(
@@ -172,7 +217,7 @@ class Terrain:
             if highest > max_ridge_ft:
                 continue
             return x, y
-        return 0.0, 0.0
+        return centre
 
     def feature_name(self, x_nm, y_nm):
         """A stable, procedurally generated name for the landform here.

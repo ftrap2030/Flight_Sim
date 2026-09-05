@@ -29,6 +29,8 @@ DEFAULT_SPAN_NM = 15.0
 ROW_TO_COL_ASPECT = 2.0
 
 AIRCRAFT_SYMBOL = "@"
+AIRFIELD_SYMBOL = "A"
+WAYPOINT_SYMBOL = "*"
 
 # Terrain height relative to the aircraft, in feet, and the glyph for each band.
 # Ordered from safest to most dangerous.
@@ -54,6 +56,18 @@ def _arrow_for_bearing(bearing_deg):
     """A crude eight-point arrow for a relative bearing."""
     index = int(((bearing_deg % 360.0) + 22.5) // 45.0) % 8
     return _COMPASS_ARROWS[index]
+
+
+def airfield_overlays(sim, span_nm=DEFAULT_SPAN_NM):
+    """Every airfield that could fall inside the display."""
+    state = sim.state
+    source = getattr(sim, "airfields", None)
+    if source is None:
+        return []
+    return [
+        (a.x_nm, a.y_nm, AIRFIELD_SYMBOL)
+        for a in source.near(state.x_nm, state.y_nm, span_nm * 2.0)
+    ]
 
 
 def render(sim, readout, span_nm=DEFAULT_SPAN_NM, overlays=None):
@@ -91,7 +105,9 @@ def render(sim, readout, span_nm=DEFAULT_SPAN_NM, overlays=None):
         grid.append(line)
 
     # Stamp overlays by projecting each back into grid space.
-    for entry in overlays or ():
+    if overlays is None:
+        overlays = airfield_overlays(sim, span_nm)
+    for entry in overlays:
         world_x, world_y, symbol = entry[0], entry[1], entry[2]
         dx = world_x - state.x_nm
         dy = world_y - state.y_nm
@@ -125,8 +141,8 @@ def render(sim, readout, span_nm=DEFAULT_SPAN_NM, overlays=None):
         )
     )
     lines.append(
-        "  {}  YOU                        ^  up to 1000 ABOVE"
-        "   #  >1000 ABOVE".format(AIRCRAFT_SYMBOL)
+        "  {}  YOU   {}  airfield             ^  up to 1000 ABOVE"
+        "   #  >1000 ABOVE".format(AIRCRAFT_SYMBOL, AIRFIELD_SYMBOL)
     )
     lines.append("```")
     return "\n".join(lines)
