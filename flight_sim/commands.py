@@ -74,6 +74,8 @@ def _match_meta(text, raw):
         return Command("help", text=raw, advances_time=False)
     if text in ("status", "instruments", "panel", "report"):
         return Command("status", text=raw, advances_time=False)
+    if text in ("map", "terrain", "chart", "plan view", "nav display", "nd"):
+        return Command("map", text=raw, advances_time=False)
     if text in ("quit", "exit", "end", "eject", "stop"):
         return Command("quit", text=raw, advances_time=False)
     return None
@@ -265,7 +267,7 @@ def apply(sim, command):
         s.gear_down = bool(command.value)
     elif kind == "spoilers":
         s.spoilers = bool(command.value)
-    elif kind in ("hold", "status", "help", "quit"):
+    elif kind in ("hold", "status", "map", "help", "quit"):
         pass
 
 
@@ -279,8 +281,8 @@ HELP_TEXT = """\
 | **Turning** | `turn left heading 180`, `heading 090`, `bank right 25`, `turn left`, `roll level` |
 | **Configuration** | `flaps 1`, `flaps full`, `flaps up`, `gear down`, `gear up`, `speedbrakes out`, `speedbrakes in` |
 | **Time** | `hold` (advance 10 s unchanged), `wait 60 seconds`, `wait 2 minutes` |
-| **Other** | `status` (re-read the panel, no time passes), `help`, `quit` |
+| **Other** | `map` (terrain plan view), `status` (re-read the panel), `help`, `quit` |
 
 Each command advances the simulation **10 seconds** unless you say otherwise.
-`status` and `help` cost no time.\
+`map`, `status` and `help` cost no time.\
 """

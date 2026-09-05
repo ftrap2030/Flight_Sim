@@ -11,6 +11,7 @@ import os
 from . import aircraft as fleet
 from . import commands as cmd
 from . import dashboard
+from . import mapview
 from . import physics
 from . import weather as wx
 from .narrator import Narrator
@@ -117,6 +118,9 @@ class Session:
 
         if command.kind == "status":
             return (dashboard.render(self.sim, self.sim.readout()), False)
+
+        if command.kind == "map":
+            return (mapview.render(self.sim, self.sim.readout()), False)
 
         if command.kind == "quit":
             self.sim.state.status = physics.ENDED_BY_PILOT
