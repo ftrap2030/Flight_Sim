@@ -16,6 +16,7 @@ from dataclasses import dataclass, field, asdict
 
 from . import aircraft as fleet
 from . import atmosphere as atm
+from . import landing
 from . import weather as wx
 from . import airfield
 from .airfield import Airfields
@@ -52,9 +53,15 @@ AIRFIELD_RELOAD_NM = 40.0
 
 # Status values
 FLYING = "flying"
+ROLLOUT = "rollout"  # on the runway, still moving -- not yet an ending
+LANDED = "landed"
+OVERRUN = "overrun"
 CRASHED_TERRAIN = "crashed_terrain"
 STRUCTURAL_FAILURE = "structural_failure"
 ENDED_BY_PILOT = "ended_by_pilot"
+
+# The two statuses in which the simulation is still running.
+LIVE_STATUSES = (FLYING, ROLLOUT)
 
 
 def wrap180(degrees_value):
@@ -99,6 +106,13 @@ class FlightState:
     sideslip_deg: float = 0.0
     rudder_deg: float = 0.0
     engines_failed: list = field(default_factory=list)
+
+    # Ground handling
+    on_ground: bool = False
+    brakes: float = 0.0  # 0 = off, 1 = full
+    reverse_thrust: bool = False
+    touchdown: dict = None  # the graded arrival, once there is one
+    landing_field_ident: str = ""
 
     cmd_pitch_deg: float = 0.0
     cmd_bank_deg: float = 0.0
@@ -163,6 +177,8 @@ class Readout:
     terrain_ahead_nm: float = 0.0
     terrain_ahead_ft: float = 0.0
     terrain_ahead_name: str = ""
+    approach: object = None
+    vref_kt: float = 0.0
 
 
 Aero = namedtuple(
@@ -277,8 +293,35 @@ class Simulator:
         required_lift = s.mass_kg * atm.G0 / max(math.cos(bank), 0.2)
         cl_required = required_lift / (0.5 * rho * v * v * craft.wing_area_m2)
         cl_required = min(cl_required, craft.cl_max_for_flaps(s.flaps))
-        alpha_rad = (cl_required - craft.cl_0) / craft.cl_alpha
+        alpha_rad = (
+            cl_required - craft.cl_0_for_flaps(s.flaps)
+        ) / craft.cl_alpha
         return clamp(math.degrees(alpha_rad), -10.0, craft.alpha_crit_deg - 0.5)
+
+    def throttle_for_flight_path(self, gamma_deg):
+        """Throttle that holds a steady flight path angle at the current speed.
+
+        Thrust must beat drag by the component of weight along the path, so a
+        descent needs less and a climb needs more. This is the primitive an
+        approach actually needs: with full flaps and the gear down, holding a
+        3-degree path takes *more* thrust than intuition suggests, because the
+        aircraft's idle glide is far steeper than three degrees.
+        """
+        aero = self._aero_state()
+        needed = aero.drag + self.state.mass_kg * atm.G0 * math.sin(
+            math.radians(gamma_deg)
+        )
+        available = self._thrust_available_n()
+        return clamp(100.0 * needed / max(available, 1.0), 0.0, 100.0)
+
+    def idle_flight_path_deg(self):
+        """The flight path angle the aircraft settles into with no thrust.
+
+        The glide angle in the current configuration -- what you get if you do
+        nothing. Negative.
+        """
+        aero = self._aero_state()
+        return -math.degrees(math.atan2(aero.drag, aero.lift if aero.lift > 1.0 else 1.0))
 
     def throttle_for_level_flight(self):
         """Throttle setting whose thrust equals drag in level flight."""
@@ -307,7 +350,9 @@ class Simulator:
         """
         craft = self.aircraft
         cl_max = craft.cl_max_for_flaps(self.state.flaps)
-        cl_linear = craft.cl_0 + craft.cl_alpha * math.radians(alpha_deg)
+        cl_linear = craft.cl_0_for_flaps(
+            self.state.flaps
+        ) + craft.cl_alpha * math.radians(alpha_deg)
         cl = clamp(cl_linear, -cl_max, cl_max)
         if alpha_deg > craft.alpha_crit_deg:
             excess = alpha_deg - craft.alpha_crit_deg
@@ -503,7 +548,7 @@ class Simulator:
     def step_tick(self, seconds=TICK_SECONDS):
         """Advance the simulation. Returns the Readout at the end of the tick."""
         s = self.state
-        if s.status != FLYING:
+        if s.status not in LIVE_STATUSES:
             return self.readout()
 
         # Re-seed per tick from the tick number, so a flight resumed from disk
@@ -516,8 +561,11 @@ class Simulator:
         dt = seconds / substeps
 
         for _ in range(substeps):
-            self._substep(dt)
-            if s.status != FLYING:
+            if s.on_ground:
+                self._ground_substep(dt)
+            else:
+                self._substep(dt)
+            if s.status not in LIVE_STATUSES:
                 break
 
         # Keep the surrounding world realised as the aircraft moves.
@@ -648,8 +696,83 @@ class Simulator:
 
         ground_ft = self.terrain.elevation(s.x_nm, s.y_nm)
         if s.altitude_ft <= ground_ft:
+            self._touch_down(ground_ft)
+
+    def _touch_down(self, ground_ft):
+        """The wheels have met the ground. Where, and how?
+
+        Off a runway this is a crash, as it always was. On one it is an arrival,
+        graded, and possibly still a disaster.
+        """
+        s = self.state
+        field = self.airfields.over_runway(s.x_nm, s.y_nm)
+        on_runway = field is not None
+        if field is None:
+            field = self.airfields.over_airfield_surface(s.x_nm, s.y_nm)
+        if field is None:
             self._record_impact(ground_ft)
             s.status = CRASHED_TERRAIN
+            return
+
+        verdict = landing.grade_touchdown(self, field, self.readout(), on_runway)
+        s.touchdown = asdict(verdict)
+        if not verdict.survivable:
+            self._record_impact(ground_ft)
+            s.status = CRASHED_TERRAIN
+            return
+
+        # Down, and in one piece. Settle onto the runway and start the rollout.
+        s.on_ground = True
+        s.status = ROLLOUT
+        s.altitude_ft = ground_ft
+        s.gamma_deg = 0.0
+        s.bank_deg = 0.0
+        s.cmd_bank_deg = 0.0
+        s.cmd_heading_deg = None
+        s.pitch_deg = s.cmd_pitch_deg = 0.0
+        s.sideslip_deg = 0.0
+        s.throttle_pct = 0.0
+        s.landing_field_ident = field.ident
+
+    def _ground_substep(self, dt):
+        """Rolling out: friction, reverse thrust and the end of the runway."""
+        s = self.state
+        field = self.airfields.by_ident(
+            s.landing_field_ident, s.x_nm, s.y_nm, radius_nm=15.0
+        )
+        if field is None:
+            s.status = LANDED
+            return
+
+        direction = field.landing_direction_for_heading(s.heading_deg)
+        rad = math.radians(direction)
+
+        decel = landing.rollout_deceleration(self)
+        s.tas_ms = max(0.0, s.tas_ms - decel * dt)
+
+        # Rolling straight down the runway; the nosewheel keeps it there.
+        s.heading_deg = direction
+        s.altitude_ft = self.terrain.elevation(s.x_nm, s.y_nm)
+        s.x_nm += math.sin(rad) * s.tas_ms * dt * atm.NM_PER_M
+        s.y_nm += math.cos(rad) * s.tas_ms * dt * atm.NM_PER_M
+
+        if self._thrust_n() > 0.0:
+            burn = min(
+                self.aircraft.tsfc * self._thrust_n() * dt, s.fuel_kg
+            )
+            s.fuel_kg -= burn
+            s.mass_kg -= burn
+        s.elapsed_s += dt
+
+        along, _across = field.frame_for(s.x_nm, s.y_nm, direction)
+        if along > field.runway_length_ft:
+            self._record_impact()
+            s.status = OVERRUN
+            return
+
+        if s.tas_ms * atm.KT_PER_MS < landing.STOPPED_KT:
+            s.tas_ms = 0.0
+            s.status = LANDED
 
     def _record_impact(self, ground_ft=None):
         s = self.state
@@ -670,7 +793,10 @@ class Simulator:
         s = self.state
         craft = self.aircraft
         aero = self._aero_state()
-        v = aero.v
+        # _aero_state clamps airspeed to a floor so the force equations cannot
+        # divide by zero. That floor must not reach the instruments: an aircraft
+        # stopped on the runway reported 48 knots before this distinction.
+        v = max(s.tas_ms, 0.0)
 
         ias_kt = atm.tas_to_ias(v, s.altitude_ft) * atm.KT_PER_MS
         tas_kt = v * atm.KT_PER_MS
@@ -739,6 +865,8 @@ class Simulator:
             terrain_ahead_ft=ahead_ft,
             terrain_ahead_name=self.terrain.feature_name(*ahead_pos),
         )
+        readout.approach = landing.approach_guidance(self)
+        readout.vref_kt = landing.vref_kt(self)
         readout.warnings = self._warnings(readout)
         return readout
 
@@ -760,9 +888,20 @@ class Simulator:
         if r.load_factor > OVERSTRESS_G:
             out.append("OVERSTRESS")
 
-        # GPWS: both raw clearance and a closure-rate check against the ridge
-        # line ahead, which is what actually kills you in a valley.
-        if r.agl_ft < GPWS_HARD_FT:
+        # GPWS, suppressed when the aircraft is configured to land and tracking
+        # a runway. A real system does the same: without it, every correct
+        # approach sets off a terrain warning at 500 ft, and a warning that
+        # fires on every landing is a warning nobody reads.
+        landing_configured = (
+            s.gear_down
+            and s.flaps >= 2
+            and r.approach is not None
+            and r.approach.on_approach
+            and r.approach.distance_nm < 10.0
+        )
+        if landing_configured:
+            pass
+        elif r.agl_ft < GPWS_HARD_FT:
             out.append("TERRAIN -- PULL UP")
         elif r.agl_ft < GPWS_SOFT_FT:
             out.append("TERRAIN")

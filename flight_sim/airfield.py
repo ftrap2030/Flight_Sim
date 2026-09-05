@@ -71,6 +71,44 @@ class Airfield:
         across = dx * math.cos(rad) - dy * math.sin(rad)
         return along, across
 
+    def landing_directions(self):
+        """Both usable runway directions: a runway works from either end."""
+        return (
+            self.runway_heading_deg,
+            (self.runway_heading_deg + 180.0) % 360.0,
+        )
+
+    def landing_direction_for_heading(self, heading_deg):
+        """Whichever end the aircraft is actually lined up to use.
+
+        Saves the pilot from having to declare a runway: fly at it from the
+        south-west and you are using the north-east end, and that is that.
+        """
+        primary, reciprocal = self.landing_directions()
+        error = (heading_deg - primary + 180.0) % 360.0 - 180.0
+        return primary if abs(error) <= 90.0 else reciprocal
+
+    def frame_for(self, x_nm, y_nm, direction_deg):
+        """`runway_frame`, but measured from whichever threshold you are using."""
+        half = self.runway_length_nm / 2.0
+        rad = math.radians(direction_deg)
+        thresh_x = self.x_nm - math.sin(rad) * half
+        thresh_y = self.y_nm - math.cos(rad) * half
+        dx = (x_nm - thresh_x) * FT_PER_NM
+        dy = (y_nm - thresh_y) * FT_PER_NM
+        along = dx * math.sin(rad) + dy * math.cos(rad)
+        across = dx * math.cos(rad) - dy * math.sin(rad)
+        return along, across
+
+    @property
+    def graded_radius_nm(self):
+        """The flat apron around the runway -- the bulldozed part of the field."""
+        return self.runway_length_nm * GRADE_INNER_FACTOR
+
+    def is_on_airfield_surface(self, x_nm, y_nm):
+        """On the flat airfield, though not necessarily on the paving."""
+        return self.distance_nm(x_nm, y_nm) <= self.graded_radius_nm
+
     def is_over_runway(self, x_nm, y_nm):
         along, across = self.runway_frame(x_nm, y_nm)
         return (
@@ -198,6 +236,17 @@ def _graded(terrain, airfield):
         inner,
         inner + GRADE_BLEND_NM,
     )
+    # A runway you cannot approach is not a runway. Protect the corridor off
+    # both ends, since either can be landed on.
+    half = airfield.runway_length_nm / 2.0
+    for direction in airfield.landing_directions():
+        rad = math.radians(direction)
+        terrain.add_approach_surface(
+            airfield.x_nm - math.sin(rad) * half,
+            airfield.y_nm - math.cos(rad) * half,
+            direction,
+            airfield.elevation_ft,
+        )
     return airfield
 
 
@@ -445,5 +494,16 @@ class Airfields:
         """The airfield whose runway this position is on, if any."""
         for airfield in self.near(x_nm, y_nm, radius_nm=6.0):
             if airfield.is_over_runway(x_nm, y_nm):
+                return airfield
+        return None
+
+    def over_airfield_surface(self, x_nm, y_nm):
+        """The airfield whose flat ground this is, runway or not.
+
+        Touching down just off the paving is a runway excursion, not a
+        controlled flight into terrain, and the two should not end the same way.
+        """
+        for airfield in self.near(x_nm, y_nm, radius_nm=6.0):
+            if airfield.is_on_airfield_surface(x_nm, y_nm):
                 return airfield
         return None

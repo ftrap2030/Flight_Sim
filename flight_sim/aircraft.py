@@ -129,6 +129,18 @@ class Aircraft:
         """Maximum lift coefficient at a given flap detent (0-4)."""
         return self.cl_max_clean + FLAP_CL_BONUS[_clamp_flap(flap_setting)]
 
+    def cl_0_for_flaps(self, flap_setting):
+        """Zero-alpha lift coefficient at a given flap detent.
+
+        Flaps work mostly by adding camber, which lifts the whole lift curve
+        rather than extending it to a higher stall angle. Raising CL_max without
+        raising CL_0 would mean the flapped maximum could only be reached at an
+        absurd angle of attack -- an aircraft at Vref with full flaps would sit
+        permanently on the edge of the stall, which is the opposite of what
+        flaps are for.
+        """
+        return self.cl_0 + FLAP_CL_BONUS[_clamp_flap(flap_setting)]
+
     def cd_0_for_config(self, flap_setting, gear_down, spoilers):
         """Parasite drag for the current configuration."""
         cd = self.cd_0 + FLAP_CD_PENALTY[_clamp_flap(flap_setting)]

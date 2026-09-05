@@ -88,6 +88,39 @@ class Terrain:
         # (x_nm, y_nm, elevation_ft, inner_nm, outer_nm) -- flat within the
         # inner radius, blended back to natural ground by the outer one.
         self.graded_sites = []
+        # Approach surfaces: the protected corridor off each runway end. Real
+        # airports have an obstacle limitation surface, and terrain that would
+        # penetrate it is either removed or the approach is not published.
+        # Unlike grading, this only ever cuts high ground *down* -- it never
+        # fills a valley, so the landscape keeps its character.
+        self.approach_surfaces = []
+
+    def add_approach_surface(
+        self,
+        threshold_x_nm,
+        threshold_y_nm,
+        direction_deg,
+        base_elevation_ft,
+        length_nm=6.0,
+        half_width_nm=0.35,
+        slope_deg=2.0,
+    ):
+        """Protect the final approach path to a runway threshold.
+
+        The slope is shallower than the 3-degree glidepath, so an aircraft flown
+        down the glideslope has clearance the whole way in.
+        """
+        self.approach_surfaces.append(
+            (
+                threshold_x_nm,
+                threshold_y_nm,
+                direction_deg,
+                base_elevation_ft,
+                length_nm,
+                half_width_nm,
+                math.tan(math.radians(slope_deg)),
+            )
+        )
 
     def add_graded_site(self, x_nm, y_nm, elevation_ft, inner_nm, outer_nm):
         for site in self.graded_sites:
@@ -99,6 +132,7 @@ class Terrain:
 
     def clear_graded_sites(self):
         self.graded_sites = []
+        self.approach_surfaces = []
 
     def relief(self, x_nm, y_nm):
         """Local relief scale in feet -- how mountainous this region is."""
@@ -120,7 +154,7 @@ class Terrain:
         """Ground elevation in feet MSL, including graded airfield sites."""
         natural = self.natural_elevation(x_nm, y_nm)
         if not self.graded_sites:
-            return natural
+            return self._apply_approach_surfaces(x_nm, y_nm, natural)
         for site_x, site_y, site_elev, inner_nm, outer_nm in self.graded_sites:
             # Bounding-box reject first: this runs for every graded site on
             # every elevation query, and the map makes six hundred of those.
@@ -137,7 +171,37 @@ class Terrain:
                 return site_elev
             blend = _smoothstep((distance - inner_nm) / (outer_nm - inner_nm))
             natural = site_elev + (natural - site_elev) * blend
-        return natural
+        return self._apply_approach_surfaces(x_nm, y_nm, natural)
+
+    def _apply_approach_surfaces(self, x_nm, y_nm, elevation_ft):
+        """Cut down anything poking through a protected approach corridor."""
+        for (tx, ty, direction, base_ft, length_nm, half_width_nm,
+             slope) in self.approach_surfaces:
+            dx = x_nm - tx
+            dy = y_nm - ty
+            rad = math.radians(direction)
+            # Along runs *back* from the threshold, out along the approach.
+            along = -(dx * math.sin(rad) + dy * math.cos(rad))
+            if along <= 0.0 or along >= length_nm:
+                continue
+            across = abs(dx * math.cos(rad) - dy * math.sin(rad))
+            if across >= half_width_nm:
+                continue
+
+            ceiling = base_ft + along * slope * 6076.12
+            if elevation_ft <= ceiling:
+                continue
+            # Taper at the edges of the corridor and at its far end, so the cut
+            # blends into the surrounding country instead of leaving a trench.
+            # Both tapers act only over the outer fifth: a taper spread across
+            # the whole corridor would apply half the cut in the middle, which
+            # is exactly where the glidepath is lowest and the protection
+            # matters most.
+            edge = _smoothstep(min(1.0, (1.0 - across / half_width_nm) / 0.2))
+            far = _smoothstep(min(1.0, (1.0 - along / length_nm) / 0.2))
+            strength = edge * far
+            elevation_ft = elevation_ft * (1.0 - strength) + ceiling * strength
+        return elevation_ft
 
     def height_above_ground(self, x_nm, y_nm, altitude_ft):
         """AGL in feet. Negative means you are inside the rock."""

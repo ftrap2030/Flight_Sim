@@ -73,7 +73,9 @@ class Session:
 
     @property
     def finished(self):
-        return self.sim.state.status != physics.FLYING
+        # The rollout is not an ending: you are down, but you are still moving,
+        # and you can still run off the end.
+        return self.sim.state.status not in physics.LIVE_STATUSES
 
     def initial_report(self):
         """The briefing plus the first dashboard and view, at T+0."""

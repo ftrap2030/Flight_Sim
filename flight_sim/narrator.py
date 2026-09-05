@@ -88,8 +88,18 @@ class Narrator:
         """The final, terminal description."""
         ctx = _context(sim, readout)
         status = sim.state.status
-        if status == "crashed_terrain":
-            pool = ENDING_TERRAIN
+        if status == "landed":
+            grade = (sim.state.touchdown or {}).get("grade", "normal landing")
+            pool = ENDING_LANDED.get(grade, ENDING_LANDED["normal landing"])
+        elif status == "overrun":
+            pool = ENDING_OVERRUN
+        elif status == "crashed_terrain":
+            # A wrecked arrival at an airfield reads nothing like a mountainside.
+            touchdown = sim.state.touchdown
+            if touchdown and not touchdown.get("survivable", True):
+                pool = ENDING_BOTCHED_LANDING
+            else:
+                pool = ENDING_TERRAIN
         elif status == "structural_failure":
             pool = ENDING_STRUCTURAL
         else:
@@ -146,6 +156,14 @@ def _context(sim, r):
         "impact_vs": abs(s.impact_vs_fpm),
         "impact_elev": s.impact_elevation_ft,
         "impact_feature": s.impact_feature or r.terrain_ahead_name,
+        "field": (s.touchdown or {}).get("field_name", "the airfield"),
+        "sink": (s.touchdown or {}).get("sink_rate_fpm", 0.0),
+        "td_ias": (s.touchdown or {}).get("ias_kt", 0.0),
+        "vref_pct": (s.touchdown or {}).get("speed_ratio", 1.0) * 100.0,
+        "centreline": abs((s.touchdown or {}).get("centreline_ft", 0.0)),
+        "crab": abs((s.touchdown or {}).get("crab_deg", 0.0)),
+        "runway_left": (s.touchdown or {}).get("remaining_ft", 0.0),
+        "td_reason": (s.touchdown or {}).get("reason", ""),
     }
 
 
@@ -678,6 +696,86 @@ ENDING_STRUCTURAL = [
              "The remains of the {aircraft} come down across the slopes of "
              "{impact_feature} over the better part of a mile.\n\n"
              "**— SIMULATION ENDED: STRUCTURAL FAILURE —**"),
+]
+
+ENDING_LANDED = {
+    "greaser": [
+        ("l_g1", "You never feel it.\n\nThe runway comes up, the sink stops, and "
+                 "somewhere in the last few feet the wheels simply start turning "
+                 "— **{sink:,.0f} feet a minute**, which is to say almost "
+                 "nothing at all. The nose settles. Somebody in the back "
+                 "applauds, and for once they are right to.\n\n"
+                 "**{field}** — {centreline:,.0f} ft off the centreline, "
+                 "{runway_left:,.0f} ft of runway still ahead.\n\n"
+                 "**— SIMULATION ENDED: LANDED —**"),
+        ("l_g2", "A greaser.\n\nThe main gear kisses the concrete at "
+                 "**{sink:,.0f} fpm** and the transition from flying to rolling "
+                 "happens without a seam in it. The spoilers deploy, the nose "
+                 "comes down, and the {aircraft} is a ground vehicle again.\n\n"
+                 "**{field}** — {runway_left:,.0f} ft remaining.\n\n"
+                 "**— SIMULATION ENDED: LANDED —**"),
+    ],
+    "normal landing": [
+        ("l_n1", "The wheels find the runway.\n\n**{sink:,.0f} feet a minute**, "
+                 "{td_ias:,.0f} knots, {centreline:,.0f} ft off the centreline "
+                 "— a clean, unremarkable arrival, which is the highest praise "
+                 "there is for a landing. The airframe settles onto its gear, "
+                 "the spoilers come up, and the deceleration presses you gently "
+                 "into the straps.\n\n**{field}**, {runway_left:,.0f} ft "
+                 "remaining.\n\n**— SIMULATION ENDED: LANDED —**"),
+        ("l_n2", "Down, and properly done.\n\nA solid, positive touchdown at "
+                 "**{sink:,.0f} fpm** and {vref_pct:.0f}% of Vref. The nose "
+                 "lowers, reverse thrust builds to a roar behind you, and the "
+                 "runway lights slow from a blur to a procession.\n\n"
+                 "**{field}** — {runway_left:,.0f} ft of runway to spare.\n\n"
+                 "**— SIMULATION ENDED: LANDED —**"),
+    ],
+    "firm landing": [
+        ("l_f1", "It arrives.\n\n**{sink:,.0f} feet a minute** is firm — the "
+                 "kind of touchdown that goes through the airframe as a single "
+                 "hard thump and makes the overhead bins complain. Nothing is "
+                 "broken. Nobody is impressed.\n\n**{field}**, "
+                 "{runway_left:,.0f} ft remaining.\n\n"
+                 "**— SIMULATION ENDED: LANDED —**"),
+    ],
+    "hard landing": [
+        ("l_h1", "You arrive rather than land.\n\n**{sink:,.0f} feet a minute** "
+                 "into the concrete: the gear compresses to its stops, the whole "
+                 "aeroplane bangs and rings, and loose articles leave the "
+                 "shelves. The oleos survive it. The engineers will want to look "
+                 "at them anyway, and a hard-landing report writes itself.\n\n"
+                 "**{field}** — {runway_left:,.0f} ft remaining.\n\n"
+                 "**— SIMULATION ENDED: LANDED (HARD) —**"),
+    ],
+    "runway excursion": [
+        ("l_e1", "You are down, but not where you meant to be.\n\nThe wheels "
+                 "meet the ground **{centreline:,.0f} feet** off the centreline "
+                 "— off the paving, onto the graded surface beside it. The ride "
+                 "goes instantly from smooth to a violent rumble, mud and grass "
+                 "fountaining past the windows, and the aircraft slews before it "
+                 "comes to rest.\n\nIntact. Off the runway, and going nowhere "
+                 "under its own power.\n\n"
+                 "**— SIMULATION ENDED: RUNWAY EXCURSION —**"),
+    ],
+}
+
+ENDING_OVERRUN = [
+    ("o_1", "The far end arrives before the aircraft stops.\n\nThe last of the "
+            "runway goes under the nose still doing better than a hundred knots, "
+            "and then there is no more concrete: the {aircraft} runs off the end "
+            "into the overrun, the gear ploughing furrows through soft ground "
+            "until something folds and the nose drops.\n\nYou touched down "
+            "{td_ias:,.0f} knots at {vref_pct:.0f}% of Vref with "
+            "{runway_left:,.0f} feet in front of you. It was never going to be "
+            "enough.\n\n**— SIMULATION ENDED: RUNWAY OVERRUN —**"),
+]
+
+ENDING_BOTCHED_LANDING = [
+    ("b_1", "It comes apart on the runway.\n\n{td_reason}.\n\nThe {aircraft} "
+            "slews, drops a wing, and grinds to a halt in a spreading cloud of "
+            "dust and fuel vapour a long way from where the flight plan said it "
+            "would stop. **{field}** will be closed for some time.\n\n"
+            "**— SIMULATION ENDED: LANDING ACCIDENT —**"),
 ]
 
 ENDING_PILOT = [

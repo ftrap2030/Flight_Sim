@@ -182,6 +182,11 @@ def render(sim, readout, title=None):
             r.throttle_pct,
         )
     )
+    approach_block = _approach_text(sim, r)
+    if approach_block:
+        lines.append(approach_block)
+        lines.append("")
+
     lines.append("")
     lines.append(
         "*Highest terrain within 12 nm of the nose: **{:,.0f} ft** at {:.1f} nm "
@@ -193,6 +198,55 @@ def render(sim, readout, title=None):
         )
     )
 
+    return "\n".join(lines)
+
+
+def _deviation_bar(value, full_scale, width=11):
+    """A centred deviation needle: where you are against where you should be."""
+    centre = width // 2
+    offset = max(-1.0, min(1.0, value / full_scale))
+    position = int(round(centre + offset * centre))
+    cells = ["."] * width
+    cells[centre] = "|"
+    cells[position] = "#"
+    return "".join(cells)
+
+
+def _approach_text(sim, r):
+    """The approach block: only shown when there is a runway to fly at."""
+    approach = r.approach
+    if approach is None or not approach.on_approach:
+        return None
+
+    field = approach.field
+    above_below = "HIGH" if approach.glideslope_dev_ft > 0 else "LOW"
+    left_right = "RIGHT" if approach.across_ft > 0 else "LEFT"
+    lines = [
+        "**APPROACH — {} ({}) runway {:02.0f}**  ·  {}  ·  elev {:,.0f} ft  "
+        "·  {:,.0f} ft available".format(
+            field.name,
+            field.ident,
+            approach.direction_deg / 10.0,
+            "ILS" if field.has_ils else "VISUAL",
+            field.elevation_ft,
+            field.runway_length_ft,
+        ),
+        "",
+        "```",
+        "  RANGE   {:>5.1f} nm to threshold        Vref {:>5.0f} kt"
+        " (you: {:>5.0f})".format(approach.distance_nm, r.vref_kt, r.ias_kt),
+        "  G/S   [{}]  {:>+6.0f} ft {}".format(
+            _deviation_bar(approach.glideslope_dev_ft, 400.0),
+            approach.glideslope_dev_ft,
+            above_below,
+        ),
+        "  LOC   [{}]  {:>+6.0f} ft {}".format(
+            _deviation_bar(approach.across_ft, 1200.0),
+            approach.across_ft,
+            left_right,
+        ),
+        "```",
+    ]
     return "\n".join(lines)
 
 
@@ -209,6 +263,10 @@ def _config_text(state):
     parts.append("GEAR DN" if state.gear_down else "GEAR UP")
     if state.spoilers:
         parts.append("SPD BRK")
+    if state.brakes > 0:
+        parts.append("BRK {:.0f}%".format(state.brakes * 100))
+    if state.reverse_thrust:
+        parts.append("REV")
     return ", ".join(parts)
 
 

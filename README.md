@@ -49,8 +49,9 @@ Commands are typed the way a pilot would say them:
 | Rudder | `rudder left 10`, `full right rudder`, `centre rudder` |
 | Engines | `engine failure`, `shutdown engine 2`, `restart engines` |
 | Configuration | `flaps 2`, `flaps full`, `gear down`, `speedbrakes out` |
+| On the ground | `max brakes`, `release brakes`, `reverse thrust`, `stow reversers` |
 | Time | `hold`, `wait 60 seconds`, `wait 2 minutes` |
-| Other | `map`, `status`, `help`, `quit` |
+| Other | `map`, `airfields`, `status`, `help`, `quit` |
 
 Each command advances the simulation ten seconds. `status` and `help` cost no
 time, and an unrecognised command costs no time either — you get a hint instead.
@@ -100,6 +101,63 @@ the sidestick and drops its nose, so a stall is recoverable if you have the
 height and the discipline to unload it. You can also overspeed past Vmo,
 overstress the airframe, and run the tanks dry, at which point you are flying a
 very large glider.
+
+## Landing
+
+A flight can now end well. Ground contact asks two questions rather than one:
+where did you touch down, and how.
+
+Off an airfield it is a crash, as it always was. On the runway you are graded
+the way a real arrival is graded — **sink rate first**, then speed against Vref,
+then how straight and how centred:
+
+| Sink rate | Verdict |
+|---|---|
+| under 60 fpm | greaser |
+| under 240 fpm | normal landing |
+| under 600 fpm | firm landing |
+| under 900 fpm | hard landing — and a report to write |
+| 900 fpm or more | the gear does not survive it |
+
+More than 8° of bank puts a wingtip in first; more than 20° of crab drags the
+gear sideways until it folds. Touch down just off the paving and it is a runway
+excursion — survivable if it was gentle, which is not the same thing as a crash
+into a mountain, and does not read like one.
+
+**The flare is the skill.** A 3° glidepath at 150 knots is about 800 feet a
+minute, so flying the glideslope all the way to the concrete earns a hard
+landing every time. Flare too high or too hard and the aircraft balloons, bleeds
+forty knots and drops in worse than if you had done nothing:
+
+| Technique | Result |
+|---|---|
+| No flare | 826 fpm — hard |
+| Flare at 30 ft, +1.5° | **181 fpm — normal** |
+| Flare at 50 ft, +2.5° | 538 fpm — firm |
+| Flare at 60 ft, +3.0° | 677 fpm — hard |
+
+Then the rollout: wheel braking, spoilers and reverse thrust against the far
+end of the runway. Run out of concrete and it is an overrun.
+
+**Approaches are protected.** Every runway end carries an obstacle limitation
+surface — a corridor that cuts high ground down to below the glidepath, the same
+thing a real airport has. Without one, half the fields in a mountain range would
+have a ridge sitting in short final and could not be used at all. It only ever
+cuts terrain down, never fills a valley, so the landscape keeps its character.
+
+## Airfields
+
+Five hand-designed fields in the authored home region, **the Anfell Valleys**,
+where every flight begins: a long instrument-equipped international, a regional
+strip, a short narrow visual-only field back in the hills, a high one where thin
+air lengthens the roll, and one whose approach threads between two ridges.
+Beyond the region, airfields are generated procedurally and infinitely.
+
+Both kinds are placed by searching for genuinely flat ground and aligning the
+runway with the flattest axis — which in mountainous country means it follows
+the valley, the same answer a surveyor would give, with no explicit notion of a
+valley anywhere in the code. Runways are then graded flat, because real airports
+are bulldozed and raw ridged noise puts a two-hundred-foot hump in a runway.
 
 **The terrain map** — a track-up ASCII plan view (`map`) drawing the ground
 *relative to your own altitude*, because at low level the only question is what
@@ -152,11 +210,13 @@ Other flags: `--seed` picks the world, `--altitude` the starting height,
 python -m unittest discover -s tests -t .
 ```
 
-149 tests, no dependencies. They check the atmosphere against published ISA
+218 tests, no dependencies. They check the atmosphere against published ISA
 tables, stall speed against its closed form, cruise fuel flow and service
 ceiling against published figures for all five aircraft, terrain determinism,
 save/load fidelity, that every prose template renders against a live context,
-that the artificial horizon is not upside down, and that Vmc falls out of the
-engine geometry rather than being asserted.
+that the artificial horizon is not upside down, that Vmc falls out of the engine
+geometry rather than being asserted, that every authored runway has a clear
+3-degree approach from both ends, and that a stopped aircraft reads zero on the
+airspeed indicator.
 
 CI runs them on Python 3.9, 3.11 and 3.12.

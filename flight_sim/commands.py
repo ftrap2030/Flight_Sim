@@ -253,6 +253,28 @@ def _match_engines(text, raw):
     return None
 
 
+def _match_ground(text, raw):
+    m = re.match(r"^(?:apply\s+)?(?:max|maximum|full)\s+(?:wheel\s+)?brakes?$", text)
+    if m:
+        return Command("brakes", 1.0, raw)
+    if re.match(r"^(?:brakes?|apply brakes?|braking)$", text):
+        return Command("brakes", 0.7, raw)
+    if re.match(r"^(?:release|off)\s+brakes?$", text) or \
+       re.match(r"^brakes?\s+(?:off|release)$", text):
+        return Command("brakes", 0.0, raw)
+    m = re.match(r"^brakes?\s+" + _NUMBER + r"\s*%?$", text)
+    if m:
+        return Command("brakes", float(m.group(1)) / 100.0, raw)
+
+    if re.match(r"^(?:reverse|reverse thrust|reversers?|thrust reverse)"
+                r"(?:\s+(?:on|out|deploy|select))?$", text):
+        return Command("reverse", 1.0, raw)
+    if re.match(r"^(?:stow|cancel|stow the)\s+(?:reversers?|reverse)$", text) or \
+       re.match(r"^reverse(?:rs)?\s+(?:off|stow|in)$", text):
+        return Command("reverse", 0.0, raw)
+    return None
+
+
 def _match_config(text, raw):
     m = re.match(r"^(?:set\s+)?flaps?\s*(up|0|1|2|3|full|4)$", text)
     if m:
@@ -280,6 +302,7 @@ _MATCHERS = [
     # Rudder before lateral: "left rudder" must not be eaten by the bank patterns.
     _match_rudder,
     _match_engines,
+    _match_ground,
     _match_lateral,
     _match_config,
 ]
@@ -318,6 +341,10 @@ def apply(sim, command):
             s.engines_failed.append(index)
     elif kind == "engine_restart":
         s.engines_failed.clear()
+    elif kind == "brakes":
+        s.brakes = clamp(command.value, 0.0, 1.0)
+    elif kind == "reverse":
+        s.reverse_thrust = bool(command.value)
     elif kind == "flaps":
         s.flaps = int(clamp(command.value, 0, len(fleet.FLAP_CL_BONUS) - 1))
     elif kind == "gear":
@@ -338,6 +365,7 @@ HELP_TEXT = """\
 | **Turning** | `turn left heading 180`, `heading 090`, `bank right 25`, `turn left`, `roll level` |
 | **Rudder** | `rudder left 10`, `rudder right 5`, `full left rudder`, `centre rudder` |
 | **Engines** | `engine failure`, `shutdown engine 2`, `restart engines` |
+| **On the ground** | `brakes`, `max brakes`, `release brakes`, `reverse thrust`, `stow reversers` |
 | **Configuration** | `flaps 1`, `flaps full`, `flaps up`, `gear down`, `gear up`, `speedbrakes out`, `speedbrakes in` |
 | **Time** | `hold` (advance 10 s unchanged), `wait 60 seconds`, `wait 2 minutes` |
 | **Other** | `map` (terrain plan view), `airfields` (what is within reach), `status`, `help`, `quit` |
