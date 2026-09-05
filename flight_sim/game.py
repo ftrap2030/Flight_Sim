@@ -12,6 +12,7 @@ from . import aircraft as fleet
 from . import commands as cmd
 from . import dashboard
 from . import mapview
+from . import navigation
 from . import physics
 from . import weather as wx
 from .narrator import Narrator
@@ -122,10 +123,88 @@ class Session:
                 lines.append("**{}** — {}".format(a.name, a.note))
         return "\n".join(lines)
 
+    def set_destination(self, target):
+        """Point the route at a named airfield."""
+        state = self.sim.state
+        field = self.sim.airfields.by_ident(
+            target, state.x_nm, state.y_nm, radius_nm=400.0
+        )
+        if field is None:
+            # Fall back to a name match, so "direct to kettlebridge" works too.
+            wanted = (target or "").strip().lower()
+            for candidate in self.sim.airfields.near(
+                state.x_nm, state.y_nm, 400.0
+            ):
+                if wanted and wanted in candidate.name.lower():
+                    field = candidate
+                    break
+        if field is None:
+            return (
+                "No airfield matching `{}` within 400 nm. Try `airfields` for "
+                "what is in reach.".format(target)
+            )
+
+        self.sim.route.direct_to(navigation.Waypoint.from_airfield(field))
+        self.sim.sync_route()
+        readout = self.sim.readout()
+        leg = readout.leg
+        return "**Destination set: {}**\n\n{}\n\n{}".format(
+            field.describe(),
+            "{:.1f} nm on a bearing of {:03.0f}°, ETA {}.".format(
+                leg.distance_nm, leg.bearing_deg, leg.eta_text()
+            ),
+            "Estimated fuel on arrival: **{:,.0f} kg**.".format(
+                leg.fuel_on_arrival_kg
+            )
+            if leg.reachable
+            else "**You do not have the fuel.** Short by roughly "
+                 "{:,.0f} kg at the current burn.".format(
+                     abs(leg.fuel_on_arrival_kg)
+                 ),
+        )
+
+    def plan_text(self):
+        route = self.sim.route
+        if not route.waypoints:
+            return (
+                "No route set. `direct to <ident>` picks a destination; "
+                "`airfields` lists what is in reach."
+            )
+        readout = self.sim.readout()
+        leg = readout.leg
+        lines = ["### Flight plan", ""]
+        for index, waypoint in enumerate(route.waypoints):
+            marker = "**>**" if index == route.active else "  "
+            lines.append(
+                "{} {} — {:.1f} nm, bearing {:03.0f}°".format(
+                    marker,
+                    waypoint.ident or waypoint.name,
+                    waypoint.distance_nm(
+                        self.sim.state.x_nm, self.sim.state.y_nm
+                    ),
+                    waypoint.bearing_from(
+                        self.sim.state.x_nm, self.sim.state.y_nm
+                    ),
+                )
+            )
+        if leg is not None:
+            lines.append("")
+            lines.append(
+                "ETA to the active waypoint **{}**, burning {:,.0f} kg of the "
+                "{:,.0f} kg aboard.".format(
+                    leg.eta_text(), leg.fuel_required_kg, readout.fuel_kg
+                )
+            )
+        return "\n".join(lines)
+
     def report(self, readout, title=None):
         blocks = [dashboard.render(self.sim, readout, title=title), ""]
         if self.finished:
             blocks.append(self.narrator.ending(self.sim, readout))
+            blocks.append("")
+            blocks.append("---")
+            blocks.append("")
+            blocks.append(navigation.debrief(self.sim))
         else:
             blocks.append(self.narrator.describe(self.sim, readout))
         return "\n".join(blocks)
@@ -157,6 +236,20 @@ class Session:
 
         if command.kind == "airfields":
             return (self.airfield_list(), False)
+
+        if command.kind == "direct_to":
+            return (self.set_destination(command.target), False)
+
+        if command.kind == "show_plan":
+            return (self.plan_text(), False)
+
+        if command.kind == "clear_route":
+            self.sim.route.clear()
+            self.sim.sync_route()
+            return ("Route cleared. No destination set.", False)
+
+        if command.kind == "debrief":
+            return (navigation.debrief(self.sim), False)
 
         if command.kind == "quit":
             self.sim.state.status = physics.ENDED_BY_PILOT

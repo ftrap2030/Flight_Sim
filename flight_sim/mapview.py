@@ -64,10 +64,16 @@ def airfield_overlays(sim, span_nm=DEFAULT_SPAN_NM):
     source = getattr(sim, "airfields", None)
     if source is None:
         return []
-    return [
+    marks = [
         (a.x_nm, a.y_nm, AIRFIELD_SYMBOL)
         for a in source.near(state.x_nm, state.y_nm, span_nm * 2.0)
     ]
+    route = getattr(sim, "route", None)
+    waypoint = route.active_waypoint if route else None
+    if waypoint is not None:
+        # Last, so it draws over the airfield marker it usually sits on.
+        marks.append((waypoint.x_nm, waypoint.y_nm, WAYPOINT_SYMBOL))
+    return marks
 
 
 def render(sim, readout, span_nm=DEFAULT_SPAN_NM, overlays=None):
@@ -141,8 +147,10 @@ def render(sim, readout, span_nm=DEFAULT_SPAN_NM, overlays=None):
         )
     )
     lines.append(
-        "  {}  YOU   {}  airfield             ^  up to 1000 ABOVE"
-        "   #  >1000 ABOVE".format(AIRCRAFT_SYMBOL, AIRFIELD_SYMBOL)
+        "  {}  YOU   {}  airfield   {}  waypoint    ^  1000 ABOVE"
+        "   #  >1000 ABOVE".format(
+            AIRCRAFT_SYMBOL, AIRFIELD_SYMBOL, WAYPOINT_SYMBOL
+        )
     )
     lines.append("```")
     return "\n".join(lines)

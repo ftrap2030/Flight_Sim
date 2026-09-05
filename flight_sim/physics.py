@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, asdict
 from . import aircraft as fleet
 from . import atmosphere as atm
 from . import landing
+from . import navigation
 from . import weather as wx
 from . import airfield
 from .airfield import Airfields
@@ -127,6 +128,21 @@ class FlightState:
     # keeps its gust correlation instead of snapping back to still air.
     turb: list = field(default_factory=lambda: [0.0, 0.0, 0.0])
 
+    # The route, serialised. Held as a dict so FlightState stays plain data.
+    route: dict = None
+
+    # The flight record, accumulated tick by tick for the debrief. There is no
+    # way to reconstruct "closest you ever came to the ground" after the fact,
+    # so it has to be gathered while it happens.
+    initial_fuel_kg: float = 0.0
+    distance_flown_nm: float = 0.0
+    max_altitude_ft: float = 0.0
+    min_agl_ft: float = 1e9
+    max_ias_kt: float = 0.0
+    max_mach: float = 0.0
+    max_load_factor: float = 1.0
+    warnings_seen: list = field(default_factory=list)
+
     # Populated at the moment of a terminal event, for the ending narration.
     impact_ias_kt: float = 0.0
     impact_vs_fpm: float = 0.0
@@ -179,6 +195,7 @@ class Readout:
     terrain_ahead_name: str = ""
     approach: object = None
     vref_kt: float = 0.0
+    leg: object = None
 
 
 Aero = namedtuple(
@@ -228,6 +245,11 @@ class Simulator:
         # have believable duration instead of flickering every substep. The
         # filter state lives on FlightState so it survives serialisation.
         self._rng = random.Random(state.seed * 7919 + state.tick)
+        self.route = navigation.Route.from_dict(state.route)
+
+    def sync_route(self):
+        """Mirror the route back into the serialisable state."""
+        self.state.route = self.route.to_dict()
 
     # -- construction --------------------------------------------------
 
@@ -267,6 +289,8 @@ class Simulator:
             x_nm=start_x,
             y_nm=start_y,
         )
+        state.initial_fuel_kg = craft.start_fuel_kg
+        state.max_altitude_ft = altitude_ft
         sim = cls(state)
         # Trim: set pitch to whatever holds level flight at this speed and mass,
         # and set thrust to match drag, so the aeroplane genuinely starts stable.
@@ -559,6 +583,7 @@ class Simulator:
 
         substeps = max(1, int(round(seconds / SUBSTEP_S)))
         dt = seconds / substeps
+        previous_x, previous_y = s.x_nm, s.y_nm
 
         for _ in range(substeps):
             if s.on_ground:
@@ -567,6 +592,11 @@ class Simulator:
                 self._substep(dt)
             if s.status not in LIVE_STATUSES:
                 break
+
+        self._record_flight(previous_x, previous_y)
+
+        if self.route.advance_if_reached(s.x_nm, s.y_nm):
+            self.sync_route()
 
         # Keep the surrounding world realised as the aircraft moves.
         if math.hypot(
@@ -774,6 +804,20 @@ class Simulator:
             s.tas_ms = 0.0
             s.status = LANDED
 
+    def _record_flight(self, previous_x, previous_y):
+        """Update the running flight record used by the debrief."""
+        s = self.state
+        readout = self.readout()
+        s.distance_flown_nm += math.hypot(s.x_nm - previous_x, s.y_nm - previous_y)
+        s.max_altitude_ft = max(s.max_altitude_ft, s.altitude_ft)
+        s.min_agl_ft = min(s.min_agl_ft, readout.agl_ft)
+        s.max_ias_kt = max(s.max_ias_kt, readout.ias_kt)
+        s.max_mach = max(s.max_mach, readout.mach)
+        s.max_load_factor = max(s.max_load_factor, readout.load_factor)
+        for warning in readout.warnings:
+            if warning not in s.warnings_seen:
+                s.warnings_seen.append(warning)
+
     def _record_impact(self, ground_ft=None):
         s = self.state
         s.impact_ias_kt = atm.tas_to_ias(s.tas_ms, s.altitude_ft) * atm.KT_PER_MS
@@ -867,6 +911,7 @@ class Simulator:
         )
         readout.approach = landing.approach_guidance(self)
         readout.vref_kt = landing.vref_kt(self)
+        readout.leg = navigation.leg_for(self, readout)
         readout.warnings = self._warnings(readout)
         return readout
 

@@ -182,6 +182,11 @@ def render(sim, readout, title=None):
             r.throttle_pct,
         )
     )
+    nav_block = _navigation_text(r)
+    if nav_block:
+        lines.append(nav_block)
+        lines.append("")
+
     approach_block = _approach_text(sim, r)
     if approach_block:
         lines.append(approach_block)
@@ -199,6 +204,37 @@ def render(sim, readout, title=None):
     )
 
     return "\n".join(lines)
+
+
+def _navigation_text(r):
+    """Where the destination is, and whether the fuel reaches it."""
+    leg = r.leg
+    if leg is None:
+        return None
+    side = "left" if leg.relative_bearing_deg < 0 else "right"
+    turn = (
+        "on the nose"
+        if abs(leg.relative_bearing_deg) < 3
+        else "{:.0f}° {}".format(abs(leg.relative_bearing_deg), side)
+    )
+    fuel_note = (
+        "**{:,.0f} kg on arrival**".format(leg.fuel_on_arrival_kg)
+        if leg.reachable
+        else "**WILL NOT REACH IT — short by {:,.0f} kg**".format(
+            abs(leg.fuel_on_arrival_kg)
+        )
+    )
+    return (
+        "**NAV — {}**  ·  {:.1f} nm  ·  bearing {:03.0f}° ({})  ·  "
+        "ETA {}  ·  {}".format(
+            leg.waypoint.ident or leg.waypoint.name,
+            leg.distance_nm,
+            leg.bearing_deg,
+            turn,
+            leg.eta_text(),
+            fuel_note,
+        )
+    )
 
 
 def _deviation_bar(value, full_scale, width=11):

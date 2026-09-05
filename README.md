@@ -51,7 +51,8 @@ Commands are typed the way a pilot would say them:
 | Configuration | `flaps 2`, `flaps full`, `gear down`, `speedbrakes out` |
 | On the ground | `max brakes`, `release brakes`, `reverse thrust`, `stow reversers` |
 | Time | `hold`, `wait 60 seconds`, `wait 2 minutes` |
-| Other | `map`, `airfields`, `status`, `help`, `quit` |
+| Navigation | `direct to KEBR`, `show plan`, `clear route`, `airfields`, `debrief` |
+| Other | `map`, `status`, `help`, `quit` |
 
 Each command advances the simulation ten seconds. `status` and `help` cost no
 time, and an unrecognised command costs no time either — you get a hint instead.
@@ -101,6 +102,21 @@ the sidestick and drops its nose, so a stall is recoverable if you have the
 height and the discipline to unload it. You can also overspeed past Vmo,
 overstress the airframe, and run the tanks dry, at which point you are flying a
 very large glider.
+
+## Somewhere to go
+
+`direct to KEBR` sets a destination and the panel gains a navigation strip:
+distance, bearing, how far off the nose it sits, ETA, and — the number that
+turns a route into a decision — **fuel on arrival**, computed from the live burn
+and the actual ground speed. Fly into a headwind or detour round a ridge and it
+falls in front of you. Set a destination you cannot reach and it says so.
+
+Every flight ends with a **debrief**: distance flown, fuel burned and average
+burn, maximum altitude and speed, the closest you came to the ground, the
+highest load factor you pulled, your touchdown numbers if you got any, and every
+warning you triggered along the way. Some of that cannot be reconstructed
+afterwards — how near the ground you came is only knowable while it is
+happening — so it is gathered tick by tick as you fly.
 
 ## Landing
 
@@ -210,7 +226,7 @@ Other flags: `--seed` picks the world, `--altitude` the starting height,
 python -m unittest discover -s tests -t .
 ```
 
-218 tests, no dependencies. They check the atmosphere against published ISA
+254 tests, no dependencies. They check the atmosphere against published ISA
 tables, stall speed against its closed form, cruise fuel flow and service
 ceiling against published figures for all five aircraft, terrain determinism,
 save/load fidelity, that every prose template renders against a live context,

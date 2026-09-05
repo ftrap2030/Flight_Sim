@@ -20,6 +20,7 @@ class Command:
     text: str = ""
     advances_time: bool = True
     seconds: float = None
+    target: str = ""
 
 
 class ParseError(Exception):
@@ -253,6 +254,28 @@ def _match_engines(text, raw):
     return None
 
 
+def _match_navigation(text, raw):
+    # `to` is optional throughout rather than a separate alternative: regex
+    # alternation is ordered, so a bare `direct` would match first and leave
+    # "to kebr" as the target.
+    m = re.match(
+        r"^(?:direct|fly|proceed|divert|go|goto|"
+        r"set (?:course|destination))(?:\s+(?:to|for))?\s+"
+        r"(?!heading|hdg|course|altitude|speed|level)([a-z0-9 ]{2,30})$",
+        text,
+    )
+    if m:
+        return Command("direct_to", 0.0, raw, advances_time=False,
+                       target=m.group(1).strip())
+    if re.match(r"^(?:show |flight )?(?:plan|route|nav|destination)$", text):
+        return Command("show_plan", text=raw, advances_time=False)
+    if re.match(r"^(?:clear|cancel|delete)\s+(?:the\s+)?(?:plan|route)$", text):
+        return Command("clear_route", text=raw, advances_time=False)
+    if re.match(r"^(?:debrief|summary|how did i do)$", text):
+        return Command("debrief", text=raw, advances_time=False)
+    return None
+
+
 def _match_ground(text, raw):
     m = re.match(r"^(?:apply\s+)?(?:max|maximum|full)\s+(?:wheel\s+)?brakes?$", text)
     if m:
@@ -303,7 +326,10 @@ _MATCHERS = [
     _match_rudder,
     _match_engines,
     _match_ground,
+    # Lateral before navigation: "fly to heading 270" is a heading command, and
+    # the destination pattern would otherwise swallow "heading 270" as a name.
     _match_lateral,
+    _match_navigation,
     _match_config,
 ]
 
@@ -351,7 +377,8 @@ def apply(sim, command):
         s.gear_down = bool(command.value)
     elif kind == "spoilers":
         s.spoilers = bool(command.value)
-    elif kind in ("hold", "status", "map", "airfields", "help", "quit"):
+    elif kind in ("hold", "status", "map", "airfields", "help", "quit",
+                  "direct_to", "show_plan", "clear_route", "debrief"):
         pass
 
 
@@ -368,7 +395,8 @@ HELP_TEXT = """\
 | **On the ground** | `brakes`, `max brakes`, `release brakes`, `reverse thrust`, `stow reversers` |
 | **Configuration** | `flaps 1`, `flaps full`, `flaps up`, `gear down`, `gear up`, `speedbrakes out`, `speedbrakes in` |
 | **Time** | `hold` (advance 10 s unchanged), `wait 60 seconds`, `wait 2 minutes` |
-| **Other** | `map` (terrain plan view), `airfields` (what is within reach), `status`, `help`, `quit` |
+| **Navigation** | `direct to KEBR`, `show plan`, `clear route`, `airfields`, `debrief` |
+| **Other** | `map` (terrain plan view), `status`, `help`, `quit` |
 
 Each command advances the simulation **10 seconds** unless you say otherwise.
 `map`, `airfields`, `status` and `help` cost no time.\
