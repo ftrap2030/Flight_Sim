@@ -87,8 +87,14 @@ def render(sim, readout, title=None):
 
     lines = []
 
-    heading = title or "{} | {} | T+{}".format(
-        craft.name, weather.name, _clock(s.elapsed_s)
+    from . import weather as wx_module
+
+    heading = title or "{} | {} | {} {} | T+{}".format(
+        craft.name,
+        weather.name,
+        _local_clock(s.time_of_day_h),
+        wx_module.light_phase(s.time_of_day_h).upper(),
+        _clock(s.elapsed_s),
     )
     lines.append("### {}".format(heading))
     lines.append("")
@@ -170,6 +176,14 @@ def render(sim, readout, title=None):
             r.rudder_deg,
             r.rudder_limit_deg,
             _engine_text(sim, r),
+        )
+    )
+    lines.append(
+        "| Wind here | {:.0f} kt / {:03.0f}° | Visibility | {} | Local time | {} |".format(
+            r.wind_speed_kt,
+            r.wind_dir_deg,
+            _visibility_text(weather.visibility_sm),
+            _local_clock(s.time_of_day_h),
         )
     )
     lines.append("")
@@ -312,6 +326,12 @@ def _visibility_text(visibility_sm):
     if visibility_sm >= 1:
         return "{:.1f} sm".format(visibility_sm)
     return "{:,.0f} m".format(visibility_sm * 1609.34)
+
+
+def _local_clock(hour_of_day):
+    hours = int(hour_of_day) % 24
+    minutes = int((hour_of_day % 1.0) * 60)
+    return "{:02d}:{:02d}".format(hours, minutes)
 
 
 def _clock(seconds):

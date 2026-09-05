@@ -254,6 +254,19 @@ def _match_engines(text, raw):
     return None
 
 
+def _match_time_of_day(text, raw):
+    m = re.match(r"^(?:set\s+)?(?:local\s+)?time\s+(?:to\s+)?(\d{1,2}):?(\d{2})?$", text)
+    if m:
+        hours = float(m.group(1)) + (float(m.group(2)) / 60.0 if m.group(2) else 0.0)
+        return Command("time_of_day", hours % 24.0, raw, advances_time=False)
+    for word, hour in (("dawn", 5.5), ("sunrise", 6.0), ("midday", 12.0),
+                       ("noon", 12.0), ("dusk", 18.0), ("sunset", 18.2),
+                       ("night", 22.0), ("midnight", 0.0)):
+        if text in (word, "set " + word, "fly at " + word):
+            return Command("time_of_day", hour, raw, advances_time=False)
+    return None
+
+
 def _match_navigation(text, raw):
     # `to` is optional throughout rather than a separate alternative: regex
     # alternation is ordered, so a bare `direct` would match first and leave
@@ -326,6 +339,7 @@ _MATCHERS = [
     _match_rudder,
     _match_engines,
     _match_ground,
+    _match_time_of_day,
     # Lateral before navigation: "fly to heading 270" is a heading command, and
     # the destination pattern would otherwise swallow "heading 270" as a name.
     _match_lateral,
@@ -380,6 +394,9 @@ def apply(sim, command):
     elif kind in ("hold", "status", "map", "airfields", "help", "quit",
                   "direct_to", "show_plan", "clear_route", "debrief"):
         pass
+    elif kind == "time_of_day":
+        s.time_of_day_h = command.value % 24.0
+        pass
 
 
 HELP_TEXT = """\
@@ -395,6 +412,7 @@ HELP_TEXT = """\
 | **On the ground** | `brakes`, `max brakes`, `release brakes`, `reverse thrust`, `stow reversers` |
 | **Configuration** | `flaps 1`, `flaps full`, `flaps up`, `gear down`, `gear up`, `speedbrakes out`, `speedbrakes in` |
 | **Time** | `hold` (advance 10 s unchanged), `wait 60 seconds`, `wait 2 minutes` |
+| **Time of day** | `time 0530`, `dawn`, `midday`, `dusk`, `night` |
 | **Navigation** | `direct to KEBR`, `show plan`, `clear route`, `airfields`, `debrief` |
 | **Other** | `map` (terrain plan view), `status`, `help`, `quit` |
 

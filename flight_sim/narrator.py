@@ -21,6 +21,8 @@ import math
 import random
 from collections import deque
 
+from . import weather as wx
+
 HIGH = "high"
 LOW = "low"
 CRITICAL = "critical"
@@ -68,6 +70,10 @@ class Narrator:
 
         parts.append(self._pick(_motion_pool(readout)))
         parts.append(self._pick(SENSORY[weather_key]))
+
+        light = wx.light_phase(sim.state.time_of_day_h)
+        if light != "day" and band != CRITICAL:
+            parts.append(self._pick(LIGHT[light]))
 
         threat = _threat_pool(sim, readout, band)
         if threat:
@@ -164,6 +170,14 @@ def _context(sim, r):
         "crab": abs((s.touchdown or {}).get("crab_deg", 0.0)),
         "runway_left": (s.touchdown or {}).get("remaining_ft", 0.0),
         "td_reason": (s.touchdown or {}).get("reason", ""),
+        "hour": "{:02d}:{:02d}".format(
+            int(s.time_of_day_h) % 24, int((s.time_of_day_h % 1.0) * 60)
+        ),
+        "light": wx.light_phase(s.time_of_day_h),
+        "sun_elev": wx.solar_elevation_deg(s.time_of_day_h),
+        "rotor": sim._mechanical_turbulence,
+        "wave_fpm": sim._orographic_fpm,
+        "wave_abs": abs(sim._orographic_fpm),
     }
 
 
@@ -232,6 +246,10 @@ def _threat_pool(sim, r, band):
         return THREAT["low_speed"]
     if "OVERSTRESS" in warnings:
         return THREAT["overstress"]
+    if sim._orographic_fpm < -700.0 and r.agl_ft < 6000.0:
+        return THREAT["downdraught"]
+    if sim._mechanical_turbulence > 0.45:
+        return THREAT["rotor"]
     if "LOW FUEL" in warnings:
         return THREAT["low_fuel"]
     return None
@@ -568,6 +586,48 @@ MOTION = {
 }
 
 
+LIGHT = {
+    "dawn": [
+        ("li_d1", "The light is only just arriving. The eastern horizon is a "
+                  "band of cold orange under a sky still holding its stars, and "
+                  "the land below is entirely blue -- shadow filled, without "
+                  "detail, the valleys still an hour from sunrise."),
+        ("li_d2", "First light catches the tops. Only the highest ground is lit, "
+                  "in a thin band of pink along the crests, and everything below "
+                  "it is a single flat blue-grey nothing."),
+    ],
+    "golden": [
+        ("li_g1", "The sun is low and the light comes in almost level, gilding "
+                  "the upper surfaces and casting shadows miles long across the "
+                  "valley floors. Every ridge stands out as though drawn in ink."),
+        ("li_g2", "Long light. The sun sits {sun_elev:.0f} degrees above the "
+                  "horizon and everything it touches has gone amber; everything "
+                  "it does not is deep violet."),
+    ],
+    "dusk": [
+        ("li_k1", "The light is going. The valleys have already lost theirs and "
+                  "are filling with blue shadow from the floor up, while the "
+                  "peaks hold a last orange for a few minutes more."),
+        ("li_k2", "Sunset. The horizon burns along a narrow band and the sky "
+                  "above it grades from copper through green to a darkening "
+                  "indigo at the top of the windscreen."),
+    ],
+    "night": [
+        ("li_n1", "It is {hour}, and dark. Outside there is nothing but the "
+                  "faint red glow of the panel on the glass and, very "
+                  "occasionally, a scatter of lights somewhere far below that "
+                  "might be a town or might be a farm."),
+        ("li_n2", "Night. The horizon is gone -- not obscured, simply absent -- "
+                  "and the only attitude reference in the world is the "
+                  "instrument in front of you. The terrain below is a black "
+                  "absence you have to take the radio altimeter's word for."),
+        ("li_n3", "Starlight, and nothing else. The sky is dense with it above, "
+                  "and beneath the aircraft the land is a void that swallows the "
+                  "landing lights whole."),
+    ],
+}
+
+
 SENSORY = {
     "clear": [
         ("s_c1", "Inside, it is almost serene: the steady white noise of the "
@@ -654,6 +714,21 @@ THREAT = {
         ("x_eo1", "**Both engines have flamed out.** Fuel exhausted. The noise is "
                   "gone and what is left is wind — you are flying a very large "
                   "glider, and the only currency you have left is altitude."),
+    ],
+    "rotor": [
+        ("x_ro1", "The air breaks up. Wind pouring over the ridge upwind is "
+                  "shedding into the lee and the aircraft is being thrown "
+                  "around inside it -- hard, irregular slams through the "
+                  "airframe with no rhythm you can anticipate."),
+        ("x_ro2", "Mechanical turbulence, and it is vicious. The wing is being "
+                  "hit unevenly, the horizon jerking, and holding an altitude "
+                  "down here has become a full-time occupation."),
+    ],
+    "downdraught": [
+        ("x_dw1", "**Sink.** The air on this side of the ridge is going down at "
+                  "{wave_abs:,.0f} feet a minute and taking you with it. Power "
+                  "and a turn toward lower ground, before the mountain finishes "
+                  "the arithmetic."),
     ],
     "low_fuel": [
         ("x_lf1", "Fuel at {fuel_pct:.1f}%. The low-level lights are on and the "

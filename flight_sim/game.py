@@ -258,9 +258,32 @@ class Session:
             return (self.report(readout), True)
 
         cmd.apply(self.sim, command)
+
+        # Respect the command's own declaration rather than the if-chain above.
+        # Anything that only changes a setting -- the clock, say -- must not
+        # burn ten seconds of flight just because nobody remembered to add it
+        # to the list of exceptions.
+        if not command.advances_time:
+            return (
+                "{}\n\n{}".format(
+                    self._acknowledge(command),
+                    dashboard.render(self.sim, self.sim.readout()),
+                ),
+                False,
+            )
+
         seconds = command.seconds or physics.TICK_SECONDS
         readout = self.sim.step_tick(seconds)
         return (self.report(readout), self.finished)
+
+    def _acknowledge(self, command):
+        """A one-line confirmation for a command that costs no simulation time."""
+        if command.kind == "time_of_day":
+            return "Local time set to **{}** — {}.".format(
+                dashboard._local_clock(self.sim.state.time_of_day_h),
+                wx.light_phase(self.sim.state.time_of_day_h),
+            )
+        return "Acknowledged."
 
 
 # ---------------------------------------------------------------------------

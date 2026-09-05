@@ -287,9 +287,7 @@ class TestEnvelope(unittest.TestCase):
 
     def test_still_air_produces_no_drift(self):
         sim = Session.new("a320", "clear", seed=42).sim
-        sim.weather = type(sim.weather)(
-            **dict(vars(sim.weather), wind_speed_kt=0.0, turbulence=0.0)
-        )
+        sim.weather.hold(wind_speed_kt=0.0, turbulence=0.0)
         readout = sim.readout()
         self.assertAlmostEqual(readout.drift_deg, 0.0, places=3)
 

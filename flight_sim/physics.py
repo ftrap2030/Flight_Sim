@@ -128,6 +128,9 @@ class FlightState:
     # keeps its gust correlation instead of snapping back to still air.
     turb: list = field(default_factory=lambda: [0.0, 0.0, 0.0])
 
+    # Local time in hours, for the sun and the narrator's sense of light.
+    time_of_day_h: float = 10.0
+
     # The route, serialised. Held as a dict so FlightState stays plain data.
     route: dict = None
 
@@ -196,6 +199,10 @@ class Readout:
     approach: object = None
     vref_kt: float = 0.0
     leg: object = None
+    wind_speed_kt: float = 0.0
+    wind_dir_deg: float = 0.0
+    rotor_turbulence: float = 0.0
+    orographic_fpm: float = 0.0
 
 
 Aero = namedtuple(
@@ -231,7 +238,11 @@ class Simulator:
     def __init__(self, state, terrain=None):
         self.state = state
         self.aircraft = fleet.FLEET_BY_KEY[state.aircraft_key]
-        self.weather = wx.WEATHER_BY_KEY[state.weather_key]
+        self.weather = wx.WeatherState(
+            wx.WEATHER_BY_KEY[state.weather_key],
+            seed=state.seed,
+            elapsed_s=state.elapsed_s,
+        )
         if terrain is None:
             self.terrain, self.airfields = world_for_seed(state.seed)
         else:
@@ -246,6 +257,9 @@ class Simulator:
         # filter state lives on FlightState so it survives serialisation.
         self._rng = random.Random(state.seed * 7919 + state.tick)
         self.route = navigation.Route.from_dict(state.route)
+        self._mechanical_turbulence = 0.0
+        self._orographic_fpm = 0.0
+        self._refresh_terrain_effects()
 
     def sync_route(self):
         """Mirror the route back into the serialisable state."""
@@ -510,8 +524,13 @@ class Simulator:
         s = self.state
         horizontal_ms = tas_ms * math.cos(math.radians(s.gamma_deg))
         air_track_rad = math.radians(s.heading_deg - s.sideslip_deg)
-        wind_ms = self.weather.wind_speed_kt * atm.MS_PER_KT
-        wind_to_rad = math.radians(self.weather.wind_dir_deg + 180.0)
+        # Wind is a function of height: surface friction slows and backs it, so
+        # a descent changes drift and groundspeed as well as altitude.
+        wind_kt, wind_from_deg = self.weather.wind_at(
+            s.altitude_ft - self.terrain.elevation(s.x_nm, s.y_nm)
+        )
+        wind_ms = wind_kt * atm.MS_PER_KT
+        wind_to_rad = math.radians(wind_from_deg + 180.0)
         return (
             horizontal_ms * math.sin(air_track_rad) + wind_ms * math.sin(wind_to_rad),
             horizontal_ms * math.cos(air_track_rad) + wind_ms * math.cos(wind_to_rad),
@@ -556,9 +575,34 @@ class Simulator:
         )
         s.sideslip_deg = clamp(s.sideslip_deg, -MAX_SIDESLIP_DEG, MAX_SIDESLIP_DEG)
 
+    def _refresh_terrain_effects(self):
+        """Re-sample the slow, terrain-scale weather effects.
+
+        Rotor turbulence and orographic lift are features of the landscape at a
+        scale of a mile or two; the aircraft covers about seven metres in a
+        substep. Sampling them once per tick rather than a hundred times is
+        both far cheaper and no less accurate.
+        """
+        s = self.state
+        agl_ft = s.altitude_ft - self.terrain.elevation(s.x_nm, s.y_nm)
+        self._mechanical_turbulence = self.weather.mechanical_turbulence(
+            self.terrain, s.x_nm, s.y_nm, agl_ft
+        )
+        self._orographic_fpm = self.weather.orographic_vertical_fpm(
+            self.terrain, s.x_nm, s.y_nm, agl_ft
+        )
+
+    def _local_turbulence(self):
+        """Total turbulence here: the weather's, plus what the terrain adds.
+
+        Wind pouring over a ridge breaks up in its lee, so the same weather is
+        violent behind a crest and smooth over a plain.
+        """
+        return min(1.0, self.weather.turbulence + self._mechanical_turbulence)
+
     def _update_turbulence(self, dt):
         """Ornstein-Uhlenbeck-ish filtered noise: correlated, bounded gusts."""
-        intensity = self.weather.turbulence
+        intensity = self._local_turbulence()
         if intensity <= 0.0:
             return
         decay = math.exp(-dt / 2.5)  # ~2.5 s correlation time
@@ -584,6 +628,7 @@ class Simulator:
         substeps = max(1, int(round(seconds / SUBSTEP_S)))
         dt = seconds / substeps
         previous_x, previous_y = s.x_nm, s.y_nm
+        self._refresh_terrain_effects()
 
         for _ in range(substeps):
             if s.on_ground:
@@ -592,6 +637,9 @@ class Simulator:
                 self._substep(dt)
             if s.status not in LIVE_STATUSES:
                 break
+
+        s.time_of_day_h = (s.time_of_day_h + seconds / 3600.0) % 24.0
+        self.weather.advance_to(s.elapsed_s)
 
         self._record_flight(previous_x, previous_y)
 
@@ -657,7 +705,7 @@ class Simulator:
             s.pitch_deg -= STALL_NOSE_DROP_DEG_S * dt
 
         # Turbulence perturbs attitude directly; the airframe is being shoved.
-        turb_scale = self.weather.turbulence
+        turb_scale = self._local_turbulence()
         if turb_scale > 0.0:
             s.pitch_deg += s.turb[0] * turb_scale * 0.55 * dt
             s.bank_deg += s.turb[1] * turb_scale * 1.6 * dt
@@ -692,6 +740,9 @@ class Simulator:
         v = max(s.tas_ms, 20.0)
         vs_ms = v * math.sin(math.radians(s.gamma_deg))
         gust_fpm = s.turb[2] * self.weather.vertical_gust_fpm * 0.33
+        # Air flowing over sloping ground must go up the windward face and down
+        # the lee one. In the mountains that is not a small number.
+        gust_fpm += self._orographic_fpm
         s.altitude_ft += vs_ms * atm.FT_PER_M * dt + gust_fpm / 60.0 * dt
 
         # --- ground track: air mass velocity plus wind ---
@@ -871,6 +922,8 @@ class Simulator:
             craft.stall_speed_ias_ms(s.mass_kg, manoeuvring_n, s.flaps) * atm.KT_PER_MS
         )
 
+        local_wind_kt, local_wind_dir = self.weather.wind_at(agl_ft)
+
         ahead_nm, ahead_ft = self.terrain.highest_ahead(
             s.x_nm, s.y_nm, s.heading_deg, max_nm=12.0
         )
@@ -908,6 +961,10 @@ class Simulator:
             terrain_ahead_nm=ahead_nm,
             terrain_ahead_ft=ahead_ft,
             terrain_ahead_name=self.terrain.feature_name(*ahead_pos),
+            wind_speed_kt=local_wind_kt,
+            wind_dir_deg=local_wind_dir,
+            rotor_turbulence=self._mechanical_turbulence,
+            orographic_fpm=self._orographic_fpm,
         )
         readout.approach = landing.approach_guidance(self)
         readout.vref_kt = landing.vref_kt(self)

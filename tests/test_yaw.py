@@ -94,9 +94,7 @@ class TestSideslipConsequences(unittest.TestCase):
 
     def test_the_aircraft_flies_where_it_points_only_when_coordinated(self):
         sim = at_speed("a320neo", 250.0)
-        sim.weather = type(sim.weather)(
-            **dict(vars(sim.weather), wind_speed_kt=0.0, turbulence=0.0)
-        )
+        sim.weather.hold(wind_speed_kt=0.0, turbulence=0.0)
         self.assertAlmostEqual(sim.readout().drift_deg, 0.0, places=3)
 
         sim.state.rudder_deg = 25.0

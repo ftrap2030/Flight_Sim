@@ -31,11 +31,35 @@ alongside the neo.
 
 ## Weather
 
-**Clear Skies**, **Heavy Crosswinds**, **Stormy**, **Foggy**. Each one feeds real
-numbers into the simulation rather than only into the prose: turbulence amplitude
-perturbs attitude every substep, the wind vector displaces your ground track (so
-the terrain beneath you diverges from your heading, and you fly the whole leg
-crabbed), and visibility decides whether you can see the mountain coming.
+**Clear Skies**, **Heavy Crosswinds**, **Stormy**, **Foggy** — and none of them
+sits still. Wind veers and backs, visibility drifts and turbulence rises and
+falls across a flight, seeded so the same flight replays identically while no
+two "Stormy" days are alike. Each profile keeps its character: Stormy never
+quietly becomes a calm afternoon.
+
+Three things make the weather *local* rather than global:
+
+**Wind shear.** Surface friction slows the wind and backs it by up to 30°, so
+descending through the friction layer changes your drift and your groundspeed —
+which matters most on an approach, exactly where you can least afford it.
+
+**Rotor turbulence.** Wind pouring over a ridge breaks up in its lee. The
+turbulence you feel is the weather's plus whatever the terrain adds, computed
+from the ground gradient upwind, the wind strength and your height. In a 45-knot
+wind, the lee of a crest reaches near-extreme turbulence while the same air over
+flat ground is smooth. *This was a bug fix as much as a feature* — the crosswind
+prose had been promising "rotor turbulence off the ridge" since the first
+version, while turbulence was a per-weather constant that had no idea where the
+terrain was.
+
+**Mountain wave.** Air flowing over sloping ground has to go up the windward
+face and down the lee one. Windward gives you a few hundred feet a minute of
+free lift; the lee side takes it back and more, and in the mountains that is not
+always survivable.
+
+**Time of day** runs too — `time 0530`, `dawn`, `dusk`, `night`. The sun rises,
+crosses and sets, and at night the horizon does not merely dim, it is *absent*,
+leaving the instruments as the only attitude reference you have.
 
 ## Flying it
 
@@ -51,6 +75,7 @@ Commands are typed the way a pilot would say them:
 | Configuration | `flaps 2`, `flaps full`, `gear down`, `speedbrakes out` |
 | On the ground | `max brakes`, `release brakes`, `reverse thrust`, `stow reversers` |
 | Time | `hold`, `wait 60 seconds`, `wait 2 minutes` |
+| Time of day | `time 0530`, `dawn`, `midday`, `dusk`, `night` |
 | Navigation | `direct to KEBR`, `show plan`, `clear route`, `airfields`, `debrief` |
 | Other | `map`, `status`, `help`, `quit` |
 
@@ -226,7 +251,7 @@ Other flags: `--seed` picks the world, `--altitude` the starting height,
 python -m unittest discover -s tests -t .
 ```
 
-254 tests, no dependencies. They check the atmosphere against published ISA
+283 tests, no dependencies. They check the atmosphere against published ISA
 tables, stall speed against its closed form, cruise fuel flow and service
 ceiling against published figures for all five aircraft, terrain determinism,
 save/load fidelity, that every prose template renders against a live context,
