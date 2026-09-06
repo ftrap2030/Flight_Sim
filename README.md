@@ -17,17 +17,20 @@ climbs better and burns less because its sharklets raise the aspect ratio and
 its LEAP engines have a lower TSFC, not because a "nimbleness" number was typed
 into a table.
 
-| | A320 | A320neo | A321 | A350-900 | A380-800 |
+| | A320 | A320neo | A321neo | A350-900 | A380-800 |
 |---|---|---|---|---|---|
-| Engines | 2× CFM56-5B4 | 2× LEAP-1A26 | 2× CFM56-5B3 | 2× Trent XWB-84 | 4× Trent 970 |
-| MTOW | 78 t | 79 t | 93.5 t | 280 t | 575 t |
-| Wing / aspect ratio | 122.6 m² / 9.5 | 122.6 m² / **10.5** | 122.6 m² / 9.5 | 442 m² / 9.5 | 845 m² / 7.5 |
+| Engines | 2× CFM56-5B4 | 2× LEAP-1A26 | 2× LEAP-1A32 | 2× Trent XWB-84 | 4× Trent 970 |
+| MTOW | 78 t | 79 t | 97 t | 280 t | 575 t |
+| Wing / aspect ratio | 122.6 m² / 9.5 | 122.6 m² / **10.5** | 122.6 m² / **10.5** | 442 m² / 9.5 | 845 m² / 7.5 |
 | Cruise | M0.78 | M0.78 | M0.78 | M0.85 | M0.85 |
 | Ceiling | FL390 | FL390 | FL390 | FL431 | FL431 |
 | Roll rate | 15°/s | 15°/s | 12°/s | 10°/s | 7°/s |
 
-The A321 is modelled as the *ceo* (CFM56-5B3), to pair with the A320 ceo listed
-alongside the neo.
+All three narrowbodies share a wing *area*; only the A320 ceo lacks sharklets,
+which is why it alone has the lower aspect ratio and pays for it in induced drag.
+The A321neo is nineteen tonnes heavier on that same area, so it stalls sixteen
+knots faster than the A320 and rolls three degrees a second slower — the engines
+did nothing for its inertia.
 
 ## Weather
 

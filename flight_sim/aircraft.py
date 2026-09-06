@@ -238,21 +238,21 @@ A320NEO = Aircraft(
 
 A321 = Aircraft(
     key="a321",
-    name="A321-200",
-    engines="2 x CFM56-5B3 (133 kN each)",
+    name="A321neo",
+    engines="2 x CFM LEAP-1A32 (143 kN each)",
     wing_area_m2=122.6,
-    wing_span_m=34.10,
+    wing_span_m=35.80,  # sharklets, as on the A320neo: same area, more span
     length_m=44.51,  # 6.9 m longer than the A320
-    oew_kg=48500.0,
-    mtow_kg=93500.0,
-    payload_kg=18000.0,
+    oew_kg=50100.0,
+    mtow_kg=97000.0,
+    payload_kg=20000.0,
     fuel_capacity_kg=18700.0,
-    start_fuel_kg=14000.0,
-    thrust_sl_n=266800.0,
-    tsfc=1.63e-5,  # ~0.57 lb/(lbf*hr) cruise
-    cd_0=0.0206,
+    start_fuel_kg=15000.0,
+    thrust_sl_n=286000.0,
+    tsfc=1.43e-5,  # ~0.51 lb/(lbf*hr): the same LEAP as the A320neo
+    cd_0=0.0200,  # the A320neo's polar, plus a little for the longer fuselage
     oswald_e=0.82,
-    mach_crit=0.788,
+    mach_crit=0.792,
     vmo_kt=350.0,
     mmo=0.82,
     ceiling_ft=39000.0,
@@ -263,10 +263,14 @@ A321 = Aircraft(
     dihedral_effect=0.55,
     yaw_tau_s=2.2,
     handling=(
-        "The stretch. Fifteen tonnes heavier on the same wing, so wing loading "
-        "and every speed that depends on it -- stall, approach, manoeuvre margin "
-        "-- climbs with it. Rolls a beat later than the A320 and takes a beat "
-        "longer to stop rolling. Deeply stable, but it does not like being rushed."
+        "The long one. Nineteen tonnes heavier than the A320 on the same wing "
+        "area, so wing loading and every speed that depends on it -- stall, "
+        "approach, manoeuvre margin -- climbs with it, and it stalls some "
+        "twelve knots faster at operating weight. The sharklets and the LEAPs "
+        "make it the most efficient thing in the fleet per seat, but they do "
+        "nothing for its inertia: it rolls a beat later than the A320 and takes "
+        "a beat longer to stop rolling. Deeply stable, and it does not like "
+        "being rushed."
     ),
 )
 
