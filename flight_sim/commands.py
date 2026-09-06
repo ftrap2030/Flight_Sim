@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from . import aircraft as fleet
 from . import autopilot
+from . import fbw
 from .physics import clamp, wrap360
 
 
@@ -96,6 +97,21 @@ def _match_meta(text, raw):
         )
     if text in ("fleet", "aircraft", "types", "fleet menu"):
         return Command("fleet", text=raw, advances_time=False)
+    # Selecting a control law. Deliberately degrading is a real technique and
+    # the only way to reach the protections' far side without losing engines.
+    m = re.match(
+        r"^(?:select\s+|revert\s+to\s+|set\s+)?"
+        r"(normal|alternate|altn|direct)(?:\s+law)?$", text
+    )
+    if m:
+        return Command("control_law", text=raw, advances_time=False,
+                       target=m.group(1))
+    m = re.match(r"^law\s+(normal|norm|alternate|altn|alt|direct|dir)$", text)
+    if m:
+        return Command("control_law", text=raw, advances_time=False,
+                       target=m.group(1))
+    if text in ("law", "laws", "protections", "flight controls", "f/ctl"):
+        return Command("show_law", text=raw, advances_time=False)
     return None
 
 
@@ -425,7 +441,13 @@ def apply(sim, command):
         s.cmd_heading_deg = None
         s.rudder_deg = 0.0
     elif kind == "bank_set":
-        s.cmd_bank_deg = clamp(command.value, -60.0, 60.0)
+        # Only the structural bound here. How much bank the pilot actually gets
+        # is the control law's decision -- 67 degrees in normal law, whatever
+        # they asked for in direct law -- and duplicating a limit in the parser
+        # would mean normal law's protection could never be reached to be felt.
+        s.cmd_bank_deg = clamp(
+            command.value, -fbw.BANK_LIMIT_DIRECT_DEG, fbw.BANK_LIMIT_DIRECT_DEG
+        )
         s.cmd_heading_deg = None
     elif kind == "heading":
         s.cmd_heading_deg = wrap360(command.value)
@@ -451,9 +473,15 @@ def apply(sim, command):
         s.gear_down = bool(command.value)
     elif kind == "spoilers":
         s.spoilers = bool(command.value)
+    elif kind == "control_law":
+        law = fbw.resolve(command.target)
+        if law is not None:
+            s.control_law = law
+            s.active_protections = []
+            s.alpha_floor_latched = False
     elif kind in ("hold", "status", "map", "airfields", "help", "quit",
                   "direct_to", "show_plan", "clear_route", "debrief",
-                  "spec", "fleet"):
+                  "spec", "fleet", "show_law"):
         pass
     elif kind == "time_of_day":
         s.time_of_day_h = command.value % 24.0
@@ -505,6 +533,7 @@ HELP_TEXT = """\
 | **Autopilot** | `autopilot on/off`, `set altitude 12000`, `set speed 280`, `vertical speed 1500`, `approach mode` |
 | **Time of day** | `time 0530`, `dawn`, `midday`, `dusk`, `night` |
 | **Navigation** | `direct to KEBR`, `show plan`, `clear route`, `airfields`, `debrief` |
+| **Flight controls** | `law` (what is protecting you), `direct law`, `alternate law`, `normal law` |
 | **Reference** | `spec` (your aircraft's card), `spec a380`, `fleet` |
 | **Other** | `map` (terrain plan view), `status`, `help`, `quit` |
 

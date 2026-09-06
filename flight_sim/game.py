@@ -253,6 +253,9 @@ class Session:
         if command.kind == "fleet":
             return (dashboard.fleet_menu(), False)
 
+        if command.kind == "show_law":
+            return (dashboard.law_card(self.sim), False)
+
         if command.kind == "direct_to":
             return (self.set_destination(command.target), False)
 
@@ -299,6 +302,8 @@ class Session:
                 dashboard._local_clock(self.sim.state.time_of_day_h),
                 wx.light_phase(self.sim.state.time_of_day_h),
             )
+        if command.kind == "control_law":
+            return dashboard.law_card(self.sim)
         return "Acknowledged."
 
 

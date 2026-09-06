@@ -8,6 +8,7 @@ displays are laid out (PFD on the left, systems on the right).
 from . import aircraft as fleet
 from . import autopilot
 from . import atmosphere as atm
+from . import fbw
 
 HORIZON_WIDTH = 33
 
@@ -104,9 +105,11 @@ def render(sim, readout, title=None):
         lines.append("> **{}**".format("  |  ".join(r.warnings)))
         lines.append("")
 
+    law_line = fbw.status_text(s)
     if s.ap_engaged:
-        lines.append("`{}`".format(autopilot.status_text(s)))
-        lines.append("")
+        law_line = "{}   |   {}".format(autopilot.status_text(s), law_line)
+    lines.append("`{}`".format(law_line))
+    lines.append("")
 
     lines.append("```")
     for row in attitude_indicator(r.pitch_deg, r.bank_deg):
@@ -348,6 +351,90 @@ def _clock(seconds):
 
 def _thousands(value):
     return "{:,.0f}".format(value)
+
+
+LAW_DESCRIPTIONS = {
+    fbw.NORMAL: (
+        "Every protection is available. Full back stick gives you alpha max "
+        "and not one degree more, the aircraft will not exceed {n_max:.1f} g, "
+        "bank is limited to {bank:.0f}°, and alpha floor will firewall the "
+        "thrust for you if the energy runs out. **You cannot stall this "
+        "aeroplane while this law holds.**"
+    ),
+    fbw.ALTERNATE: (
+        "Load factor limiting survives. The hard protections do not. What is "
+        "left is *stability* — a nose-down demand as the speed decays and a "
+        "nose-up demand near VMO — and you can hold the stick against both of "
+        "them. **This aeroplane can now be stalled.** Lowering the gear from "
+        "here reverts to direct law."
+    ),
+    fbw.DIRECT: (
+        "The stick moves the surfaces. No angle-of-attack protection, no load "
+        "factor limit, no bank limit, no alpha floor. Stall warning is your "
+        "only cue and it is the only one you get."
+    ),
+}
+
+
+def law_card(sim):
+    """What the flight control computers are doing, and what they will not do."""
+    s = sim.state
+    craft = sim.aircraft
+    alpha_prot, alpha_floor, alpha_max = fbw.alpha_thresholds(craft)
+    n_min, n_max = fbw.load_factor_limits(s)
+
+    lines = ["### Flight controls — {}".format(fbw.LAW_NAMES[s.control_law]), ""]
+    lines.append(
+        LAW_DESCRIPTIONS[s.control_law].format(
+            n_max=n_max, bank=fbw.BANK_LIMIT_DEG
+        )
+    )
+    lines.append("")
+
+    normal = s.control_law == fbw.NORMAL
+    alternate = s.control_law == fbw.ALTERNATE
+    rows = [
+        ("Angle of attack",
+         "α prot {:.1f}° · α floor {:.1f}° · α max {:.1f}°".format(
+             alpha_prot, alpha_floor, alpha_max),
+         "protected" if normal else ("stability only" if alternate else "—")),
+        ("Load factor",
+         "{:+.1f} g to {:+.1f} g ({})".format(
+             n_min, n_max, "flaps out" if s.flaps else "clean"),
+         "limited" if normal or alternate else "—"),
+        ("Bank angle",
+         "{:.0f}° hard limit · {:.0f}° held hands-off".format(
+             fbw.BANK_LIMIT_DEG, fbw.BANK_NEUTRAL_DEG),
+         "protected" if normal else "—"),
+        ("Pitch attitude",
+         "{:.0f}° to {:+.0f}°".format(fbw.PITCH_MIN_DEG, fbw.PITCH_MAX_DEG),
+         "protected" if normal else "—"),
+        ("High speed",
+         "Vmo {:.0f} kt · Mmo {:.2f}".format(craft.vmo_kt, craft.mmo),
+         "protected" if normal else ("stability only" if alternate else "—")),
+        ("Alpha floor",
+         "TOGA above {:.0f} ft AGL".format(fbw.ALPHA_FLOOR_MIN_AGL_FT),
+         "armed" if normal else "—"),
+    ]
+    lines.append("| Protection | Threshold | State |")
+    lines.append("| --- | --- | --- |")
+    for label, threshold, state in rows:
+        lines.append("| {} | {} | {} |".format(label, threshold, state))
+
+    if s.active_protections:
+        lines.append("")
+        lines.append("**Active now:** {}".format(
+            " · ".join(s.active_protections)))
+
+    readout = sim.readout()
+    lines.append("")
+    lines.append(
+        "*You are at α {:+.1f}°, {:.2f} g, {:+.0f}° of bank. "
+        "`normal law`, `alternate law` and `direct law` select a law.*".format(
+            readout.alpha_deg, readout.load_factor, readout.bank_deg
+        )
+    )
+    return "\n".join(lines)
 
 
 def spec_card(craft, artwork_first=True):

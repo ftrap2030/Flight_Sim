@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, asdict
 from . import aircraft as fleet
 from . import atmosphere as atm
 from . import autopilot
+from . import fbw
 from . import landing
 from . import navigation
 from . import weather as wx
@@ -120,6 +121,15 @@ class FlightState:
     cmd_bank_deg: float = 0.0
     cmd_heading_deg: float = None
 
+    # Fly-by-wire. The law is the aircraft's, not the pilot's, except when the
+    # pilot deliberately degrades it; the protections list is rebuilt every
+    # substep and exists so the panel can show what is holding the aeroplane
+    # back. alpha_floor_latched is the one piece of protection state that has
+    # to persist between substeps, because TOGA LK latches.
+    control_law: str = "normal"
+    active_protections: list = field(default_factory=list)
+    alpha_floor_latched: bool = False
+
     elapsed_s: float = 0.0
     tick: int = 0
     status: str = FLYING
@@ -212,6 +222,10 @@ class Readout:
     wind_dir_deg: float = 0.0
     rotor_turbulence: float = 0.0
     orographic_fpm: float = 0.0
+    control_law: str = "normal"
+    protections: list = field(default_factory=list)
+    alpha_prot_deg: float = 0.0
+    alpha_max_deg: float = 0.0
 
 
 Aero = namedtuple(
@@ -268,6 +282,11 @@ class Simulator:
         self.route = navigation.Route.from_dict(state.route)
         self._mechanical_turbulence = 0.0
         self._orographic_fpm = 0.0
+        # What the flight control laws are asking for this substep. Rebuilt by
+        # fbw.apply every substep; the pilot's own command stays untouched on
+        # the state, which is what lets alternate law be argued with.
+        self.law_pitch_target = state.cmd_pitch_deg
+        self.law_bank_target = state.cmd_bank_deg
         self._refresh_terrain_effects()
 
     def sync_route(self):
@@ -634,6 +653,11 @@ class Simulator:
         # stream from the tick makes the run reproducible however it was reached.
         self._rng = random.Random(s.seed * 7919 + s.tick)
 
+        # Protections are accumulated across the whole tick rather than being
+        # whatever happened to be true at the final substep -- a limit that held
+        # for half a second still held.
+        s.active_protections = []
+
         substeps = max(1, int(round(seconds / SUBSTEP_S)))
         dt = seconds / substeps
         previous_x, previous_y = s.x_nm, s.y_nm
@@ -674,6 +698,13 @@ class Simulator:
         # pilot would, so everything below is unchanged by its presence.
         autopilot.update(self, dt)
 
+        # The flight control laws sit between whoever is flying -- pilot or
+        # autopilot -- and the aerodynamics, exactly as they do on the real
+        # aircraft. They only ever narrow the commanded attitude; nothing below
+        # this line knows or cares that they ran.
+        fbw.degrade_for_failures(self)
+        fbw.apply(self, dt)  # sets law_pitch_target and law_bank_target
+
         # --- lateral-directional: sideslip, before the roll law reads it ---
         self._update_sideslip(dt)
 
@@ -704,13 +735,18 @@ class Simulator:
         # by 15 deg/s of roll authority on the very next substep, which would
         # make rudder produce no visible roll at all. As an offset it is what a
         # pilot actually sees -- a steady wing-down attitude the FBW trims to.
-        bank_target = s.cmd_bank_deg + craft.dihedral_effect * s.sideslip_deg
+        # The law's target, not the raw command: in normal law that is the
+        # command clipped to a protection, in alternate law the command less a
+        # stability demand, and in direct law the command itself.
+        bank_target = self.law_bank_target + craft.dihedral_effect * s.sideslip_deg
 
         roll_step = craft.roll_rate_deg_s * dt * authority
         s.bank_deg += clamp(bank_target - s.bank_deg, -roll_step, roll_step)
 
         pitch_step = craft.pitch_rate_deg_s * dt * authority
-        s.pitch_deg += clamp(s.cmd_pitch_deg - s.pitch_deg, -pitch_step, pitch_step)
+        s.pitch_deg += clamp(
+            self.law_pitch_target - s.pitch_deg, -pitch_step, pitch_step
+        )
 
         if departed:
             # The nose falls whether or not you want it to -- which is exactly
@@ -723,7 +759,14 @@ class Simulator:
             s.pitch_deg += s.turb[0] * turb_scale * 0.55 * dt
             s.bank_deg += s.turb[1] * turb_scale * 1.6 * dt
 
-        s.bank_deg = clamp(s.bank_deg, -67.0, 67.0)
+        # The bank ceiling is the control law's, not a constant: 67 degrees is
+        # Normal Law's protection, and Direct Law does not have one.
+        bank_limit = (
+            fbw.BANK_LIMIT_DEG
+            if s.control_law == fbw.NORMAL
+            else fbw.BANK_LIMIT_DIRECT_DEG
+        )
+        s.bank_deg = clamp(s.bank_deg, -bank_limit, bank_limit)
         s.pitch_deg = clamp(s.pitch_deg, -35.0, 35.0)
 
         # --- aerodynamics ---
@@ -978,6 +1021,10 @@ class Simulator:
             wind_dir_deg=local_wind_dir,
             rotor_turbulence=self._mechanical_turbulence,
             orographic_fpm=self._orographic_fpm,
+            control_law=s.control_law,
+            protections=list(s.active_protections or []),
+            alpha_prot_deg=fbw.alpha_thresholds(craft)[0],
+            alpha_max_deg=fbw.alpha_thresholds(craft)[2],
         )
         readout.approach = landing.approach_guidance(self)
         readout.vref_kt = landing.vref_kt(self)
@@ -990,12 +1037,18 @@ class Simulator:
         craft = self.aircraft
         out = []
 
+        if s.control_law != fbw.NORMAL:
+            out.append(fbw.LAW_NAMES[s.control_law])
+
         if r.stalled:
             out.append("STALL")
         elif r.alpha_deg > craft.alpha_crit_deg - STALL_WARNING_MARGIN_DEG:
             out.append("STALL WARNING")
         elif r.ias_kt < r.stall_ias_kt * 1.10:
             out.append("LOW SPEED")
+
+        if fbw.low_energy(self, r):
+            out.append("SPEED SPEED SPEED")
 
         if r.ias_kt > craft.vmo_kt or r.mach > craft.mmo:
             out.append("OVERSPEED")

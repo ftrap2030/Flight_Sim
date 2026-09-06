@@ -226,7 +226,11 @@ class TestEnvelope(unittest.TestCase):
         self.assertIn("ENGINES OUT", sim.readout().warnings)
 
     def test_pitching_up_at_idle_stalls_the_wing(self):
+        """In direct law. Normal law's protections make this impossible, which
+        is the subject of tests/test_fbw.py -- here the point is that the
+        aerodynamics underneath still let go when nothing is holding them."""
         session = Session.new("a320neo", "clear", seed=42)
+        session.execute("direct law")
         session.execute("idle")
         session.execute("pitch up 18")
         stalled = False
@@ -240,6 +244,7 @@ class TestEnvelope(unittest.TestCase):
     def test_departed_wing_drops_its_nose_and_loses_authority(self):
         """A stalled airliner does not hold a commanded 20 degrees nose-up."""
         session = Session.new("a320neo", "clear", seed=42)
+        session.execute("direct law")
         session.execute("idle")
         session.execute("pitch up 20")
         for _ in range(10):
@@ -258,6 +263,7 @@ class TestEnvelope(unittest.TestCase):
         what must never happen is a stall with no prior warning at all.
         """
         session = Session.new("a320", "clear", seed=42)
+        session.execute("direct law")
         session.execute("idle")
         session.execute("pitch up 14")
         warned = False
@@ -280,6 +286,7 @@ class TestEnvelope(unittest.TestCase):
         self.assertAlmostEqual(sim.readout().load_factor, 1.0, places=1)
 
         session = Session.new("a320", "clear", seed=42)
+        session.execute("direct law")
         session.execute("idle")
         session.execute("pitch up 18")
         for _ in range(8):
