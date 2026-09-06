@@ -4,7 +4,7 @@ A text-based Airbus flight simulator with a real point-mass physics model and a
 cinematic description engine. Pick an aircraft, pick your weather, and you start
 at 5,000 feet in straight and level flight. Everything after that is up to you.
 
-No dependencies — Python 3.8+ and the standard library.
+No dependencies — Python 3.9+ and the standard library.
 
 ```
 python main.py
@@ -12,25 +12,72 @@ python main.py
 
 ## The fleet
 
-Five Airbus airliners. The differences between them are *emergent*: the A320neo
+Nine Airbus airliners. The differences between them are *emergent*: the A320neo
 climbs better and burns less because its sharklets raise the aspect ratio and
 its LEAP engines have a lower TSFC, not because a "nimbleness" number was typed
 into a table.
 
-| | A320 | A320neo | A321neo | A350-900 | A380-800 |
-|---|---|---|---|---|---|
-| Engines | 2× CFM56-5B4 | 2× LEAP-1A26 | 2× LEAP-1A32 | 2× Trent XWB-84 | 4× Trent 970 |
-| MTOW | 78 t | 79 t | 97 t | 280 t | 575 t |
-| Wing / aspect ratio | 122.6 m² / 9.5 | 122.6 m² / **10.5** | 122.6 m² / **10.5** | 442 m² / 9.5 | 845 m² / 7.5 |
-| Cruise | M0.78 | M0.78 | M0.78 | M0.85 | M0.85 |
-| Ceiling | FL390 | FL390 | FL390 | FL431 | FL431 |
-| Roll rate | 15°/s | 15°/s | 12°/s | 10°/s | 7°/s |
+| # | Aircraft | Type | Engines | MTOW | Wing / AR | Cruise | Ceiling | Range | Seats | Roll |
+|---|---|---|---|---:|---|---|---|---:|---:|---:|
+| 1 | A319neo | A19N | 2× LEAP-1A24 | 76 t | 122.6 m² / 10.5 | M0.78 | FL398 | 3,750 nm | 140 | 16°/s |
+| 2 | A320-200 | A320 | 2× CFM56-5B4 | 78 t | 122.6 m² / 9.5 | M0.78 | FL390 | 3,300 nm | 150 | 15°/s |
+| 3 | A320neo | A20N | 2× LEAP-1A26 | 79 t | 122.6 m² / **10.5** | M0.78 | FL398 | 3,500 nm | 165 | 15°/s |
+| 4 | A321neo | A21N | 2× LEAP-1A32 | 97 t | 122.6 m² / 10.5 | M0.78 | FL398 | 4,000 nm | 180 | 12°/s |
+| 5 | A321XLR | A21N | 2× LEAP-1A35 | 101 t | 122.6 m² / 10.5 | M0.78 | FL398 | 4,700 nm | 180 | 11.5°/s |
+| 6 | A330-900neo | A339 | 2× Trent 7000 | 251 t | 361.6 m² / **11.3** | M0.82 | FL414 | 7,200 nm | 287 | 10.2°/s |
+| 7 | A350-900 | A359 | 2× Trent XWB-84 | 280 t | 442 m² / 9.5 | M0.85 | FL431 | 8,300 nm | 315 | 10°/s |
+| 8 | A350-1000 | A35K | 2× Trent XWB-97 | 319 t | 464.3 m² / 9.0 | M0.85 | FL431 | 8,700 nm | 350 | 9°/s |
+| 9 | A380-800 | A388 | 4× Trent 970 | 575 t | 845 m² / 7.5 | M0.85 | FL431 | 8,000 nm | 525 | 7°/s |
 
-All three narrowbodies share a wing *area*; only the A320 ceo lacks sharklets,
+`python main.py --spec a350-1000` prints any type's full card. In flight, `spec`
+does the same for the aircraft you are in and `fleet` shows all nine.
+
+The whole A320 family shares a wing *area*; only the A320 ceo lacks sharklets,
 which is why it alone has the lower aspect ratio and pays for it in induced drag.
 The A321neo is nineteen tonnes heavier on that same area, so it stalls sixteen
 knots faster than the A320 and rolls three degrees a second slower — the engines
-did nothing for its inertia.
+did nothing for its inertia. The A330-900 has the highest aspect ratio in the
+fleet at 11.3, a long slender wing on a comparatively small area, and at medium
+weights very little else holds an altitude so effortlessly.
+
+### They are drawn from their own dimensions
+
+Nothing in the artwork is hand-drawn. The fuselage is as long as `length_m`, the
+fin reaches `height_m`, the cabin has `cabin_decks` rows of windows, the pods are
+counted from `engine_arms_m`, and the number of main gear bogies follows MTOW
+because pavement loading is what decides it on the real aeroplane.
+
+```
+                                                                         /____
+                                                                        /    |
+                                                                       /     |
+                                                                      /      |
+                                                                     /       |
+                                                                    /        |
+          /__________________________________________________________________|__
+       /__ \  o o o o o o o o o o o o o o o o o o o o o o o o o o o  ----------
+     /_                                                                   /_
+    /         o o o o o o o o o o o o o o o o o o o o o o o o o o o     /_
+   _                                                                  /_
+   ___________________________________________________________________
+                |              (######)  (######)  |    |    |
+                o                                 ooo  ooo  ooo
+----------------------------------------------------------------------------------
+   |<-------------------------------- 72.72 m --------------------------------->|
+   span 79.75 m   ·   height 24.09 m   ·   wing 845.0 m²   ·   aspect ratio 7.5
+```
+
+Scale is fixed across the fleet, so the pictures are comparable: an A380 is drawn
+very nearly twice the length of an A319neo because it very nearly is, and a test
+asserts the drawn ratio matches the real one to within 8%.
+
+That constraint is the point. A hand-drawn fleet would let the A321's 6.9 m
+stretch go unnoticed; this cannot. It also means the A320 and A320neo draw the
+*same* picture — they differ only in span, and a side view has no way to show
+span. Their captions differ, because those quote it. Where a difference is
+genuinely visible it is drawn: the A380's two decks and four engines in two pods,
+and the A321XLR's belly fairing over its rear centre tank, which is the one
+external feature that tells an XLR from an A321neo from directly abeam.
 
 ## Weather
 
@@ -81,6 +128,8 @@ Commands are typed the way a pilot would say them:
 | Time of day | `time 0530`, `dawn`, `midday`, `dusk`, `night` |
 | Autopilot | `autopilot on/off`, `set altitude 12000`, `set speed 280`, `vertical speed 1500`, `approach mode` |
 | Navigation | `direct to KEBR`, `show plan`, `clear route`, `airfields`, `debrief` |
+| Flight controls | `law`, `normal law`, `alternate law`, `direct law` |
+| Reference | `spec`, `spec a380`, `fleet` |
 | Other | `map`, `status`, `help`, `quit` |
 
 Each command advances the simulation ten seconds. `status` and `help` cost no
@@ -99,9 +148,13 @@ thrust model that lapses with density, faster above the tropopause, falls off
 with forward speed as ram drag rises, and fades out across the certified
 ceiling. Fuel burns, mass drops, and the aircraft climbs better as it lightens.
 
-Cruise fuel flow for every type lands within 3% of its published block figure,
-at an L/D between 17 and 19, on TSFC values that correspond to the real engines
-(0.59 lb/lbf/hr for the CFM56, 0.51 for the LEAP).
+Cruise fuel flow for every type lands within 2.2% of its published block figure,
+at an L/D between 17 and 19.3, on TSFC values that were *solved* rather than
+looked up — and which then come out on the real engines: 0.586 lb/(lbf·hr) for
+the CFM56 against a published 0.59, 0.505 for the LEAP against 0.51, 0.501 for
+the Trent 7000 against 0.50, 0.434 for the Trent XWB against 0.44, and 0.427 for
+the Trent 970 against 0.43. That agreement is the evidence the numbers are
+physical rather than fudge factors, and it is a test.
 
 **Integration** — one command advances ten seconds, integrated semi-implicitly
 at 0.1 s substeps. The substepping matters: turn rate and flight path angle are
@@ -121,7 +174,7 @@ engine's real lateral offset: 5.75 m on the A320 family, 10.6 m on the A350,
 normalised by dynamic pressure, so as you slow down the same dead engine demands
 ever more rudder until the available travel simply runs out. For the A320neo
 that crossing lands near 110 kt, against a real Vmca of about 115. The A380 is
-the most controllable of the five on an engine failure, because losing one of
+the most controllable of the nine on an engine failure, because losing one of
 four is half the asymmetry of losing one of two, against far more fin and wing.
 
 **The envelope is real.** The wing stalls past its critical angle of attack and
@@ -131,6 +184,63 @@ the sidestick and drops its nose, so a stall is recoverable if you have the
 height and the discipline to unload it. You can also overspeed past Vmo,
 overstress the airframe, and run the tanks dry, at which point you are flying a
 very large glider.
+
+## The flight control laws
+
+An Airbus sidestick does not move a control surface. It asks for a load factor,
+and a computer decides what the surfaces do about it — subject to protections
+you cannot override by pulling harder. That is the most important single thing
+about how these aircraft fly.
+
+| | Normal | Alternate | Direct |
+|---|---|---|---|
+| Angle of attack | protected at α max | stability only | — |
+| Load factor | +2.5 / −1.0 g | +2.5 / −1.0 g | — |
+| Bank angle | 67° limit | — | — |
+| Pitch attitude | +30° / −15° | — | — |
+| High speed | protected at VMO/MMO | stability only | — |
+| Alpha floor | TOGA above 100 ft AGL | — | — |
+
+What that means in the aeroplane, measured, at full back stick and a commanded
+80° of bank:
+
+| | Normal | Alternate | Direct |
+|---|---|---|---|
+| Stall attempt | α held at 14.5°, **no stall** | **stalls** | **stalls** |
+| 80° of bank | 67°, n capped at **2.50** | 80°, 2.55 g | 80°, 3.82 g, breaks up |
+| Dive at full power | 382 kt, still flying | 415 kt, breaks up | 415 kt, breaks up |
+
+**You cannot stall an aircraft in normal law.** That is not a simplification, it
+is the protection working, and it is why the original brief's vivid stall ending
+now needs a degraded law to reach — which is exactly the trade the real aircraft
+makes.
+
+Reversions are the two a point-mass model can honestly represent, and both
+latch: losing every engine drops you to alternate law, because on RAT power that
+is where a real Airbus goes, and lowering the gear in alternate law reverts to
+direct. That second one catches people out — an aircraft that has been flying
+acceptably suddenly has no protections at all, at the exact moment the pilot is
+busiest. Everything else that degrades a real Airbus has no analogue here, so
+`direct law` selects one deliberately.
+
+The laws sit between whoever is flying — pilot or autopilot — and the
+aerodynamics. Nothing bypasses the flight model: alpha protection works by
+refusing to command a pitch attitude that would put the wing past alpha max,
+which is what it does on the aeroplane.
+
+Two subtleties that were bugs first. The law computes a *target* and never
+overwrites the pilot's command, because in this game a command is persistent
+state — take it away to enforce a limit and it stays away, which silently turned
+alternate law's resistible nose-down demand into a hard limit and made the
+aircraft unstallable in the one law where it must be stallable. And the load
+factor law does not stop at CL_max: it limits the g *demanded*, not the g the
+wing can make, so asking for 2.5 g where the wing has 1.2 commands the angle of
+attack the arithmetic calls for. That is how an aircraft in alternate law gets
+stalled by its own flight control computer, and clamping it would have created a
+second, accidental AoA protection in the two laws that must have none.
+
+`law` prints the card: thresholds, what is armed, and what is holding you back
+right now.
 
 ## The autopilot
 
@@ -280,7 +390,8 @@ Seeded determinism means a flight replays exactly, and a session resumed from
 disk continues identically to one flown straight through — turbulence included.
 
 Other flags: `--seed` picks the world, `--altitude` the starting height,
-`--list` prints the menus, `--json` dumps the raw readout to stderr.
+`--list` prints the menus, `--spec TYPE` prints one aircraft's card and drawing,
+`--json` dumps the raw readout to stderr.
 
 ## Tests
 
@@ -288,13 +399,23 @@ Other flags: `--seed` picks the world, `--altitude` the starting height,
 python -m unittest discover -s tests -t .
 ```
 
-313 tests, no dependencies. They check the atmosphere against published ISA
+374 tests, no dependencies. They check the atmosphere against published ISA
 tables, stall speed against its closed form, cruise fuel flow and service
-ceiling against published figures for all five aircraft, terrain determinism,
+ceiling against published figures for all nine aircraft, terrain determinism,
 save/load fidelity, that every prose template renders against a live context,
 that the artificial horizon is not upside down, that Vmc falls out of the engine
 geometry rather than being asserted, that every authored runway has a clear
 3-degree approach from both ends, and that a stopped aircraft reads zero on the
 airspeed indicator.
+
+Two families are worth calling out because they guard things that are easy to
+break silently. Every solved TSFC is checked against its real engine's published
+cruise SFC — the constants were solved against block fuel flow, not looked up, so
+a wrong drag polar shows up as a TSFC that has drifted off its engine rather than
+as a quietly wrong fuel page. And the artwork is asserted against the data it is
+drawn from: a longer aircraft must be drawn longer, the drawn A380/A319neo length
+ratio must match the real one to within 8%, the pod count must equal the engine
+count, and the length in the spec table must be the length in the callout under
+the picture.
 
 CI runs them on Python 3.9, 3.11 and 3.12.
