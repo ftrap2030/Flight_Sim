@@ -7,11 +7,14 @@ from flight_sim import atmosphere as atm
 
 
 class TestFleetData(unittest.TestCase):
-    def test_five_aircraft(self):
-        self.assertEqual(len(fleet.FLEET), 5)
+    def test_nine_aircraft(self):
+        self.assertEqual(len(fleet.FLEET), 9)
         self.assertEqual(
             [a.key for a in fleet.FLEET],
-            ["a320", "a320neo", "a321", "a350", "a380"],
+            [
+                "a319neo", "a320", "a320neo", "a321", "a321xlr",
+                "a330neo", "a350", "a350k", "a380",
+            ],
         )
 
     def test_masses_are_self_consistent(self):
@@ -21,16 +24,58 @@ class TestFleetData(unittest.TestCase):
                 "{} starts above MTOW".format(craft.name),
             )
             self.assertLessEqual(craft.start_fuel_kg, craft.fuel_capacity_kg)
+            # Empty plus payload cannot exceed the zero-fuel limit, and the
+            # aircraft has to be able to land at its own start weight or the
+            # mission is impossible before it begins.
+            self.assertLessEqual(
+                craft.oew_kg + craft.payload_kg, craft.mzfw_kg,
+                "{} exceeds MZFW before fuel".format(craft.name),
+            )
+            self.assertLess(craft.mlw_kg, craft.mtow_kg)
+            self.assertLess(craft.mzfw_kg, craft.mlw_kg)
+
+    def test_published_dimensions_are_present_and_plausible(self):
+        for craft in fleet.FLEET:
+            self.assertTrue(craft.icao_type, "{} has no type code".format(craft.name))
+            self.assertGreater(craft.height_m, 5.0)
+            self.assertLess(craft.height_m, craft.length_m)
+            self.assertGreater(craft.fuselage_height_m, craft.fuselage_width_m - 0.01)
+            self.assertGreater(craft.seats_max, craft.seats_typical)
+            self.assertGreater(craft.range_nm, 1000.0)
+            self.assertGreater(craft.entry_service, 1980)
+
+    def test_fuel_mass_follows_from_tank_volume(self):
+        """Capacity is quoted in litres; the kilograms are derived, not typed."""
+        for craft in fleet.FLEET:
+            self.assertAlmostEqual(
+                craft.fuel_capacity_kg,
+                craft.fuel_capacity_l * fleet.JET_A1_KG_PER_L,
+                places=6,
+            )
+        # The XLR's whole point is the rear centre tank.
+        self.assertGreater(fleet.A321XLR.fuel_capacity_l, fleet.A321.fuel_capacity_l)
+        self.assertGreater(fleet.A321XLR.range_nm, fleet.A321.range_nm)
 
     def test_resolve_accepts_menu_numbers_and_names(self):
-        self.assertIs(fleet.resolve("1"), fleet.A320)
-        self.assertIs(fleet.resolve("2"), fleet.A320NEO)
+        self.assertIs(fleet.resolve("1"), fleet.A319NEO)
+        self.assertIs(fleet.resolve("2"), fleet.A320)
+        self.assertIs(fleet.resolve("9"), fleet.A380)
         self.assertIs(fleet.resolve("A320neo"), fleet.A320NEO)
         self.assertIs(fleet.resolve("  a350  "), fleet.A350)
         self.assertIs(fleet.resolve("A380-800"), fleet.A380)
         self.assertIs(fleet.resolve("a320 neo"), fleet.A320NEO)
+        self.assertIs(fleet.resolve("A350-1000"), fleet.A350K)
+        self.assertIs(fleet.resolve("a35k"), fleet.A350K)
+        self.assertIs(fleet.resolve("A321XLR"), fleet.A321XLR)
+        self.assertIs(fleet.resolve("A330-900"), fleet.A330NEO)
+        self.assertIs(fleet.resolve("A319neo"), fleet.A319NEO)
         self.assertIsNone(fleet.resolve("boeing 737"))
         self.assertIsNone(fleet.resolve(None))
+
+    def test_menu_numbers_track_the_fleet_order(self):
+        """The digits on the selection card must select what they point at."""
+        for index, craft in enumerate(fleet.FLEET, start=1):
+            self.assertIs(fleet.resolve(str(index)), craft)
 
     def test_a320_and_neo_differ_only_where_they_should(self):
         """Same wing area, more span -- so the neo's aspect ratio is higher."""
@@ -50,10 +95,36 @@ class TestFleetData(unittest.TestCase):
         self.assertGreater(fleet.A321.mtow_kg, fleet.A320.mtow_kg)
         self.assertLess(fleet.A321.roll_rate_deg_s, fleet.A320.roll_rate_deg_s)
 
-    def test_roll_rate_ordering(self):
-        """Nimbleness must fall as the aircraft gets bigger."""
-        rates = [a.roll_rate_deg_s for a in fleet.FLEET]
-        self.assertEqual(rates, sorted(rates, reverse=True))
+    def test_roll_rate_falls_as_the_aircraft_gets_heavier(self):
+        """Nimbleness must fall with size -- but as a physical claim.
+
+        FLEET is listed by family, not by inertia, so a plain sort no longer
+        expresses this: the A330-900 rolls better than the A350-1000 while
+        sitting earlier in the list. What has to hold is that sorting by weight
+        sorts by roll rate.
+        """
+        by_weight = sorted(fleet.FLEET, key=lambda a: a.mtow_kg)
+        rates = [a.roll_rate_deg_s for a in by_weight]
+        self.assertEqual(
+            rates, sorted(rates, reverse=True),
+            "roll rate does not fall with weight: {}".format(
+                [(a.name, a.roll_rate_deg_s) for a in by_weight]
+            ),
+        )
+        # Pitch response follows the same argument.
+        pitch = [a.pitch_rate_deg_s for a in by_weight]
+        self.assertEqual(pitch, sorted(pitch, reverse=True))
+
+    def test_within_a_family_the_stretch_is_the_less_nimble_one(self):
+        for shorter, longer in (
+            (fleet.A319NEO, fleet.A320NEO),
+            (fleet.A320NEO, fleet.A321),
+            (fleet.A321, fleet.A321XLR),
+            (fleet.A350, fleet.A350K),
+        ):
+            self.assertGreaterEqual(shorter.roll_rate_deg_s, longer.roll_rate_deg_s)
+            self.assertGreaterEqual(longer.length_m, shorter.length_m)
+            self.assertGreater(longer.mtow_kg, shorter.mtow_kg)
 
     def test_stall_speed_matches_closed_form(self):
         craft = fleet.A320

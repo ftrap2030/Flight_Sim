@@ -5,18 +5,35 @@ plus the handful of aerodynamic coefficients the point-mass model needs. The
 handling differences between variants are *emergent*: the A320neo climbs better
 and burns less because its sharklets raise the aspect ratio and its LEAP engines
 have a lower TSFC, not because a "nimbleness" number was typed in.
+
+Two classes of number live here and they must not be confused:
+
+* **Published data** -- dimensions, masses, seat counts, thrust ratings, tank
+  volumes. These come from the manufacturer's figures and are quoted as
+  published. They exist to be *shown*: the spec card and the artwork are drawn
+  from them, so a change here changes what the pilot sees.
+* **Calibrated coefficients** -- ``tsfc``, ``cd_0``, ``oswald_e``,
+  ``mach_crit``. These were solved so that the model reproduces each type's
+  published cruise fuel flow, then cross-checked against the real engine's SFC.
+  They exist to be *flown*. Changing one without re-solving the others makes the
+  fuel page quietly wrong.
+
+TSFC values are in kg/(N*s). Multiply by 35,306 for the more familiar
+lb/(lbf*hr): the CFM56 works out at 0.59, the LEAP at 0.51, the Trents at
+0.43-0.51, all within the published range for those engines at cruise. They were
+derived by solving for the value that reproduces each type's published block
+fuel flow at its cruise altitude and Mach, then checked against the real engine
+figures -- so the fuel page agrees with the aircraft's actual numbers and the
+constants remain physically meaningful rather than fudge factors.
 """
 
 import math
 from dataclasses import dataclass, field
 
-# TSFC values are in kg/(N*s). Multiply by 35,306 for the more familiar
-# lb/(lbf*hr): the CFM56 works out at 0.59, the LEAP at 0.51, the Trents at
-# ~0.43, all within the published range for those engines at cruise. They were
-# derived by solving for the value that reproduces each type's published block
-# fuel flow at its cruise altitude and Mach, then checked against the real
-# engine figures -- so the fuel page agrees with the aircraft's actual numbers
-# and the constants remain physically meaningful rather than fudge factors.
+# Jet A-1 at 15 degrees C. Tanks are certified by volume and the mass they hold
+# follows from the density, which is why every published capacity is in litres
+# and every flight plan is in kilograms.
+JET_A1_KG_PER_L = 0.804
 
 
 @dataclass(frozen=True)
@@ -36,13 +53,28 @@ class Aircraft:
     oew_kg: float
     mtow_kg: float
     payload_kg: float
-    fuel_capacity_kg: float
     start_fuel_kg: float
 
     # Propulsion
     thrust_sl_n: float  # total static thrust, all engines, sea level
     tsfc: float  # kg of fuel per newton of thrust per second
     idle_thrust_fraction: float = 0.05
+
+    # -- published identity and dimensions, for the spec card and the artwork --
+    icao_type: str = ""
+    engine_options: str = ""  # the alternative powerplant offered on the type
+    entry_service: int = 0
+    height_m: float = 0.0  # overall height, fin tip to ground
+    fuselage_width_m: float = 0.0  # external diameter, at the widest
+    fuselage_height_m: float = 0.0  # external cross-section height
+    wing_sweep_deg: float = 25.0  # quarter-chord
+    cabin_decks: int = 1
+    mlw_kg: float = 0.0  # maximum landing weight
+    mzfw_kg: float = 0.0  # maximum zero-fuel weight
+    fuel_capacity_l: float = 0.0
+    seats_typical: int = 0  # manufacturer's two- or three-class layout
+    seats_max: int = 0  # exit-limit, single class
+    range_nm: float = 0.0
 
     # Aerodynamics
     cd_0: float = 0.022
@@ -80,6 +112,20 @@ class Aircraft:
         return len(self.engine_arms_m)
 
     @property
+    def thrust_per_engine_n(self):
+        return self.thrust_sl_n / self.engine_count
+
+    @property
+    def fuel_capacity_kg(self):
+        """What the published tank volume actually holds.
+
+        Derived rather than declared: the tanks are a fixed volume and the mass
+        follows from the fuel density, so quoting both independently would let
+        them drift apart.
+        """
+        return self.fuel_capacity_l * JET_A1_KG_PER_L
+
+    @property
     def aspect_ratio(self):
         """Span^2 / area. The single most important number for induced drag."""
         return self.wing_span_m ** 2 / self.wing_area_m2
@@ -110,6 +156,11 @@ class Aircraft:
         from . import atmosphere
 
         return atmosphere.mach_to_tas(self.cruise_mach, 35000.0) * atmosphere.KT_PER_MS
+
+    @property
+    def tsfc_lb_per_lbf_hr(self):
+        """The same TSFC in the units engine makers publish."""
+        return self.tsfc * 35306.0
 
     def stall_speed_ias_ms(self, mass_kg, load_factor=1.0, flap_setting=0):
         """1g (or n-g) stall speed as an indicated airspeed, in m/s.
@@ -166,20 +217,83 @@ FLAP_LIMIT_KT = [999.0, 230.0, 200.0, 185.0, 177.0]
 
 # ---------------------------------------------------------------------------
 # The fleet
+#
+# Ordered by family and then by size, which is also roughly the order of
+# increasing inertia -- but not exactly, and the tests check the physical claim
+# (roll rate falls as the aeroplane gets heavier) rather than this listing.
 # ---------------------------------------------------------------------------
+
+A319NEO = Aircraft(
+    key="a319neo",
+    name="A319neo",
+    icao_type="A19N",
+    engines="2 x CFM LEAP-1A24 (107.6 kN each)",
+    engine_options="Pratt & Whitney PW1124G-JM",
+    entry_service=2019,
+    wing_area_m2=122.6,
+    wing_span_m=35.80,  # sharklets, as across the neo family
+    length_m=33.84,
+    height_m=11.76,
+    fuselage_width_m=3.95,
+    fuselage_height_m=4.14,
+    wing_sweep_deg=25.0,
+    oew_kg=42600.0,
+    mtow_kg=75500.0,
+    mlw_kg=62500.0,
+    mzfw_kg=58500.0,
+    payload_kg=12000.0,
+    fuel_capacity_l=23859.0,
+    start_fuel_kg=10000.0,
+    seats_typical=140,
+    seats_max=160,
+    range_nm=3750.0,
+    thrust_sl_n=215200.0,
+    tsfc=1.43e-5,  # the same LEAP core as the A320neo
+    cd_0=0.0190,  # shortest fuselage on the family wing: least wetted area
+    oswald_e=0.82,
+    mach_crit=0.795,
+    vmo_kt=350.0,
+    mmo=0.82,
+    ceiling_ft=39800.0,
+    cruise_mach=0.78,
+    roll_rate_deg_s=16.0,
+    pitch_rate_deg_s=3.4,
+    engine_arms_m=(-5.75, 5.75),
+    dihedral_effect=0.62,
+    yaw_tau_s=1.9,
+    handling=(
+        "The shrink, and it behaves like one. Same wing and very nearly the same "
+        "thrust as the A320 carrying seven tonnes less aeroplane, so it climbs "
+        "like nothing else in the fleet and rolls the instant you think about "
+        "it. The short fuselage costs it directional damping -- it hunts a "
+        "little in turbulence where the A321 simply ploughs on."
+    ),
+)
 
 A320 = Aircraft(
     key="a320",
     name="A320-200",
-    engines="2 x CFM56-5B4 (120 kN each)",
+    icao_type="A320",
+    engines="2 x CFM56-5B4 (120.1 kN each)",
+    engine_options="IAE V2527-A5",
+    entry_service=1988,
     wing_area_m2=122.6,
     wing_span_m=34.10,  # wingtip fences, no sharklets
     length_m=37.57,
+    height_m=11.76,
+    fuselage_width_m=3.95,
+    fuselage_height_m=4.14,
+    wing_sweep_deg=25.0,
     oew_kg=42600.0,
     mtow_kg=78000.0,
+    mlw_kg=66000.0,
+    mzfw_kg=62500.0,
     payload_kg=15000.0,
-    fuel_capacity_kg=15200.0,
+    fuel_capacity_l=23859.0,
     start_fuel_kg=12000.0,
+    seats_typical=150,
+    seats_max=180,
+    range_nm=3300.0,
     thrust_sl_n=240200.0,
     tsfc=1.66e-5,  # ~0.59 lb/(lbf*hr) cruise
     cd_0=0.0199,
@@ -205,15 +319,27 @@ A320 = Aircraft(
 A320NEO = Aircraft(
     key="a320neo",
     name="A320neo",
-    engines="2 x CFM LEAP-1A26 (121 kN each)",
+    icao_type="A20N",
+    engines="2 x CFM LEAP-1A26 (120.6 kN each)",
+    engine_options="Pratt & Whitney PW1127G-JM",
+    entry_service=2016,
     wing_area_m2=122.6,
     wing_span_m=35.80,  # sharklets: same area, more span
     length_m=37.57,
+    height_m=11.76,
+    fuselage_width_m=3.95,
+    fuselage_height_m=4.14,
+    wing_sweep_deg=25.0,
     oew_kg=44300.0,
     mtow_kg=79000.0,
+    mlw_kg=67400.0,
+    mzfw_kg=64300.0,
     payload_kg=15000.0,
-    fuel_capacity_kg=15200.0,
+    fuel_capacity_l=23859.0,
     start_fuel_kg=12000.0,
+    seats_typical=165,
+    seats_max=194,
+    range_nm=3500.0,
     thrust_sl_n=241200.0,
     tsfc=1.43e-5,  # ~0.51 lb/(lbf*hr): ~14% better than the CFM56
     cd_0=0.0195,
@@ -221,7 +347,7 @@ A320NEO = Aircraft(
     mach_crit=0.795,
     vmo_kt=350.0,
     mmo=0.82,
-    ceiling_ft=39000.0,
+    ceiling_ft=39800.0,
     cruise_mach=0.78,
     roll_rate_deg_s=15.0,
     pitch_rate_deg_s=3.2,
@@ -239,23 +365,35 @@ A320NEO = Aircraft(
 A321 = Aircraft(
     key="a321",
     name="A321neo",
-    engines="2 x CFM LEAP-1A32 (143 kN each)",
+    icao_type="A21N",
+    engines="2 x CFM LEAP-1A32 (143.1 kN each)",
+    engine_options="Pratt & Whitney PW1133G-JM",
+    entry_service=2017,
     wing_area_m2=122.6,
     wing_span_m=35.80,  # sharklets, as on the A320neo: same area, more span
     length_m=44.51,  # 6.9 m longer than the A320
+    height_m=11.76,
+    fuselage_width_m=3.95,
+    fuselage_height_m=4.14,
+    wing_sweep_deg=25.0,
     oew_kg=50100.0,
     mtow_kg=97000.0,
+    mlw_kg=79200.0,
+    mzfw_kg=75600.0,
     payload_kg=20000.0,
-    fuel_capacity_kg=18700.0,
+    fuel_capacity_l=23700.0,
     start_fuel_kg=15000.0,
-    thrust_sl_n=286000.0,
+    seats_typical=180,
+    seats_max=244,
+    range_nm=4000.0,
+    thrust_sl_n=286200.0,
     tsfc=1.43e-5,  # ~0.51 lb/(lbf*hr): the same LEAP as the A320neo
     cd_0=0.0200,  # the A320neo's polar, plus a little for the longer fuselage
     oswald_e=0.82,
     mach_crit=0.792,
     vmo_kt=350.0,
     mmo=0.82,
-    ceiling_ft=39000.0,
+    ceiling_ft=39800.0,
     cruise_mach=0.78,
     roll_rate_deg_s=12.0,
     pitch_rate_deg_s=2.7,
@@ -274,18 +412,127 @@ A321 = Aircraft(
     ),
 )
 
+A321XLR = Aircraft(
+    key="a321xlr",
+    name="A321XLR",
+    icao_type="A21N",
+    engines="2 x CFM LEAP-1A35 (143.1 kN each)",
+    engine_options="Pratt & Whitney PW1133G-JM",
+    entry_service=2024,
+    wing_area_m2=122.6,
+    wing_span_m=35.80,
+    length_m=44.51,
+    height_m=11.76,
+    fuselage_width_m=3.95,
+    fuselage_height_m=4.14,
+    wing_sweep_deg=25.0,
+    oew_kg=52300.0,  # the rear centre tank and the strengthening it needs
+    mtow_kg=101000.0,
+    mlw_kg=79200.0,
+    mzfw_kg=75600.0,
+    payload_kg=20000.0,
+    fuel_capacity_l=36600.0,  # +12,900 L in the permanent rear centre tank
+    start_fuel_kg=22000.0,
+    seats_typical=180,
+    seats_max=244,
+    range_nm=4700.0,
+    thrust_sl_n=286200.0,
+    tsfc=1.43e-5,  # the same LEAP as the A321neo
+    cd_0=0.0202,  # the RCT's belly fairing, on the A321neo's polar
+    oswald_e=0.82,
+    mach_crit=0.792,
+    vmo_kt=350.0,
+    mmo=0.82,
+    ceiling_ft=39800.0,
+    cruise_mach=0.78,
+    roll_rate_deg_s=11.5,
+    pitch_rate_deg_s=2.6,
+    engine_arms_m=(-5.75, 5.75),
+    dihedral_effect=0.55,
+    yaw_tau_s=2.3,
+    handling=(
+        "A narrowbody with a widebody's legs. Thirteen tonnes of extra fuel over "
+        "the A321neo, all of it in a permanent tank behind the wing, and the "
+        "aeroplane feels every kilogram of it: heavier in roll, slower to "
+        "accelerate, and reluctant to climb until several hours have burned off "
+        "the difference. Fly it like a long-haul aircraft, because that is what "
+        "it is."
+    ),
+)
+
+A330NEO = Aircraft(
+    key="a330neo",
+    name="A330-900neo",
+    icao_type="A339",
+    engines="2 x Rolls-Royce Trent 7000-72 (324.0 kN each)",
+    entry_service=2018,
+    wing_area_m2=361.6,
+    wing_span_m=64.00,  # new composite sharklets: +3.7 m over the ceo
+    length_m=63.66,
+    height_m=16.79,
+    fuselage_width_m=5.64,
+    fuselage_height_m=5.64,
+    wing_sweep_deg=30.0,
+    oew_kg=137000.0,
+    mtow_kg=251000.0,
+    mlw_kg=191000.0,
+    mzfw_kg=181000.0,
+    payload_kg=40000.0,
+    fuel_capacity_l=139090.0,
+    start_fuel_kg=58000.0,
+    seats_typical=287,
+    seats_max=440,
+    range_nm=7200.0,
+    thrust_sl_n=648000.0,
+    tsfc=1.42e-5,  # ~0.50 lb/(lbf*hr): the Trent 7000, off the Trent 1000-TEN
+    cd_0=0.0190,  # metal airframe -- clean, but not the A350's composite skin
+    oswald_e=0.82,  # sharklets on an older wing: good, not A350 good
+    mach_crit=0.835,
+    vmo_kt=330.0,
+    mmo=0.86,
+    ceiling_ft=41450.0,
+    cruise_mach=0.82,
+    # Nearly the A350-900's span on thirty tonnes less aeroplane, so it is
+    # marginally the more responsive of the two in every axis.
+    roll_rate_deg_s=10.2,
+    pitch_rate_deg_s=2.35,
+    engine_arms_m=(-10.0, 10.0),
+    rudder_power=0.0024,
+    dihedral_effect=0.50,
+    yaw_tau_s=2.75,
+    handling=(
+        "The highest aspect ratio in the fleet at 11.3 -- a long, slender wing on "
+        "a comparatively small area, which is exactly the recipe for low induced "
+        "drag and a superb climb at weight. Older aerodynamics than the A350 and "
+        "an aluminium skin, so it pays more in parasite drag and cruises a shade "
+        "slower, but at medium weights very little else holds an altitude so "
+        "effortlessly."
+    ),
+)
+
 A350 = Aircraft(
     key="a350",
     name="A350-900",
-    engines="2 x Rolls-Royce Trent XWB-84 (375 kN each)",
+    icao_type="A359",
+    engines="2 x Rolls-Royce Trent XWB-84 (374.5 kN each)",
+    entry_service=2015,
     wing_area_m2=442.0,
     wing_span_m=64.75,
     length_m=66.80,
+    height_m=17.08,
+    fuselage_width_m=5.96,
+    fuselage_height_m=6.09,
+    wing_sweep_deg=31.9,
     oew_kg=142400.0,
     mtow_kg=280000.0,
+    mlw_kg=207000.0,
+    mzfw_kg=195700.0,
     payload_kg=40000.0,
-    fuel_capacity_kg=110500.0,
+    fuel_capacity_l=138000.0,
     start_fuel_kg=70000.0,
+    seats_typical=315,
+    seats_max=440,
+    range_nm=8300.0,
     thrust_sl_n=749000.0,
     tsfc=1.23e-5,  # ~0.44 lb/(lbf*hr) cruise
     cd_0=0.0167,  # composite airframe, cleanest of the fleet
@@ -309,19 +556,80 @@ A350 = Aircraft(
     ),
 )
 
+A350K = Aircraft(
+    key="a350k",
+    name="A350-1000",
+    icao_type="A35K",
+    engines="2 x Rolls-Royce Trent XWB-97 (431.5 kN each)",
+    entry_service=2018,
+    wing_area_m2=464.3,  # the -1000's extended trailing edge
+    wing_span_m=64.75,
+    length_m=73.79,  # seven metres of stretch over the -900
+    height_m=17.08,
+    fuselage_width_m=5.96,
+    fuselage_height_m=6.09,
+    wing_sweep_deg=31.9,
+    oew_kg=155000.0,
+    mtow_kg=319000.0,
+    mlw_kg=236000.0,
+    mzfw_kg=223000.0,
+    payload_kg=45000.0,
+    fuel_capacity_l=158791.0,
+    start_fuel_kg=85000.0,
+    seats_typical=350,
+    seats_max=480,
+    range_nm=8700.0,
+    thrust_sl_n=863000.0,
+    tsfc=1.23e-5,  # the XWB-97: same core, same cruise SFC as the -84
+    cd_0=0.0170,  # the -900's skin over a longer fuselage
+    oswald_e=0.85,
+    mach_crit=0.858,
+    vmo_kt=340.0,
+    mmo=0.89,
+    ceiling_ft=43100.0,
+    cruise_mach=0.85,
+    roll_rate_deg_s=9.0,
+    pitch_rate_deg_s=2.1,
+    engine_arms_m=(-10.6, 10.6),
+    rudder_power=0.0024,
+    dihedral_effect=0.48,
+    yaw_tau_s=3.0,
+    handling=(
+        "Seven metres longer than the -900 and thirty-nine tonnes heavier, on a "
+        "wing enlarged only at the trailing edge -- so wing loading is up and "
+        "everything that depends on it follows. The stretch shows most in pitch: "
+        "the nose takes noticeably longer to come round, and a late correction "
+        "on final becomes a long, slow oscillation instead of a nudge. Six-wheel "
+        "main gear, and the widest turn radius of anything on two engines."
+    ),
+)
+
 A380 = Aircraft(
     key="a380",
     name="A380-800",
-    engines="4 x Rolls-Royce Trent 970 (311 kN each)",
+    icao_type="A388",
+    engines="4 x Rolls-Royce Trent 970 (310.7 kN each)",
+    engine_options="Engine Alliance GP7270",
+    entry_service=2007,
     wing_area_m2=845.0,
     wing_span_m=79.75,
     length_m=72.72,
+    height_m=24.09,
+    fuselage_width_m=7.14,
+    fuselage_height_m=8.41,  # two full decks, and it shows
+    wing_sweep_deg=33.5,
+    cabin_decks=2,
     oew_kg=277000.0,
     mtow_kg=575000.0,
+    mlw_kg=394000.0,
+    mzfw_kg=361000.0,
     payload_kg=60000.0,
-    fuel_capacity_kg=254000.0,
+    fuel_capacity_l=320000.0,
     start_fuel_kg=160000.0,
-    thrust_sl_n=1244000.0,
+    seats_typical=525,
+    seats_max=853,
+    range_nm=8000.0,
+    thrust_sl_n=1242800.0,
     tsfc=1.21e-5,  # ~0.43 lb/(lbf*hr) cruise
     cd_0=0.0145,
     oswald_e=0.84,
@@ -346,28 +654,65 @@ A380 = Aircraft(
 )
 
 
-FLEET = [A320, A320NEO, A321, A350, A380]
+FLEET = [
+    A319NEO,
+    A320,
+    A320NEO,
+    A321,
+    A321XLR,
+    A330NEO,
+    A350,
+    A350K,
+    A380,
+]
 FLEET_BY_KEY = {a.key: a for a in FLEET}
 
-# Accept the obvious things a pilot might type at the selection menu.
+# Accept the obvious things a pilot might type at the selection menu. The bare
+# digits are the menu numbers and so must track the order of FLEET.
 _ALIASES = {
-    "1": "a320",
-    "2": "a320neo",
-    "3": "a321",
-    "4": "a350",
-    "5": "a380",
+    "1": "a319neo",
+    "2": "a320",
+    "3": "a320neo",
+    "4": "a321",
+    "5": "a321xlr",
+    "6": "a330neo",
+    "7": "a350",
+    "8": "a350k",
+    "9": "a380",
+    "a19n": "a319neo",
+    "a319": "a319neo",
+    "319": "a319neo",
+    "319neo": "a319neo",
     "a320-200": "a320",
     "320": "a320",
     "a320ceo": "a320",
     "neo": "a320neo",
+    "a20n": "a320neo",
     "320neo": "a320neo",
     "a320 neo": "a320neo",
     "321": "a321",
-    "a321-200": "a321",
+    "a21n": "a321",
+    "a321neo": "a321",
+    "321neo": "a321",
+    "xlr": "a321xlr",
+    "321xlr": "a321xlr",
+    "a330": "a330neo",
+    "a339": "a330neo",
+    "330": "a330neo",
+    "330neo": "a330neo",
+    "a330-900": "a330neo",
+    "a330900": "a330neo",
+    "a3309": "a330neo",
     "350": "a350",
+    "a359": "a350",
     "a350-900": "a350",
     "a350900": "a350",
+    "a35k": "a350k",
+    "a350-1000": "a350k",
+    "a3501000": "a350k",
+    "3501000": "a350k",
     "380": "a380",
+    "a388": "a380",
     "a380-800": "a380",
     "a380800": "a380",
 }

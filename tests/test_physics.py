@@ -7,13 +7,22 @@ from flight_sim import atmosphere as atm
 from flight_sim import physics
 from flight_sim.game import Session
 
+# Cruise fuel flow is strongly weight-dependent, so a target quoted without a
+# weight means nothing: the same A321neo burns 2,300 kg/h at 85 tonnes and under
+# 2,000 late in a flight. Each entry therefore records the mass the figure
+# belongs to -- which is the type's own start mass, the condition the model is
+# actually trimmed at.
 CRUISE_TARGETS = {
-    # key: (altitude_ft, published cruise fuel flow kg/h)
-    "a320": (35000, 2400),
-    "a320neo": (35000, 2000),
-    "a321": (35000, 2300),
-    "a350": (37000, 5800),
-    "a380": (37000, 11500),
+    # key: (altitude_ft, published cruise fuel flow kg/h, mass tonnes)
+    "a319neo": (35000, 1850, 64.6),
+    "a320": (35000, 2400, 69.6),
+    "a320neo": (35000, 2000, 71.3),
+    "a321": (35000, 2300, 85.1),
+    "a321xlr": (35000, 2600, 94.3),
+    "a330neo": (37000, 6050, 235.0),
+    "a350": (37000, 5800, 252.4),
+    "a350k": (37000, 6700, 285.0),
+    "a380": (37000, 11500, 497.0),
 }
 
 
@@ -76,11 +85,52 @@ class TestTrim(unittest.TestCase):
 
 class TestPublishedPerformance(unittest.TestCase):
     def test_cruise_fuel_flow_matches_published_figures(self):
-        for key, (_altitude, expected) in CRUISE_TARGETS.items():
+        for key, (_altitude, expected, _mass_t) in CRUISE_TARGETS.items():
             flow = trimmed_at_cruise(key).readout().fuel_flow_kgh
             self.assertLess(
                 abs(flow - expected) / expected, 0.05,
                 "{}: {:.0f} kg/h vs published {}".format(key, flow, expected),
+            )
+
+    def test_cruise_targets_are_quoted_at_the_weight_they_belong_to(self):
+        """The figure and the mass it was measured at must not drift apart."""
+        for key, (_altitude, _expected, mass_t) in CRUISE_TARGETS.items():
+            actual_t = trimmed_at_cruise(key).state.mass_kg / 1000.0
+            self.assertLess(
+                abs(actual_t - mass_t), 1.0,
+                "{}: trims at {:.1f} t, target quoted at {:.1f} t".format(
+                    key, actual_t, mass_t
+                ),
+            )
+
+    def test_tsfc_matches_the_real_engine(self):
+        """Each calibrated TSFC must land on its engine's published cruise SFC.
+
+        This is the check that keeps the constants honest. They were solved
+        against block fuel flow, not looked up -- so if a drag polar is wrong,
+        the solved TSFC drifts away from the engine it is supposed to represent,
+        and that shows up here rather than silently in the fuel page.
+        """
+        published = {  # lb/(lbf*hr) at cruise
+            "CFM56": 0.59,
+            "LEAP": 0.51,
+            "Trent 7000": 0.50,
+            "Trent XWB": 0.44,
+            "Trent 970": 0.43,
+        }
+        families = {
+            "a319neo": "LEAP", "a320": "CFM56", "a320neo": "LEAP",
+            "a321": "LEAP", "a321xlr": "LEAP", "a330neo": "Trent 7000",
+            "a350": "Trent XWB", "a350k": "Trent XWB", "a380": "Trent 970",
+        }
+        for key, family in families.items():
+            craft = fleet.FLEET_BY_KEY[key]
+            expected = published[family]
+            self.assertLess(
+                abs(craft.tsfc_lb_per_lbf_hr - expected), 0.03,
+                "{}: solved TSFC is {:.3f} lb/(lbf*hr), the {} is {:.2f}".format(
+                    craft.name, craft.tsfc_lb_per_lbf_hr, family, expected
+                ),
             )
 
     def test_lift_to_drag_ratio_is_realistic(self):
@@ -93,7 +143,7 @@ class TestPublishedPerformance(unittest.TestCase):
             )
 
     def test_aircraft_cannot_climb_far_past_its_certified_ceiling(self):
-        for key in ("a320", "a320neo", "a321", "a350"):
+        for key in ("a319neo", "a320", "a321xlr", "a330neo", "a350k"):
             session = Session.new(key, "clear", seed=42)
             session.execute("full power")
             session.execute("set pitch 5")
@@ -130,18 +180,25 @@ class TestPublishedPerformance(unittest.TestCase):
         self.assertGreater(saving, 0.10, "neo saved only {:.1%}".format(saving))
         self.assertLess(saving, 0.25)
 
-    def test_roll_response_is_ordered_by_type(self):
-        """Time to reach 25 degrees of bank, measured inside the tick."""
-        times = []
-        for craft in fleet.FLEET:
+    def test_roll_response_follows_the_declared_roll_rate(self):
+        """Time to reach 25 degrees of bank, measured inside the tick.
+
+        Compared against the declared roll rate rather than the order of FLEET,
+        which is listed by family: the A330-900 rolls slightly better than the
+        A350-1000 despite sitting earlier in the list, because it is seventy
+        tonnes lighter.
+        """
+        measured = []
+        for craft in sorted(fleet.FLEET, key=lambda a: -a.roll_rate_deg_s):
             sim = Session.new(craft.key, "clear", seed=42).sim
             sim.state.cmd_bank_deg = 25.0
             elapsed = 0.0
             while abs(sim.state.bank_deg) < 24.5 and elapsed < 20.0:
                 sim.step_tick(0.2)
                 elapsed += 0.2
-            times.append(elapsed)
-        self.assertEqual(times, sorted(times), "roll response out of order: %s" % times)
+            measured.append((craft.name, elapsed))
+        times = [t for _name, t in measured]
+        self.assertEqual(times, sorted(times), "roll response out of order: %s" % measured)
         self.assertLess(times[0], times[-1])
 
 
