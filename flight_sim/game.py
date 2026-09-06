@@ -237,6 +237,22 @@ class Session:
         if command.kind == "airfields":
             return (self.airfield_list(), False)
 
+        if command.kind == "spec":
+            craft = (
+                fleet.resolve(command.target) if command.target else self.sim.aircraft
+            )
+            if craft is None:
+                return (
+                    "No such type: `{}`. `fleet` lists the nine.".format(
+                        command.target
+                    ),
+                    False,
+                )
+            return (dashboard.spec_card(craft), False)
+
+        if command.kind == "fleet":
+            return (dashboard.fleet_menu(), False)
+
         if command.kind == "direct_to":
             return (self.set_destination(command.target), False)
 
@@ -301,13 +317,27 @@ def _prompt(text):
 def choose_aircraft():
     print(dashboard.fleet_menu())
     while True:
-        raw = _prompt("Select an aircraft (1-5, or type the name) > ")
-        if raw.strip().lower() in ("quit", "exit"):
+        raw = _prompt("Select an aircraft (1-9, or type the name) > ")
+        stripped = raw.strip().lower()
+        if stripped in ("quit", "exit"):
             return None
+        # Let the pilot read a full card before committing to a type.
+        if stripped.startswith("spec"):
+            wanted = stripped[4:].strip()
+            craft = fleet.resolve(wanted) if wanted else None
+            if craft is None:
+                print("`spec a350` — name one of the nine.\n")
+            else:
+                print(dashboard.spec_card(craft))
+                print()
+            continue
         craft = fleet.resolve(raw)
         if craft:
             return craft
-        print("Not one of the five. Try `1`, `A320neo`, `a350`, and so on.\n")
+        print(
+            "Not one of the nine. Try `1`, `A320neo`, `a350-1000`, `A321XLR`, "
+            "or `spec a380` to see a full card.\n"
+        )
 
 
 def choose_weather():

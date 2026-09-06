@@ -63,6 +63,11 @@ def build_parser():
     parser.add_argument(
         "--list", action="store_true", help="Print the fleet and weather menus and exit."
     )
+    parser.add_argument(
+        "--spec",
+        metavar="TYPE",
+        help="Print one type's full specification card and drawing, then exit.",
+    )
     return parser
 
 
@@ -82,6 +87,14 @@ def emit_json(session):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+
+    if args.spec:
+        craft = fleet.resolve(args.spec)
+        if craft is None:
+            print("Unknown aircraft: {}".format(args.spec), file=sys.stderr)
+            return 2
+        print(dashboard.spec_card(craft))
+        return 0
 
     if args.list:
         print(dashboard.fleet_menu())

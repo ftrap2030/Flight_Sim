@@ -346,10 +346,87 @@ def _clock(seconds):
     return "{:02d}:{:02d}".format(total // 60, total % 60)
 
 
+def _thousands(value):
+    return "{:,.0f}".format(value)
+
+
+def spec_card(craft, artwork_first=True):
+    """Everything published about one type, next to a drawing of it.
+
+    The drawing is generated from the same dimensions the table quotes, so the
+    two cannot disagree: if the picture looks wrong, the numbers are wrong.
+    """
+    from . import artwork
+
+    lines = ["### {} · {}".format(craft.name, craft.icao_type), ""]
+    if artwork_first:
+        lines.append("```")
+        lines.extend(artwork.profile_block(craft))
+        lines.append("```")
+        lines.append("")
+
+    rows = [
+        ("**Airframe**", "", "**Performance**", ""),
+        ("Length", "{:.2f} m".format(craft.length_m),
+         "Cruise", "M{:.2f} ({:,.0f} kt TAS)".format(
+             craft.cruise_mach, craft.cruise_speed_kt)),
+        ("Span", "{:.2f} m".format(craft.wing_span_m),
+         "Ceiling", "{} ft".format(_thousands(craft.ceiling_ft))),
+        ("Height", "{:.2f} m".format(craft.height_m),
+         "Range", "{} nm".format(_thousands(craft.range_nm))),
+        ("Wingtips", craft.wingtip,
+         "Vmo / Mmo", "{:.0f} kt / {:.2f}".format(craft.vmo_kt, craft.mmo)),
+        ("Wing area", "{:.1f} m²".format(craft.wing_area_m2),
+         "Roll rate", "{:.1f}°/s".format(craft.roll_rate_deg_s)),
+        ("Aspect ratio", "{:.1f}".format(craft.aspect_ratio),
+         "Pitch rate", "{:.1f}°/s".format(craft.pitch_rate_deg_s)),
+        ("Sweep", "{:.1f}° at quarter chord".format(craft.wing_sweep_deg),
+         "Stall (clean, MTOW)", "{:,.0f} kt".format(
+             craft.stall_speed_ias_ms(craft.mtow_kg) * atm.KT_PER_MS)),
+        ("Wing loading", "{:,.0f} kg/m² at MTOW".format(
+            craft.mtow_kg / craft.wing_area_m2),
+         "In service", "{:d}".format(craft.entry_service)),
+        ("Fuselage", "{:.2f} m wide, {:.0f} deck{}".format(
+            craft.fuselage_width_m, craft.cabin_decks,
+            "s" if craft.cabin_decks > 1 else ""),
+         "Type code", craft.icao_type),
+        ("**Powerplant**", "", "**Weights**", ""),
+        ("Engines", craft.engines,
+         "Operating empty", "{} kg".format(_thousands(craft.oew_kg))),
+        ("Total thrust", "{:,.0f} kN".format(craft.thrust_sl_n / 1000.0),
+         "Max take-off", "{} kg".format(_thousands(craft.mtow_kg))),
+        ("Cruise SFC", "{:.3f} lb/(lbf·hr)".format(craft.tsfc_lb_per_lbf_hr),
+         "Max landing", "{} kg".format(_thousands(craft.mlw_kg))),
+        ("Fuel capacity", "{} L ({} kg)".format(
+            _thousands(craft.fuel_capacity_l), _thousands(craft.fuel_capacity_kg)),
+         "Max zero-fuel", "{} kg".format(_thousands(craft.mzfw_kg))),
+        ("Seating", "{:d} typical, {:d} max".format(
+            craft.seats_typical, craft.seats_max),
+         "This flight", "{} kg ramp".format(_thousands(craft.start_mass_kg))),
+    ]
+    if craft.engine_options:
+        rows.append(("Also offered with", craft.engine_options, "", ""))
+
+    lines.append("| | | | |")
+    lines.append("| --- | ---: | --- | ---: |")
+    for left_label, left, right_label, right in rows:
+        lines.append("| {} | {} | {} | {} |".format(
+            left_label, left, right_label, right))
+    lines.append("")
+    lines.append("> {}".format(craft.handling))
+    return "\n".join(lines)
+
+
 def briefing(craft, weather, readout):
     """The pre-flight card shown once, when the simulation initialises."""
+    from . import artwork
+
     lines = []
     lines.append("## Flight initialised")
+    lines.append("")
+    lines.append("```")
+    lines.extend(artwork.profile_block(craft))
+    lines.append("```")
     lines.append("")
     lines.append("**Aircraft** — {} · {}".format(craft.name, craft.engines))
     lines.append(
@@ -381,32 +458,67 @@ def briefing(craft, weather, readout):
     return "\n".join(lines)
 
 
-def fleet_menu():
-    """Phase 1 aircraft selection card."""
+def fleet_menu(artwork_included=True):
+    """Phase 1 aircraft selection card.
+
+    The comparison table first, because that is what a choice is actually made
+    on, then every type drawn to a common scale. The drawings are worth the
+    space: an A319neo and an A380 are the same three words apart in a table and
+    forty metres apart on the ramp.
+    """
     lines = ["## Phase 1 — Select your aircraft", ""]
     lines.append(
-        "| # | Aircraft | Cruise | Ceiling | Vmo / Mmo | Roll rate |"
+        "| # | Aircraft | Type | Engines | Cruise | Ceiling | Range | Seats | "
+        "MTOW | Roll |"
     )
-    lines.append("| --- | --- | --- | --- | --- | --- |")
+    lines.append(
+        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |"
+    )
     for index, craft in enumerate(fleet.FLEET, start=1):
         lines.append(
-            "| **{}** | **{}** | M{:.2f} ({:.0f} kt TAS) | {:,.0f} ft | {:.0f} kt / {:.2f} | {:.0f}°/s |".format(
+            "| **{}** | **{}** | {} | {:d} × {:,.0f} kN | M{:.2f} ({:,.0f} kt) | "
+            "{} ft | {} nm | {:d} | {} kg | {:.1f}°/s |".format(
                 index,
                 craft.name,
+                craft.icao_type,
+                craft.engine_count,
+                craft.thrust_per_engine_n / 1000.0,
                 craft.cruise_mach,
                 craft.cruise_speed_kt,
-                craft.ceiling_ft,
-                craft.vmo_kt,
-                craft.mmo,
+                _thousands(craft.ceiling_ft),
+                _thousands(craft.range_nm),
+                craft.seats_typical,
+                _thousands(craft.mtow_kg),
                 craft.roll_rate_deg_s,
             )
         )
     lines.append("")
+    if not artwork_included:
+        for index, craft in enumerate(fleet.FLEET, start=1):
+            lines.append("**{}. {}** — {}".format(index, craft.name, craft.engines))
+            lines.append("")
+            lines.append("> {}".format(craft.handling))
+            lines.append("")
+        return "\n".join(lines)
+
+    from . import artwork
+
+    lines.append(
+        "*All nine drawn to one scale, from their published dimensions — so the "
+        "sizes are directly comparable.*"
+    )
+    lines.append("")
     for index, craft in enumerate(fleet.FLEET, start=1):
-        lines.append("**{}. {}** — {}".format(index, craft.name, craft.engines))
+        lines.append("**{}. {}** · {} — {}".format(
+            index, craft.name, craft.icao_type, craft.engines))
+        lines.append("")
+        lines.append("```")
+        lines.extend(artwork.profile_block(craft))
+        lines.append("```")
         lines.append("")
         lines.append("> {}".format(craft.handling))
         lines.append("")
+    lines.append("`spec <type>` prints the full specification card for any of them.")
     return "\n".join(lines)
 
 

@@ -83,6 +83,19 @@ def _match_meta(text, raw):
         return Command("airfields", text=raw, advances_time=False)
     if text in ("quit", "exit", "end", "eject", "stop"):
         return Command("quit", text=raw, advances_time=False)
+    # `spec` alone is the aircraft you are flying; `spec a380` is any other.
+    # Registered here, ahead of the navigation matcher, whose `fly <target>`
+    # pattern would otherwise swallow "spec" as a destination name.
+    m = re.match(
+        r"^spec(?:s|ification)?(?:\s+(?:card|sheet))?(?:\s+(.{1,20}))?$", text
+    )
+    if m:
+        return Command(
+            "spec", text=raw, advances_time=False,
+            target=(m.group(1) or "").strip(),
+        )
+    if text in ("fleet", "aircraft", "types", "fleet menu"):
+        return Command("fleet", text=raw, advances_time=False)
     return None
 
 
@@ -439,7 +452,8 @@ def apply(sim, command):
     elif kind == "spoilers":
         s.spoilers = bool(command.value)
     elif kind in ("hold", "status", "map", "airfields", "help", "quit",
-                  "direct_to", "show_plan", "clear_route", "debrief"):
+                  "direct_to", "show_plan", "clear_route", "debrief",
+                  "spec", "fleet"):
         pass
     elif kind == "time_of_day":
         s.time_of_day_h = command.value % 24.0
@@ -491,6 +505,7 @@ HELP_TEXT = """\
 | **Autopilot** | `autopilot on/off`, `set altitude 12000`, `set speed 280`, `vertical speed 1500`, `approach mode` |
 | **Time of day** | `time 0530`, `dawn`, `midday`, `dusk`, `night` |
 | **Navigation** | `direct to KEBR`, `show plan`, `clear route`, `airfields`, `debrief` |
+| **Reference** | `spec` (your aircraft's card), `spec a380`, `fleet` |
 | **Other** | `map` (terrain plan view), `status`, `help`, `quit` |
 
 Each command advances the simulation **10 seconds** unless you say otherwise.
