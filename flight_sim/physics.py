@@ -47,12 +47,24 @@ RUDDER_DRAG_K = 1.2e-4  # added CD per degree of rudder deflection
 RUDDER_LIMIT_REF_KT = 160.0
 MIN_RUDDER_TRAVEL_DEG = 4.0
 VMC_SIDESLIP_DEG = 12.0  # beta beyond this with an engine out is losing it
+
+# The ground roll. Nosewheel steering is quoted per degree of rudder pedal, and
+# rotation is deliberately allowed a little before VR because the pilot's input
+# is a held command rather than a sharp pull.
+NOSEWHEEL_RATE_DEG_S = 0.55
+ROTATE_MARGIN = 0.98
+MAX_ROTATION_DEG = 15.0
+
 LOW_FUEL_FRACTION = 0.05
 GPWS_HARD_FT = 500.0
 GPWS_SOFT_FT = 1000.0
 
 # How far the aircraft may travel before the surrounding airfields are refreshed.
 AIRFIELD_RELOAD_NM = 40.0
+
+# Where a flight begins.
+AIRBORNE_START = "airborne"
+RUNWAY_START = "runway"
 
 # Status values
 FLYING = "flying"
@@ -116,6 +128,9 @@ class FlightState:
     reverse_thrust: bool = False
     touchdown: dict = None  # the graded arrival, once there is one
     landing_field_ident: str = ""
+    # Fixed when a ground roll begins, so that steering with the nosewheel
+    # cannot flip the aircraft onto the reciprocal halfway down the runway.
+    roll_direction_deg: float = None
 
     cmd_pitch_deg: float = 0.0
     cmd_bank_deg: float = 0.0
@@ -229,6 +244,9 @@ class Readout:
     # The whole speed tape -- VLS, the alpha marks, green dot, Vmax. `vref_kt`
     # is one of its fields, kept here as well because it predates the set.
     speeds: object = None
+    # V1, VR and V2. Meaningful on the ground, and computed there rather than
+    # in a display so that both front ends bug the same speeds.
+    takeoff: object = None
     leg: object = None
     wind_speed_kt: float = 0.0
     wind_dir_deg: float = 0.0
@@ -308,8 +326,9 @@ class Simulator:
     # -- construction --------------------------------------------------
 
     @classmethod
-    def new_flight(cls, aircraft_key, weather_key, seed=20260905, altitude_ft=5000.0):
-        """Phase 2 initial condition: 5,000 ft, straight and level, trimmed."""
+    def new_flight(cls, aircraft_key, weather_key, seed=20260905,
+                   altitude_ft=5000.0, start=AIRBORNE_START):
+        """A new flight: airborne and trimmed, or lined up on the runway."""
         craft = fleet.FLEET_BY_KEY[aircraft_key]
         # Start at a sensible low-altitude manoeuvring speed for the type.
         ias_kt = 250.0 if craft.wing_area_m2 < 200 else 270.0
@@ -346,6 +365,9 @@ class Simulator:
         state.initial_fuel_kg = craft.start_fuel_kg
         state.max_altitude_ft = altitude_ft
         sim = cls(state)
+        if start == RUNWAY_START:
+            sim._place_on_runway()
+            return sim
         # Trim: set pitch to whatever holds level flight at this speed and mass,
         # and set thrust to match drag, so the aeroplane genuinely starts stable.
         trim_pitch = sim.level_flight_pitch_deg()
@@ -353,6 +375,40 @@ class Simulator:
         state.cmd_pitch_deg = trim_pitch
         state.throttle_pct = sim.throttle_for_level_flight()
         return sim
+
+    def _place_on_runway(self):
+        """Line the aircraft up on the threshold, brakes on, ready to go.
+
+        The first authored field, because a departure wants a runway a pilot can
+        recognise and come back to rather than whichever patch of flat ground
+        the procedural search happened to find.
+        """
+        s = self.state
+        field = self.airfields.nearest(*airfield.HOME_CENTRE_NM, radius_nm=200.0)
+        direction = field.runway_heading_deg
+        rad = math.radians(direction)
+        half_nm = field.runway_length_nm / 2.0
+        s.x_nm = field.x_nm - math.sin(rad) * half_nm
+        s.y_nm = field.y_nm - math.cos(rad) * half_nm
+        s.heading_deg = direction
+        s.roll_direction_deg = direction
+        s.altitude_ft = self.terrain.elevation(s.x_nm, s.y_nm)
+        s.tas_ms = 0.0
+        s.pitch_deg = s.cmd_pitch_deg = 0.0
+        s.bank_deg = s.cmd_bank_deg = 0.0
+        s.gamma_deg = 0.0
+        s.throttle_pct = 0.0
+        s.on_ground = True
+        s.status = ROLLOUT
+        s.touchdown = None
+        s.landing_field_ident = field.ident
+        # Flap 1 and the brakes set: the configuration the V-speeds assume, and
+        # an aeroplane that does not roll away while the pilot reads the panel.
+        s.flaps = 1
+        s.gear_down = True
+        s.brakes = 1.0
+        s.max_altitude_ft = s.altitude_ft
+        s.min_agl_ft = 0.0
 
     # -- trim solutions ------------------------------------------------
 
@@ -532,6 +588,12 @@ class Simulator:
         alpha_deg = s.pitch_deg - s.gamma_deg
 
         cl, stalled = self._lift_coefficient(alpha_deg)
+        # Ground spoilers dump the lift; in the air the same panels are a
+        # speedbrake and only cost drag. Gated on `on_ground` so nothing in
+        # flight changes, and applied here rather than in the rollout because
+        # `_aero_state` is the one place forces are allowed to come from.
+        if s.on_ground and s.spoilers:
+            cl *= fleet.GROUND_SPOILER_LIFT_FACTOR
         cd = craft.cd_0_for_config(s.flaps, s.gear_down, s.spoilers)
         cd += craft.induced_drag_factor * cl * cl
         if mach_number > craft.mach_crit:
@@ -884,34 +946,88 @@ class Simulator:
         s.landing_field_ident = field.ident
 
     def _ground_substep(self, dt):
-        """Rolling out: friction, reverse thrust and the end of the runway."""
+        """On the runway: the takeoff roll and the landing rollout.
+
+        One function for both, because it is the same physics either way --
+        thrust against friction and drag, with the wing taking more of the
+        weight the faster it goes. Which of the two this is depends on
+        `touchdown`: a roll that has not landed from anywhere is a departure.
+        """
         s = self.state
+        craft = self.aircraft
         field = self.airfields.by_ident(
             s.landing_field_ident, s.x_nm, s.y_nm, radius_nm=15.0
         )
         if field is None:
             s.status = LANDED
             return
+        departing = s.touchdown is None
 
-        direction = field.landing_direction_for_heading(s.heading_deg)
+        # The direction is fixed when the roll begins rather than re-derived
+        # from the heading each tick, so that steering with the nosewheel cannot
+        # flip the aircraft onto the reciprocal halfway down the runway.
+        if s.roll_direction_deg is None:
+            s.roll_direction_deg = field.landing_direction_for_heading(s.heading_deg)
+        direction = s.roll_direction_deg
         rad = math.radians(direction)
 
-        decel = landing.rollout_deceleration(self)
-        s.tas_ms = max(0.0, s.tas_ms - decel * dt)
+        thrust, drag, friction = landing.ground_forces(self)
+        s.tas_ms = max(0.0, s.tas_ms + (thrust - drag - friction) / s.mass_kg * dt)
+        ias_kt = atm.tas_to_ias(s.tas_ms, s.altitude_ft) * atm.KT_PER_MS
 
-        # Rolling straight down the runway; the nosewheel keeps it there.
-        s.heading_deg = direction
-        s.altitude_ft = self.terrain.elevation(s.x_nm, s.y_nm)
+        # Nosewheel steering, while the rudder pedals still have something to
+        # push against. Above sixty knots or so the fin takes over and the
+        # aircraft weathercocks instead of steering.
+        if s.tas_ms > 1.5:
+            authority = clamp(1.0 - (ias_kt - 20.0) / 60.0, 0.15, 1.0)
+            s.heading_deg = wrap360(
+                s.heading_deg + s.rudder_deg * NOSEWHEEL_RATE_DEG_S * authority * dt
+            )
+        else:
+            s.heading_deg = direction
+        s.sideslip_deg = 0.0
+        s.bank_deg = s.cmd_bank_deg = 0.0
+        s.gamma_deg = 0.0
+
+        ground_ft = self.terrain.elevation(s.x_nm, s.y_nm)
+        if departing:
+            # Rotation. The pitch command only bites past VR, and the aircraft
+            # leaves the ground when the wing genuinely carries it -- there is
+            # no lift-off speed written down anywhere.
+            if ias_kt > fbw.takeoff_speeds(self).vr * ROTATE_MARGIN:
+                step = craft.pitch_rate_deg_s * dt
+                target = clamp(s.cmd_pitch_deg, 0.0, MAX_ROTATION_DEG)
+                s.pitch_deg += clamp(target - s.pitch_deg, -step, step)
+            else:
+                s.pitch_deg = clamp(s.pitch_deg, 0.0, 0.5)
+            if (
+                self._aero_state().lift > s.mass_kg * atm.G0
+                and s.pitch_deg > 0.5
+            ):
+                s.on_ground = False
+                s.status = FLYING
+                s.altitude_ft = ground_ft + 1.0
+                s.cmd_pitch_deg = s.pitch_deg
+                s.roll_direction_deg = None
+        else:
+            # After landing the nose comes down and stays down.
+            step = craft.pitch_rate_deg_s * dt
+            s.pitch_deg += clamp(0.0 - s.pitch_deg, -step, step)
+
+        if s.on_ground:
+            s.altitude_ft = ground_ft
         s.x_nm += math.sin(rad) * s.tas_ms * dt * atm.NM_PER_M
         s.y_nm += math.cos(rad) * s.tas_ms * dt * atm.NM_PER_M
 
-        if self._thrust_n() > 0.0:
+        if self._thrust_n() > 0.0 and not s.reverse_thrust:
             burn = min(
                 self.aircraft.tsfc * self._thrust_n() * dt, s.fuel_kg
             )
             s.fuel_kg -= burn
             s.mass_kg -= burn
         s.elapsed_s += dt
+        if not s.on_ground:
+            return
 
         along, _across = field.frame_for(s.x_nm, s.y_nm, direction)
         if along > field.runway_length_ft:
@@ -919,7 +1035,9 @@ class Simulator:
             s.status = OVERRUN
             return
 
-        if s.tas_ms * atm.KT_PER_MS < landing.STOPPED_KT:
+        # Only an arrival ends when it stops. A takeoff roll that has not begun
+        # yet is an aeroplane sitting on a runway, not a completed flight.
+        if not departing and s.tas_ms * atm.KT_PER_MS < landing.STOPPED_KT:
             s.tas_ms = 0.0
             s.status = LANDED
 
@@ -1041,6 +1159,7 @@ class Simulator:
         readout.approach = landing.approach_guidance(self)
         readout.speeds = fbw.characteristic_speeds(self)
         readout.vref_kt = readout.speeds.vref
+        readout.takeoff = fbw.takeoff_speeds(self)
         readout.leg = navigation.leg_for(self, readout)
         readout.warnings = self._warnings(readout)
         # Once the approach is known, so is whether the localiser is captured,

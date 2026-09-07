@@ -465,6 +465,10 @@ const FLAP_CL   = [0, .40, .75, 1.05, 1.35];
 const FLAP_CD   = [0, .008, .020, .038, .062];
 const FLAP_NAME = ["UP", "1", "2", "3", "FULL"];
 const FLAP_VFE  = [999, 230, 200, 185, 177];
+/* What is left of the wing's lift once the ground spoilers are out. Their job
+   on the runway is not drag -- it is to put the weight onto the wheels so the
+   brakes have something to work against. (aircraft.GROUND_SPOILER_LIFT_FACTOR) */
+const GROUND_SPOILER_LIFT_FACTOR = 0.35;
 
 const aspectRatio = a => a.span * a.span / a.wingArea;
 const clAlpha = a => { const ar = aspectRatio(a); return 2 * Math.PI * ar / (2 + Math.sqrt(ar * ar + 4)); };
@@ -1025,7 +1029,11 @@ function aeroState(a, s) {
   const rho = density(s.alt);
   const m = machOf(v, s.alt);
   const alpha = s.pitch - s.gamma;
-  const { cl, stalled } = liftCoefficient(a, s, alpha);
+  let { cl, stalled } = liftCoefficient(a, s, alpha);
+  /* Ground spoilers dump the lift; in the air the same panels are a speedbrake
+     and only cost drag. Without this the wing still carries most of the
+     aeroplane at touchdown and the brakes barely bite. */
+  if (s.onGround && s.spoilers) cl *= GROUND_SPOILER_LIFT_FACTOR;
   let cd = cd0Config(a, s.flaps, s.gear, s.spoilers) + inducedK(a) * cl * cl;
   if (m > a.machCrit) cd += a.waveK * Math.pow(m - a.machCrit, 3);
   cd += SIDESLIP_DRAG_K * s.beta * s.beta + RUDDER_DRAG_K * Math.abs(s.rudder);
@@ -1191,11 +1199,13 @@ function groundSubstep(a, s, dt) {
 
   /* Weight on wheels falls as the wing starts carrying the aircraft, so
      braking fades out exactly as it does in reality -- which is why you cannot
-     stop a fast aeroplane with the brakes alone. */
+     stop a fast aeroplane with the brakes alone. The spoilers are what fix
+     that, and they fix it by destroying the lift rather than by multiplying
+     the friction: see GROUND_SPOILER_LIFT_FACTOR in aeroState. */
   const weight = s.mass * G0;
   const onWheels = Math.max(0, weight - aero.lift);
   const mu = ROLLING_FRICTION + (BRAKING_FRICTION - ROLLING_FRICTION) * s.brakes;
-  const friction = mu * onWheels * (s.spoilers ? 1.25 : 1.0);
+  const friction = mu * onWheels;
 
   const accel = (thrust - aero.drag - friction) / s.mass;
   s.tas = Math.max(0, s.tas + accel * dt);

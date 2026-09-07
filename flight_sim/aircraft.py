@@ -206,6 +206,18 @@ class Aircraft:
         return cd
 
 
+# What is left of the wing's lift once the ground spoilers are out.
+#
+# In the air the same lever is a speedbrake and costs drag, which is what
+# `cd_0_for_config` charges for it. On the ground the panels deploy fully and
+# their job is not drag at all -- it is to destroy the lift, so that the weight
+# goes onto the wheels and the brakes have something to work against. Without
+# this the wing still carries most of the aeroplane at touchdown and the brakes
+# barely bite, which is exactly the trap that makes weight-on-wheels friction
+# look wrong when it is right.
+GROUND_SPOILER_LIFT_FACTOR = 0.35
+
+
 def _clamp_flap(setting):
     return max(0, min(len(FLAP_CL_BONUS) - 1, int(setting)))
 

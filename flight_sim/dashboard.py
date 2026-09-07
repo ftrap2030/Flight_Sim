@@ -47,7 +47,7 @@ def slip_ball(sideslip_deg, max_deg=15.0):
 SPEED_TAPE_WIDTH = 44
 
 
-def speed_tape(readout):
+def speed_tape(readout, on_ground=False):
     """The speed scale, in one line of characters.
 
     The same marks the glass PFD draws, from the same `readout.speeds`: the
@@ -76,12 +76,21 @@ def speed_tape(readout):
     put(speeds.vmax, "]")
     put(speeds.vls, "[")
     put(speeds.alpha_prot, "<")
+    # On the ground the V-speeds are what the pilot is actually watching for,
+    # so they go on top of everything except the aircraft's own speed.
+    if on_ground and readout.takeoff is not None:
+        put(readout.takeoff.v1, "1")
+        put(readout.takeoff.vr, "R")
+        put(readout.takeoff.v2, "2")
     put(readout.ias_kt, "^")
     # Piped rather than bracketed, because `[` is one of the marks and a frame
     # made of the same glyph reads as a sixth mark that never moves.
-    return "  SPD |{}|  VLS {:.0f}  MAX {:.0f}".format(
-        "".join(cells), speeds.vls, speeds.vmax
-    )
+    tail = "  VLS {:.0f}  MAX {:.0f}".format(speeds.vls, speeds.vmax)
+    if on_ground and readout.takeoff is not None:
+        tail = "  V1 {:.0f}  VR {:.0f}  V2 {:.0f}".format(
+            readout.takeoff.v1, readout.takeoff.vr, readout.takeoff.v2
+        )
+    return "  SPD |{}|{}".format("".join(cells), tail)
 
 
 def attitude_indicator(pitch_deg, bank_deg):
@@ -162,7 +171,7 @@ def render(sim, readout, title=None):
     for row in attitude_indicator(r.pitch_deg, r.bank_deg):
         lines.append(row)
     lines.append("")
-    lines.append(speed_tape(r))
+    lines.append(speed_tape(r, on_ground=s.on_ground))
     lines.append(
         "  IAS {:>5.0f} kt   ALT {:>7,.0f} ft   HDG {:>03.0f}".format(
             r.ias_kt, r.altitude_ft, r.heading_deg

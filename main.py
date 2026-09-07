@@ -18,7 +18,7 @@ import json
 import sys
 
 from flight_sim import aircraft as fleet
-from flight_sim import dashboard, game
+from flight_sim import dashboard, game, physics
 from flight_sim import weather as wx
 
 
@@ -48,6 +48,12 @@ def build_parser():
     parser.add_argument("--seed", type=int, default=20260905, help="World seed.")
     parser.add_argument(
         "--altitude", type=float, default=5000.0, help="Starting altitude in feet."
+    )
+    parser.add_argument(
+        "--start",
+        choices=(physics.AIRBORNE_START, physics.RUNWAY_START),
+        default=physics.AIRBORNE_START,
+        help="Begin airborne and trimmed, or lined up on the runway.",
     )
     parser.add_argument(
         "--command",
@@ -120,7 +126,8 @@ def main(argv=None):
             print("Unknown weather: {}".format(args.weather), file=sys.stderr)
             return 2
         session = game.Session.new(
-            craft.key, profile.key, seed=args.seed, altitude_ft=args.altitude
+            craft.key, profile.key, seed=args.seed, altitude_ft=args.altitude,
+            start=args.start,
         )
         print(session.initial_report())
     else:

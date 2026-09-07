@@ -23,6 +23,7 @@ from flight_sim import atmosphere as atm  # noqa: E402
 from flight_sim import autopilot  # noqa: E402
 from flight_sim import fbw  # noqa: E402
 from flight_sim import navigation  # noqa: E402
+from flight_sim import physics  # noqa: E402
 from flight_sim.game import Session  # noqa: E402
 
 # Knots. The two builds compute in the same units from the same constants, so
@@ -47,11 +48,13 @@ def python_row(key, case):
     state.flaps = case["flaps"]
     state.gear_down = case["gear"]
     state.spoilers = False
-    state.on_ground = False
-    state.pitch_deg, state.bank_deg, state.gamma_deg = 2.0, 0.0, 0.0
+    state.on_ground = bool(case.get("ground"))
+    state.status = physics.ROLLOUT if state.on_ground else physics.FLYING
+    state.pitch_deg = 0.0 if state.on_ground else 2.0
+    state.bank_deg = state.gamma_deg = 0.0
     state.sideslip_deg = state.rudder_deg = 0.0
     state.alpha_floor_latched = False
-    state.throttle_pct = 60.0
+    state.throttle_pct = float(case.get("throttle", 60))
     state.elapsed_s = 100.0
     state.mass_kg = (
         craft.mtow_kg if case.get("mass") == "mtow" else craft.start_mass_kg
@@ -76,9 +79,10 @@ def python_row(key, case):
     # for one here would cost a terrain scan per case for an answer both sides
     # already agree is None.
     speeds = fbw.characteristic_speeds(sim)
+    takeoff = fbw.takeoff_speeds(sim)
     autopilot.note_mode_changes(sim, None)
     annunciator = autopilot.fma(sim, None)
-    return speeds, annunciator, autopilot.channels(state)
+    return speeds, takeoff, annunciator, autopilot.channels(state)
 
 
 def main():
@@ -92,7 +96,7 @@ def main():
     for row in data["rows"]:
         case = by_name[row["case"]]
         where = "{} / {}".format(row["key"], row["case"])
-        speeds, annunciator, channels = python_row(row["key"], case)
+        speeds, takeoff, annunciator, channels = python_row(row["key"], case)
 
         for field, browser_name in SPEED_FIELDS.items():
             mine = getattr(speeds, field)
@@ -101,6 +105,15 @@ def main():
                 failures.append(
                     "{}: {} is {:.3f} kt in Python and {:.3f} in the browser"
                     .format(where, field, mine, theirs)
+                )
+
+        for field in ("v1", "vr", "v2"):
+            mine = getattr(takeoff, field)
+            theirs = row["takeoff"][field]
+            if abs(mine - theirs) > TOLERANCE_KT:
+                failures.append(
+                    "{}: {} is {:.3f} kt in Python and {:.3f} in the browser"
+                    .format(where, field.upper(), mine, theirs)
                 )
 
         for column, expected in row["fma"].items():

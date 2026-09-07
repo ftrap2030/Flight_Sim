@@ -1,9 +1,13 @@
 """Flight dynamics: trim, envelope, failure modes and published performance."""
 
+import os
+import tempfile
 import unittest
 
 from flight_sim import aircraft as fleet
 from flight_sim import atmosphere as atm
+from flight_sim import autopilot
+from flight_sim import fbw
 from flight_sim import physics
 from flight_sim.game import Session
 
@@ -370,6 +374,192 @@ class TestAngleHelpers(unittest.TestCase):
         self.assertEqual(physics.clamp(5, 0, 3), 3)
         self.assertEqual(physics.clamp(-5, 0, 3), 0)
         self.assertEqual(physics.clamp(2, 0, 3), 2)
+
+
+def on_the_runway(key="a320neo", weather="clear"):
+    return Session.new(key, weather, seed=42, start=physics.RUNWAY_START)
+
+
+def take_off(session, ticks=60, seconds=2.0, rotate_to=12.0):
+    """Full power, hold the stick back, and see what the aeroplane does.
+
+    Returns the readout at lift-off and how much runway it took, or None if it
+    never got airborne.
+    """
+    sim = session.sim
+    state = sim.state
+    field = sim.airfields.by_ident(
+        state.landing_field_ident, state.x_nm, state.y_nm
+    )
+    direction = state.roll_direction_deg
+    start_along = field.frame_for(state.x_nm, state.y_nm, direction)[0]
+
+    state.brakes = 0.0
+    state.throttle_pct = 100.0
+    state.cmd_pitch_deg = rotate_to
+    for _ in range(ticks):
+        sim.step_tick(seconds)
+        if state.status not in physics.LIVE_STATUSES:
+            return None, field, None
+        if not state.on_ground:
+            along = field.frame_for(state.x_nm, state.y_nm, direction)[0]
+            return sim.readout(), field, along - start_along
+    return None, field, None
+
+
+class TestTakeoff(unittest.TestCase):
+    """The departure. The Python had none of this until the browser grew one."""
+
+    def test_a_runway_start_is_stationary_on_the_paving(self):
+        session = on_the_runway()
+        state = session.sim.state
+        field = session.sim.airfields.by_ident(
+            state.landing_field_ident, state.x_nm, state.y_nm
+        )
+        self.assertTrue(state.on_ground)
+        self.assertEqual(state.status, physics.ROLLOUT)
+        self.assertAlmostEqual(state.tas_ms, 0.0)
+        self.assertTrue(field.is_over_runway(state.x_nm, state.y_nm))
+        # Lined up, brakes set, and configured for the speeds it will be flown at.
+        self.assertAlmostEqual(state.heading_deg, field.runway_heading_deg, places=6)
+        self.assertEqual(state.brakes, 1.0)
+        self.assertGreaterEqual(state.flaps, 1)
+
+    def test_the_brakes_hold_it_against_full_power(self):
+        """Otherwise the aeroplane rolls away while the pilot reads the panel."""
+        session = on_the_runway()
+        session.sim.state.throttle_pct = 100.0
+        for _ in range(4):
+            session.sim.step_tick(2.0)
+        self.assertLess(session.sim.readout().ias_kt, 25.0)
+
+    def test_it_gets_airborne_within_the_runway(self):
+        session = on_the_runway()
+        readout, field, used = take_off(session)
+        self.assertIsNotNone(readout, "never left the ground")
+        self.assertLess(used, field.runway_length_ft)
+        self.assertEqual(session.sim.state.status, physics.FLYING)
+
+    def test_it_rotates_at_vr_and_not_before(self):
+        """The stick is held back from the start; only VR lets it bite."""
+        session = on_the_runway()
+        sim = session.sim
+        vr = fbw.takeoff_speeds(sim).vr
+        sim.state.brakes = 0.0
+        sim.state.throttle_pct = 100.0
+        sim.state.cmd_pitch_deg = 12.0
+        pitched_at = None
+        for _ in range(60):
+            sim.step_tick(2.0)
+            if sim.state.pitch_deg > 1.0:
+                pitched_at = sim.readout().ias_kt
+                break
+        self.assertIsNotNone(pitched_at, "never rotated")
+        self.assertGreater(pitched_at, vr * 0.95)
+
+    def test_the_annunciator_says_man_toga_during_the_roll(self):
+        """The mode that had no way of being reached until there was a takeoff."""
+        session = on_the_runway()
+        session.sim.state.throttle_pct = 100.0
+        readout = session.sim.readout()
+        column = autopilot.fma(session.sim, readout)["thrust"]
+        self.assertEqual(column["engaged"][0], "MAN TOGA")
+
+    def test_a_heavier_aeroplane_needs_more_runway(self):
+        light = on_the_runway("a320neo")
+        heavy = on_the_runway("a320neo")
+        heavy.sim.state.mass_kg = heavy.sim.aircraft.mtow_kg
+        _r1, _f1, short = take_off(light)
+        _r2, _f2, long = take_off(heavy)
+        self.assertIsNotNone(short)
+        self.assertIsNotNone(long)
+        self.assertGreater(long, short)
+
+    def test_sitting_still_is_not_a_completed_flight(self):
+        """A takeoff roll that has not begun is an aeroplane on a runway."""
+        session = on_the_runway()
+        for _ in range(3):
+            session.sim.step_tick(2.0)
+        self.assertEqual(session.sim.state.status, physics.ROLLOUT)
+        self.assertFalse(session.finished)
+
+    def test_running_out_of_runway_without_flying_is_an_overrun(self):
+        """A rejected takeoff that is rejected too late."""
+        session = on_the_runway()
+        state = session.sim.state
+        state.brakes = 0.0
+        state.throttle_pct = 100.0
+        state.cmd_pitch_deg = 0.0        # never rotate
+        for _ in range(90):
+            session.sim.step_tick(2.0)
+            if state.status not in physics.LIVE_STATUSES:
+                break
+        self.assertEqual(state.status, physics.OVERRUN)
+
+    def test_the_whole_roll_survives_a_save_and_load(self):
+        """CLAUDE.md: a session resumed from disk continues *identically*.
+
+        The roll is the hardest case for that, because it carries state a
+        cruising aircraft does not -- which end of the runway is being used, and
+        whether this roll has landed from anywhere.
+        """
+        path = os.path.join(tempfile.mkdtemp(), "roll.json")
+        straight = on_the_runway()
+        straight.sim.state.brakes = 0.0
+        straight.sim.state.throttle_pct = 100.0
+        straight.sim.state.cmd_pitch_deg = 12.0
+
+        interrupted = on_the_runway()
+        interrupted.sim.state.brakes = 0.0
+        interrupted.sim.state.throttle_pct = 100.0
+        interrupted.sim.state.cmd_pitch_deg = 12.0
+
+        for tick in range(12):
+            straight.sim.step_tick(2.0)
+            if tick == 4:
+                interrupted.save(path)
+                interrupted = Session.load(path)
+            interrupted.sim.step_tick(2.0)
+
+        a, b = straight.sim.state, interrupted.sim.state
+        for name in ("tas_ms", "altitude_ft", "pitch_deg", "heading_deg",
+                     "x_nm", "y_nm", "mass_kg", "roll_direction_deg"):
+            self.assertAlmostEqual(
+                getattr(a, name), getattr(b, name), places=9, msg=name
+            )
+        self.assertEqual(a.on_ground, b.on_ground)
+        self.assertEqual(a.status, b.status)
+
+
+class TestTakeoffSpeeds(unittest.TestCase):
+    def test_they_come_in_order(self):
+        for craft in fleet.FLEET:
+            session = Session.new(craft.key, "clear", seed=42)
+            v = fbw.takeoff_speeds(session.sim)
+            self.assertLess(v.v1, v.vr, craft.key)
+            self.assertLess(v.vr, v.v2, craft.key)
+
+    def test_they_are_quoted_against_the_takeoff_configuration(self):
+        """Not the clean wing -- nobody takes off with the flaps up.
+
+        Quoting the clean stall speed would put VR some thirty knots high, which
+        is the sort of error that only shows up as the aeroplane failing to
+        leave the ground.
+        """
+        session = Session.new("a320neo", "clear", seed=42)
+        session.sim.state.flaps = 0
+        clean = fbw.takeoff_speeds(session.sim)
+        session.sim.state.flaps = 1
+        flap_one = fbw.takeoff_speeds(session.sim)
+        self.assertAlmostEqual(clean.vr, flap_one.vr, places=9)
+
+    def test_v2_clears_the_stall_in_the_takeoff_configuration(self):
+        for craft in fleet.FLEET:
+            session = Session.new(craft.key, "clear", seed=42)
+            session.sim.state.flaps = 1
+            v = fbw.takeoff_speeds(session.sim)
+            stall = fbw.characteristic_speeds(session.sim).stall
+            self.assertGreater(v.v2, stall * 1.15, craft.key)
 
 
 if __name__ == "__main__":

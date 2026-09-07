@@ -6,7 +6,7 @@ Python is stdlib only, `unittest`, no dependencies.
 
 ```bash
 python main.py                                  # play it
-python -m unittest discover -s tests -t .       # 374 tests, ~60 s
+python -m unittest discover -s tests -t .       # 416 tests, ~75 s
 python main.py --list                           # fleet and weather menus
 python main.py --spec a350-1000                 # one type's card and drawing
 open web/anfell.html                            # the browser build
@@ -26,9 +26,9 @@ flight_sim/
   terrain.py       Ridged-fBm world, graded sites, approach surfaces.
   weather.py       Immutable profiles + a mutable WeatherState.
   airfield.py      Airfield geometry; procedural and authored sources.
-  landing.py       Approach guidance, touchdown grading, rollout physics.
+  landing.py       Approach guidance, touchdown grading, ground forces.
   navigation.py    Routes, leg guidance, the end-of-flight debrief.
-  autopilot.py     ALT / V/S / HDG / SPD / APPR controllers.
+  autopilot.py     ALT / V/S / HDG / SPD / NAV / APPR, and the FMA.
   fbw.py           Normal / alternate / direct law and the protections.
   physics.py       FlightState, Readout, Simulator. The integrator.
   narrator.py      The 251-clause prose engine.
@@ -38,7 +38,7 @@ flight_sim/
   game.py          Session: setup, the loop, persistence.
 web/
   anfell.html      The whole browser build. One file, no build step.
-  tools/           Playwright checks: cruise flow, and render screenshots.
+  tools/           Playwright checks: cruise flow, model parity, screenshots.
 ```
 
 ## Conventions
@@ -167,7 +167,7 @@ has an owner.
 
 ## Testing patterns
 
-- One test file per module, named for it. 374 tests, ~60 s.
+- One test file per module, named for it. 416 tests, ~75 s.
 - Assert against **published figures** where they exist: ISA density tables,
   cruise fuel flow, service ceilings, Vmca. These catch calibration drift that
   self-consistent tests never would.
@@ -219,6 +219,28 @@ CL_max — it limits the g demanded, not the g the wing can make. Clamping it ma
 it a second, accidental AoA protection, silently active in the two laws that are
 supposed to have none.
 
+## The ground roll is one function, read in two directions
+
+`Simulator._ground_substep` does both the takeoff roll and the landing rollout,
+because it is the same physics either way: thrust against friction and drag,
+with the wing taking more of the weight the faster it goes. Which one it is
+depends on `touchdown` — a roll that has not landed from anywhere is a
+departure. Splitting them into two functions would mean two copies of the
+friction model, and they would drift.
+
+Friction acts on the weight the **wheels** are carrying, not the aeroplane's.
+At touchdown the wing is still doing most of the work and the brakes have almost
+nothing to bite on; the load transfers as speed decays and lift falls with its
+square. That is why you cannot stop a fast aeroplane on the brakes alone.
+
+Which makes the spoilers load-bearing, and they work the way the real ones do:
+`GROUND_SPOILER_LIFT_FACTOR` **destroys the lift**, and the weight that lands on
+the wheels is what lets the brakes work. It is gated on `on_ground`, so in the
+air the same panels are a speedbrake and only cost drag. An earlier version
+multiplied the friction by 1.25 instead, which asserted the effect rather than
+explaining it. Forgetting the spoilers now costs about fifteen hundred feet of
+runway, which is roughly right.
+
 ## `web/` is a port of this model, not a second one
 
 `web/anfell.html` carries the atmosphere, the drag polar, the thrust lapse, the
@@ -232,10 +254,14 @@ figures in `tests/test_physics.py::CRUISE_TARGETS` only catch it on one side.
 `web/tools/cruise_check.js` holds the browser build to those same targets, which
 is the guard; run it after touching `aircraft.py` or `physics.py`.
 
-Two things exist only in the browser build, and `web/README.md` says why:
-**takeoff**, which the text simulator deliberately has none of, and everything
-to do with rendering. Nothing in `flight_sim/` may import from or depend on
-`web/`.
+`web/tools/parity_check.js` and `.py` are the other guard, and they cover what
+the glass cockpit puts on the glass: the speed marks, the V-speeds and the five
+Flight Mode Annunciator columns, across fifty-two states and four types. That is
+the easier half to get wrong — a speed tape with its marks in the wrong place
+still looks exactly like a speed tape.
+
+Only rendering exists solely in the browser now. Nothing in `flight_sim/` may
+import from or depend on `web/`.
 
 Two places the picture and the physics deliberately disagree, both rendering
 only and both bounded: sub-kilometre relief is *carved down* into the height
@@ -246,10 +272,7 @@ which the airfield search reads — is untouched by both.
 
 ## Things deliberately not modelled
 
-No takeoff in the Python — every flight begins airborne at 5,000 ft, and
-`on_ground` exists only for the rollout after landing. (The browser build does
-have one; whether it belongs here too is an open question.) No failures beyond
-engines. No multi-leg
+No failures beyond engines. No multi-leg
 route command, though `navigation.Route` fully supports one. The A321 is the
 neo; there is no A321ceo.
 

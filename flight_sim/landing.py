@@ -247,23 +247,41 @@ def approach_guidance(sim, field=None):
     )
 
 
-def rollout_deceleration(sim):
-    """Deceleration on the ground, in m/s^2 (positive means slowing).
+def ground_forces(sim):
+    """(thrust, drag, friction) on the runway, in newtons.
 
-    Wheel friction, aerodynamic drag, and reverse thrust if it is selected.
+    One place, because the takeoff roll and the landing rollout are the same
+    physics read in opposite directions, and two copies of it would drift.
+
+    Friction acts on the weight the *wheels* are carrying, not on the weight of
+    the aeroplane. At touchdown the wing is still doing most of the work and the
+    brakes have very little to bite on; the load transfers to the wheels as the
+    speed decays and lift falls with the square of it. That is why you cannot
+    stop a fast aeroplane on the brakes alone, and why the spoilers come out
+    first -- they destroy the lift, which is what puts the weight where the
+    brakes can use it. Forgetting them costs about fifteen hundred feet.
     """
     state = sim.state
     aero = sim._aero_state()
-    friction = ROLLING_FRICTION + (BRAKING_FRICTION - ROLLING_FRICTION) * state.brakes
-    if state.spoilers:
-        # Spoilers dump the lift the wheels would otherwise be relieved of.
-        friction *= 1.25
+    mu = ROLLING_FRICTION + (BRAKING_FRICTION - ROLLING_FRICTION) * state.brakes
+    on_wheels = max(0.0, state.mass_kg * atm.G0 - aero.lift)
 
-    weight = state.mass_kg * atm.G0
-    decel = friction * weight / state.mass_kg
-    decel += aero.drag / state.mass_kg
+    thrust = aero.thrust
     if state.reverse_thrust:
-        decel += REVERSE_THRUST_FRACTION * aero.thrust / state.mass_kg
+        thrust = -REVERSE_THRUST_FRACTION * aero.thrust
+    return thrust, aero.drag, mu * on_wheels
+
+
+def rollout_deceleration(sim):
+    """How hard the aircraft is slowing on the ground, in m/s^2.
+
+    The rollout view of `ground_forces`: everything that takes energy out,
+    reverse thrust counted as a positive contribution to stopping.
+    """
+    thrust, drag, friction = ground_forces(sim)
+    decel = (drag + friction) / sim.state.mass_kg
+    if sim.state.reverse_thrust:
+        decel += -thrust / sim.state.mass_kg
     return decel
 
 

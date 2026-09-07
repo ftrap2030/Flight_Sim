@@ -42,6 +42,19 @@ node web/tools/cruise_check.js "$PWD/web/anfell.html"
 Every type must come back inside 5% of its published block fuel flow, at the
 mass that figure belongs to.
 
+`tools/parity_check` guards the other half — what the glass cockpit puts on the
+glass:
+
+```bash
+node web/tools/parity_check.js "$PWD/web/anfell.html" > /tmp/web.json
+python web/tools/parity_check.py /tmp/web.json
+```
+
+Fifty-two states across four types: every speed mark, every V-speed and all five
+Flight Mode Annunciator columns must match `flight_sim/`. This is the easier half
+to get wrong, because a speed tape with its marks in the wrong place still looks
+exactly like a speed tape.
+
 `tools/shots.js` puts the aircraft at fixed places in the world and photographs
 them, which is how the renderer is checked:
 
@@ -54,9 +67,9 @@ where those live is a property of the machine, not of the simulator.
 
 ## What the browser build has that the Python does not
 
-* **Takeoff.** The Python simulator begins airborne at 5,000 ft by design; this
-  one begins on the runway, with V1, VR and V2 computed for the weight.
-* **Anything you can see.** Terrain, weather, the aircraft itself, time of day.
+**Anything you can see**: terrain, weather, the aircraft itself, time of day,
+and the glass cockpit. The takeoff used to be on this list; `flight_sim/` has
+one now, and `tools/parity_check` holds the two to the same V-speeds.
 
 ## What the Python has that this does not
 

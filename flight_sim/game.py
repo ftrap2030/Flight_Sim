@@ -28,9 +28,11 @@ class Session:
     # -- lifecycle -----------------------------------------------------
 
     @classmethod
-    def new(cls, aircraft_key, weather_key, seed=20260905, altitude_ft=5000.0):
+    def new(cls, aircraft_key, weather_key, seed=20260905, altitude_ft=5000.0,
+            start=physics.AIRBORNE_START):
         sim = physics.Simulator.new_flight(
-            aircraft_key, weather_key, seed=seed, altitude_ft=altitude_ft
+            aircraft_key, weather_key, seed=seed, altitude_ft=altitude_ft,
+            start=start,
         )
         return cls(sim, Narrator(seed=seed))
 
@@ -357,6 +359,25 @@ def choose_weather():
         print("Not recognised. Try `1`, `clear`, `stormy`, `foggy`, `crosswind`.\n")
 
 
+def choose_start():
+    """Airborne or on the runway."""
+    print("### Where do you want to begin?\n")
+    print("| # | Start |")
+    print("| --- | --- |")
+    print("| 1 | **On the runway** — lined up at ANFL, brakes set, flap 1 |")
+    print("| 2 | **Airborne** — 5,000 ft, trimmed and level |")
+    print()
+    while True:
+        raw = _prompt("Choose (1-2) > ").strip().lower()
+        if raw in ("quit", "exit"):
+            return None
+        if raw in ("1", "runway", "ground", "takeoff"):
+            return physics.RUNWAY_START
+        if raw in ("2", "airborne", "air", "cruise", ""):
+            return physics.AIRBORNE_START
+        print("Not recognised. Try `1` or `2`.\n")
+
+
 def run_interactive(seed=20260905):
     """Full Phase 1 + Phase 2 experience in the terminal."""
     print("=" * 72)
@@ -372,8 +393,12 @@ def run_interactive(seed=20260905):
     if profile is None:
         return 0
     print()
+    start = choose_start()
+    if start is None:
+        return 0
+    print()
 
-    session = Session.new(craft.key, profile.key, seed=seed)
+    session = Session.new(craft.key, profile.key, seed=seed, start=start)
     print(session.initial_report())
     print()
     print("---")

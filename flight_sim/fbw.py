@@ -210,6 +210,39 @@ def characteristic_speeds(sim):
     )
 
 
+@dataclass(frozen=True)
+class TakeoffSpeeds:
+    """V1, VR and V2, in knots indicated."""
+
+    v1: float  # past this, you are going flying whatever happens
+    vr: float  # rotate
+    v2: float  # safe climb-out speed on one engine
+
+
+# Multiples of the 1g stall speed in the takeoff configuration. Real V-speeds
+# come out of a performance chart that also knows the runway, the slope, the
+# wind and the temperature; these are the stall-speed relationships underneath
+# that chart, which is as much as a point-mass model can honestly claim.
+V1_FACTOR, VR_FACTOR, V2_FACTOR = 1.09, 1.15, 1.20
+
+
+def takeoff_speeds(sim):
+    """The V-speeds for this weight and configuration.
+
+    Always computed against at least flap 1, because nobody takes off with a
+    clean wing and quoting the clean stall speed here would put VR some thirty
+    knots too high.
+    """
+    s = sim.state
+    stall_kt = (
+        sim.aircraft.stall_speed_ias_ms(s.mass_kg, 1.0, max(s.flaps, 1))
+        * atm.KT_PER_MS
+    )
+    return TakeoffSpeeds(
+        v1=stall_kt * V1_FACTOR, vr=stall_kt * VR_FACTOR, v2=stall_kt * V2_FACTOR
+    )
+
+
 def load_factor_limits(state):
     """(n_min, n_max) for the current configuration."""
     if state.flaps > 0:

@@ -37,7 +37,15 @@ const CASES = [
     ap: { engaged: true, altFt: 3000, spdKt: 150, hdgDeg: 70 } },
   { name: 'heavy, flaps 3',   alt: 5000, ias: 180, flaps: 3, gear: true,
     mass: 'mtow', ap: {} },
-  { name: 'high, mach limit', alt: 41000, ias: 250, flaps: 0, gear: false, ap: {} }
+  { name: 'high, mach limit', alt: 41000, ias: 250, flaps: 0, gear: false, ap: {} },
+  /* On the runway. Newly comparable: until the Python grew a takeoff there was
+     no way to reach MAN TOGA or to bug a V-speed on the side with the tests. */
+  { name: 'lined up',         alt: 2367, ias: 0, flaps: 1, gear: true,
+    ground: true, throttle: 0, ap: {} },
+  { name: 'takeoff roll',     alt: 2367, ias: 120, flaps: 1, gear: true,
+    ground: true, throttle: 100, ap: {} },
+  { name: 'heavy departure',  alt: 2367, ias: 90, flaps: 2, gear: true,
+    ground: true, throttle: 100, mass: 'mtow', ap: {} }
 ];
 
 const TYPES = ['a320neo', 'a350', 'a380', 'a330neo'];
@@ -66,9 +74,11 @@ const TYPES = ['a320neo', 'a350', 'a380', 'a330neo'];
            cannot make two builds agree for the wrong reason. */
         Object.assign(S, {
           alt: c.alt, flaps: c.flaps, gear: c.gear, spoilers: false,
-          onGround: false, status: 'flying', pitch: 2, bank: 0, gamma: 0,
+          onGround: !!c.ground, status: c.ground ? 'rollout' : 'flying',
+          pitch: c.ground ? 0 : 2, bank: 0, gamma: 0,
           beta: 0, rudder: 0, enginesRunning: true, enginesFailed: [],
-          alphaFloorLatched: false, throttle: 60, approach: null,
+          alphaFloorLatched: false,
+          throttle: c.throttle === undefined ? 60 : c.throttle, approach: null,
           mass: c.mass === 'mtow' ? a.mtow : a.oew + a.payload + a.startFuel,
           ap: freshAutopilot(), dest: null, fmaChanged: {}, t: 100
         });
@@ -77,11 +87,14 @@ const TYPES = ['a320neo', 'a350', 'a380', 'a330neo'];
         if (c.dest) S.dest = airfieldsNear(S.x, S.y, 90)[0] || null;
 
         const sp = characteristicSpeeds(a, S);
+        const vs = vSpeeds(a, S);
         const f = fma(a, S);
         out.push({
           key, case: c.name,
           speeds: Object.fromEntries(
             Object.entries(sp).map(([k, v]) => [k, Math.round(v * 1000) / 1000])),
+          takeoff: Object.fromEntries(
+            Object.entries(vs).map(([k, v]) => [k, Math.round(v * 1000) / 1000])),
           fma: Object.fromEntries(FMA_COLUMNS.map(col => [col, {
             engaged: f[col].engaged ? f[col].engaged[0] : null,
             armed: f[col].armed ? f[col].armed[0] : null
