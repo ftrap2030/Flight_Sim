@@ -278,7 +278,13 @@ def _match_engines(text, raw):
 
     # Registered before the bare `engine failure` pattern so that
     # `fail engine 2` still names an engine rather than matching `fail <system>`.
-    m = re.match(r"^(?:arm\s+)?fail\s+(.{2,24})$", text)
+    #
+    # `fail` is optional after `arm` because `failures.menu` offers
+    # `arm engine failure` -- and a menu that prints a command the parser will
+    # not take is the two-places-for-one-command bug in its most annoying form.
+    # Broad as `arm <anything>` looks, it only becomes a command if `resolve`
+    # recognises the name; anything else falls through to the matchers below.
+    m = re.match(r"^(?:arm\s+(?:fail\s+)?|fail\s+)(.{2,24})$", text)
     # `fail engine 2` names an engine and belongs to the matcher below; bare
     # `fail engine` is the generic failure, so only a *digit* defers.
     if m and not re.match(r"^engine\s*\d$", m.group(1).strip()):

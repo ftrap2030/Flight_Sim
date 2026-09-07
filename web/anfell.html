@@ -324,6 +324,10 @@
         <span>Destination</span>
         <select id="sel-dest"></select>
       </label>
+      <label class="field">
+        <span>Break something</span>
+        <select id="sel-fail"></select>
+      </label>
       <div class="btn-row">
         <button id="btn-view" type="button">Chase</button>
         <button id="btn-reset" type="button">Reset</button>
@@ -347,6 +351,7 @@
         <dt>V</dt><dd>Show / hide the glass</dd>
         <dt>N / M</dt><dd>ND range down / up</dd>
         <dt>T</dt><dd>Terrain on the ND</dd>
+        <dt>W</dt><dd>ND / engine display</dd>
         <dt>L</dt><dd>Cycle control law</dd>
         <dt>P</dt><dd>Pause</dd>
       </dl>
@@ -1152,6 +1157,9 @@ function substep(a, s, wx, dt) {
   /* The fan chases the levers before anything reads the thrust, so a command
      given this substep is felt over the next several. On the ground too. */
   spoolEngines(a, s, dt);
+  /* Failures write the numbers the model already reads, so nothing below this
+     line knows one happened. */
+  applyFailures(a, s, dt);
 
   if (s.onGround) { groundSubstep(a, s, dt); return; }
 
@@ -1175,10 +1183,11 @@ function substep(a, s, wx, dt) {
   /* Dihedral effect as a bank offset, not a roll rate: a rate of a degree or
      two a second is simply erased by the roll authority on the next substep. */
   const bankTarget = s.lawBank + a.dihedral * s.beta;
-  const rollStep = a.rollRate * dt * authority;
+  const surfaces = controlRateFactor(s);
+  const rollStep = a.rollRate * dt * authority * surfaces;
   s.bank += clamp(bankTarget - s.bank, -rollStep, rollStep);
 
-  const pitchStep = a.pitchRate * dt * authority;
+  const pitchStep = a.pitchRate * dt * authority * surfaces;
   s.pitch += clamp(s.lawPitch - s.pitch, -pitchStep, pitchStep);
   if (departed) s.pitch -= STALL_NOSE_DROP * dt;
 
@@ -1269,9 +1278,11 @@ function vSpeeds(a, s) {
 }
 
 /* Ground mode, used for both the takeoff roll and the landing rollout. It is
-   the same physics either way -- thrust against friction and drag -- which is
-   why there is one function and not two. The Python engine has no takeoff at
-   all; this is the one place the browser build goes beyond it. */
+   the same physics either way -- thrust against friction and drag, with the
+   wing taking more of the weight the faster it goes -- which is why there is
+   one function and not two. Which of the two it is depends on `touchdown`: a
+   roll that has not landed from anywhere is a departure. `Simulator.
+   _ground_substep` is the same function on the other side. */
 function groundSubstep(a, s, dt) {
   const field = fieldByIdent(s.landingField);
   if (!field) { endFlight(a, s, "landed"); return; }
@@ -1289,7 +1300,8 @@ function groundSubstep(a, s, dt) {
      the friction: see GROUND_SPOILER_LIFT_FACTOR in aeroState. */
   const weight = s.mass * G0;
   const onWheels = Math.max(0, weight - aero.lift);
-  const mu = ROLLING_FRICTION + (BRAKING_FRICTION - ROLLING_FRICTION) * s.brakes;
+  const braking = BRAKING_FRICTION * brakingFactor(s);
+  const mu = ROLLING_FRICTION + (braking - ROLLING_FRICTION) * s.brakes;
   const friction = mu * onWheels;
 
   const accel = (thrust - aero.drag - friction) / s.mass;
@@ -1320,6 +1332,7 @@ function groundSubstep(a, s, dt) {
 
   if (aero.lift > weight && s.pitch > 0.5 && !s.touchdown) {
     s.onGround = false;                       // flying, because the wing says so
+    s.status = "flying";
     s.alt = groundFt + 1;
     s.lawPitch = s.cmdPitch = s.pitch;
   } else {
@@ -1409,6 +1422,7 @@ function newFlight(keepView) {
     fuel: craft.startFuel, mass: craft.oew + craft.payload + craft.startFuel,
     initialFuel: craft.startFuel,
     enginesRunning: true, enginesFailed: [], enginesOnFire: [], n1: [],
+    failures: [], jammedFlaps: null, jammedGear: null, armedFailure: null,
     law: "normal", prot: [], alphaFloorLatched: false,
     turb: [0, 0, 0],
     /* Commanded heading is the autopilot's, not the pilot's: hand-flying
@@ -1420,6 +1434,8 @@ function newFlight(keepView) {
     warnings: []
   };
   settleEngines(craft, S);
+  clearFailures(S);
+  if (armedOnTakeoff) S.armedFailure = ["engine", 0];
   if (!onGround) {
     S.pitch = S.cmdPitch = S.lawPitch = levelFlightPitch(craft, S);
     S.throttle = trimThrottle(craft, S);
@@ -1775,6 +1791,123 @@ function fma(a, s) {
                   boxed: since !== undefined && (s.t - since) < FMA_BOX_S };
   }
   return out;
+}
+
+/* ==========================================================================
+   FAILURES  (failures.py)
+
+   A port. Only what a point-mass model can honestly represent, and every one
+   of them changes a number the flight model already reads -- an engine that
+   stops still makes the yaw moment it always did, a jammed flap moves VLS and
+   Vref, a leak drains the tank the range calculation is using. Nothing
+   downstream knows a failure happened.
+
+   Deliberately absent: electrical, pressurisation, air data, inertial
+   reference. None has an analogue here, and inventing one would mean a failure
+   whose only consequence is a message about itself.
+   ========================================================================== */
+const FUEL_LEAK_KG_S = 3.5;
+const HYDRAULIC_RATE_FACTOR = 0.45;
+const BRAKE_FAILURE_FACTOR = 0.35;
+
+const ECAM_RED = "#ff4433", ECAM_AMBER = "#ffb020",
+      ECAM_CYAN = "#4fd8ff", ECAM_GREEN = "#31e07a";
+
+const FAILURES = [
+  { key: "engine", name: "engine failure", title: "ENG {n} FAIL", colour: ECAM_RED,
+    perEngine: true,
+    actions: ["THR LEVER {n} . . . IDLE", "ENG MASTER {n} . . . OFF"] },
+  { key: "fire", name: "engine fire", title: "ENG {n} FIRE", colour: ECAM_RED,
+    perEngine: true,
+    actions: ["THR LEVER {n} . . . IDLE", "ENG MASTER {n} . . . OFF",
+              "AGENT 1 . . . DISCHARGE"] },
+  { key: "fuel", name: "fuel leak", title: "FUEL LEAK", colour: ECAM_AMBER,
+    actions: ["FUEL X FEED . . . OFF", "LAND ASAP"] },
+  { key: "flaps", name: "flap jam", title: "F/CTL FLAPS LOCKED", colour: ECAM_AMBER,
+    actions: ["FLAP LEVER . . . DO NOT MOVE", "APPR SPEED . . . INCREASE"] },
+  { key: "gear", name: "gear jam", title: "L/G GEAR NOT DOWNLOCKED", colour: ECAM_AMBER,
+    actions: ["L/G . . . GRAVITY EXTN", "APPR . . . FLAP 3"] },
+  { key: "hydraulics", name: "hydraulic failure", title: "HYD SYS LO PR",
+    colour: ECAM_AMBER, actions: ["MAX SPEED . . . 320 KT", "F/CTL . . . SLOW"] },
+  { key: "brakes", name: "brake failure", title: "BRAKES DEGRADED",
+    colour: ECAM_AMBER, actions: ["BRK . . . ALTN", "LDG DIST . . . INCREASED"] }
+];
+const FAILURE_BY_KEY = Object.fromEntries(FAILURES.map(f => [f.key, f]));
+
+function triggerFailure(a, s, key, engineIndex = 0) {
+  const f = FAILURE_BY_KEY[key];
+  if (!f) return null;
+  if (f.perEngine) {
+    const i = clamp(Math.round(engineIndex), 0, a.arms.length - 1);
+    if (!s.enginesFailed.includes(i)) s.enginesFailed.push(i);
+    if (key === "fire" && !s.enginesOnFire.includes(i)) s.enginesOnFire.push(i);
+    return f.title.replace("{n}", i + 1);
+  }
+  if (!s.failures.includes(key)) s.failures.push(key);
+  /* A jam has to remember what it jammed *at*, or a later lever command would
+     move a surface that is supposed to be stuck. */
+  if (key === "flaps") s.jammedFlaps = s.flaps;
+  if (key === "gear") s.jammedGear = s.gear;
+  return f.title;
+}
+
+function clearFailures(s) {
+  s.failures = []; s.enginesFailed = []; s.enginesOnFire = [];
+  s.jammedFlaps = null; s.jammedGear = null; s.armedFailure = null;
+}
+
+const hasFailure = (s, key) => (s.failures || []).includes(key);
+const controlRateFactor = s => hasFailure(s, "hydraulics") ? HYDRAULIC_RATE_FACTOR : 1;
+const brakingFactor = s => hasFailure(s, "brakes") ? BRAKE_FAILURE_FACTOR : 1;
+
+/* Called once a substep, before the forces. */
+function applyFailures(a, s, dt) {
+  if (hasFailure(s, "fuel") && s.fuel > 0) {
+    const leaked = Math.min(FUEL_LEAK_KG_S * dt, s.fuel);
+    s.fuel -= leaked; s.mass -= leaked;
+    if (s.fuel <= 0) { s.fuel = 0; s.enginesRunning = false; }
+  }
+  if (hasFailure(s, "flaps") && s.jammedFlaps !== null) s.flaps = s.jammedFlaps;
+  if (hasFailure(s, "gear") && s.jammedGear !== null) s.gear = s.jammedGear;
+}
+
+/* An engine that quits at the moment the takeoff can no longer be rejected.
+   Everything it needs was already here -- the V-speeds, the ground roll, the
+   asymmetric thrust and the rudder that has to hold it straight. */
+function checkArmedFailure(a, s, iasKt) {
+  if (!s.armedFailure || !s.onGround) return null;
+  if (iasKt < vSpeeds(a, s).v1) return null;
+  const [key, index] = s.armedFailure;
+  s.armedFailure = null;
+  return triggerFailure(a, s, key, index);
+}
+
+/* Everything wrong with the aeroplane, engine failures included. */
+function activeFailures(s) {
+  const out = [];
+  for (const i of [...(s.enginesFailed || [])].sort((p, q) => p - q)) {
+    out.push([FAILURE_BY_KEY[(s.enginesOnFire || []).includes(i) ? "fire" : "engine"], i]);
+  }
+  for (const key of s.failures || []) {
+    if (FAILURE_BY_KEY[key]) out.push([FAILURE_BY_KEY[key], null]);
+  }
+  return out;
+}
+
+/* What the Engine/Warning Display is saying, worst first -- warnings above
+   cautions, because that is the order they have to be dealt with. */
+function ecamLines(s) {
+  const lines = [];
+  for (const [f, index] of activeFailures(s)) {
+    const sub = t => f.perEngine ? t.replace("{n}", index + 1) : t;
+    lines.push({ text: sub(f.title), colour: f.colour, indent: false });
+    for (const action of f.actions) {
+      lines.push({ text: sub(action), colour: ECAM_CYAN, indent: true, of: f.colour });
+    }
+  }
+  const rank = l => ((l.of || l.colour) === ECAM_RED ? 0 : 1);
+  return lines.map((l, i) => [l, i]).sort((x, y) =>
+    rank(x[0]) - rank(y[0]) || x[1] - y[1]).map(p => p[0]);
 }
 
 /* ==========================================================================
@@ -4247,20 +4380,163 @@ function drawNd(c, x, y, d, a, s, readout) {
 }
 
 /* ---------- the two of them, side by side ---------- */
+/* Which display sits on the right when there is not room for three. Set to the
+   E/WD by a new failure, because that is what the real one does. */
+let rightScreen = "nd";
+
 function drawEfis(readout) {
   if (!EW || !EH || document.getElementById("deck").dataset.panel === "off") return;
   const c = ectx;
   c.setTransform(1, 0, 0, 1, 0, 0);
   box(c, 0, 0, EW, EH, "#04070a");
-  /* As tall as the panel allows, and only as wide as that makes them. On a
-     wide window they sit in the middle with air either side rather than
-     stretching, because a stretched instrument is a misread one. */
-  const h = Math.min(EH * 0.97, EW / (PFD_ASPECT + 1.0 + 0.10));
-  const pw = h * PFD_ASPECT, nw = h;
-  const gap = (EW - pw - nw) / 3;
+
+  /* As tall as the panel allows, and only as wide as that makes them. On a wide
+     window they sit in the middle with air either side rather than stretching,
+     because a stretched instrument is a misread one. Three across if the window
+     can hold three; otherwise the PFD keeps its place and the right-hand screen
+     is shared, which is the compromise a narrow window forces. */
+  const three = EW / EH > 2.6;
+  const count = three ? 3 : 2;
+  const h = Math.min(EH * 0.97,
+                     EW / (PFD_ASPECT + (count - 1) * 1.0 + 0.10 * count));
+  const pw = h * PFD_ASPECT, sw = h;
+  const total = pw + sw * (count - 1);
+  const gap = (EW - total) / (count + 1);
   const top = (EH - h) / 2;
+
   drawPfd(c, gap, top, pw, h, craft, S, readout);
-  drawNd(c, gap * 2 + pw, top, nw, craft, S, readout);
+  if (three) {
+    drawEwd(c, gap * 2 + pw, top, sw, h, craft, S);
+    drawNd(c, gap * 3 + pw + sw, top, sw, craft, S, readout);
+  } else if (rightScreen === "ewd") {
+    drawEwd(c, gap * 2 + pw, top, sw, h, craft, S);
+  } else {
+    drawNd(c, gap * 2 + pw, top, sw, craft, S, readout);
+  }
+}
+
+/* ==========================================================================
+   THE E/WD — Engine and Warning Display
+
+   The engines across the top, and beneath them the warning area where the
+   aeroplane says what is wrong and what to do about it. The third screen of an
+   Airbus glass cockpit, and the one that makes a failure feel like a failure
+   rather than a number quietly changing.
+
+   Every value comes from `engineReadouts` and `ecamLines`, both ports of
+   flight_sim/ held to it by web/tools/parity_check. N1 in particular is not a
+   gauge reading -- it is the state thrust is derived from, so a needle in the
+   wrong place here would mean the aeroplane is making a thrust the panel does
+   not agree with.
+   ========================================================================== */
+
+/* An N1 dial: an arc from idle to a little past the takeoff rating, with the
+   needle and the digits inside it. Amber past the limit, red at it. */
+function drawN1Gauge(c, cx, cy, r, entry, a) {
+  const A0 = Math.PI * 0.72, A1 = Math.PI * 2.28;     // sweep, from lower left
+  const angleFor = pct => A0 + (A1 - A0) * clamp(pct / 110, 0, 1);
+
+  c.beginPath();
+  c.arc(cx, cy, r, A0, A1);
+  c.strokeStyle = "#2b4652"; c.lineWidth = r * 0.10; c.stroke();
+
+  /* The red arc past the rating: the part of the dial you are not meant to be
+     using, drawn so that being in it is obvious without reading a number. */
+  c.beginPath();
+  c.arc(cx, cy, r, angleFor(100), A1);
+  c.strokeStyle = C_RED; c.lineWidth = r * 0.10; c.stroke();
+
+  for (const tick of [0, 50, 100]) {
+    const ang = angleFor(tick);
+    line(c, cx + Math.cos(ang) * r * 0.86, cy + Math.sin(ang) * r * 0.86,
+            cx + Math.cos(ang) * r * 1.14, cy + Math.sin(ang) * r * 1.14,
+            C_WHITE, r * 0.05);
+  }
+
+  if (entry.failed) {
+    /* A failed engine is crossed out rather than left reading zero, because a
+       gauge reading zero and a gauge that has stopped meaning anything are
+       different things and the pilot has to be able to tell. */
+    c.strokeStyle = C_AMBER; c.lineWidth = r * 0.07;
+    c.beginPath();
+    c.moveTo(cx - r * 0.6, cy - r * 0.6); c.lineTo(cx + r * 0.6, cy + r * 0.6);
+    c.moveTo(cx + r * 0.6, cy - r * 0.6); c.lineTo(cx - r * 0.6, cy + r * 0.6);
+    c.stroke();
+  } else {
+    const ang = angleFor(entry.n1);
+    line(c, cx, cy, cx + Math.cos(ang) * r * 0.94, cy + Math.sin(ang) * r * 0.94,
+         entry.n1 > 100 ? C_RED : C_GREEN, r * 0.09);
+  }
+
+  /* The reading sits in a box, as it does on the aeroplane: the needle sweeps
+     through where the digits are, and two green things crossing each other is
+     the one thing a gauge must never be at a glance. */
+  const colour = entry.failed ? C_AMBER : (entry.n1 > 100 ? C_RED : C_GREEN);
+  box(c, cx - r * 0.62, cy + r * 0.22, r * 1.24, r * 0.46, "#04070a");
+  txt(c, entry.n1.toFixed(1), cx, cy + r * 0.56, r * 0.40, colour);
+  if (entry.fire) txt(c, "FIRE", cx, cy - r * 0.45, r * 0.34, C_RED);
+}
+
+/* One column per engine: the dial, then EGT and fuel flow under it. */
+function drawEngineColumn(c, x, y, w, h, entry, a) {
+  const r = Math.min(w * 0.32, h * 0.205);
+  drawN1Gauge(c, x + w / 2, y + h * 0.30, r, entry, a);
+
+  const egtColour = entry.failed ? "#6f8b98"
+    : (entry.egt > EGT_LIMIT_C ? C_RED
+      : (entry.egt > EGT_CAUTION_C ? C_AMBER : C_GREEN));
+  txt(c, Math.round(entry.egt).toString(), x + w / 2, y + h * 0.62,
+      h * 0.105, egtColour);
+  txt(c, Math.round(entry.flow).toLocaleString(), x + w / 2, y + h * 0.80,
+      h * 0.095, entry.failed ? "#6f8b98" : C_GREEN);
+}
+
+function drawEwd(c, x, y, w, h, a, s) {
+  box(c, x, y, w, h, "#04070a");
+  const entries = engineReadouts(a, s);
+
+  /* The engine block takes the top half and the warning area the bottom, which
+     is the proportion the real one uses -- and the right one, because the
+     warnings are what you read when there are any. */
+  const engH = h * 0.46;
+  txt(c, "N1", x + w * 0.055, y + h * 0.12, h * 0.048, C_WHITE, "left");
+  txt(c, "EGT", x + w * 0.055, y + engH * 0.62, h * 0.048, C_WHITE, "left");
+  txt(c, "FF", x + w * 0.055, y + engH * 0.80, h * 0.048, C_WHITE, "left");
+
+  const colW = (w * 0.86) / entries.length;
+  entries.forEach((entry, i) => {
+    drawEngineColumn(c, x + w * 0.13 + colW * i, y, colW, engH, entry, a);
+  });
+
+  /* Fuel on board, between the engines and the warnings, because it is the
+     number a leak makes urgent. */
+  const fuelY = y + engH + h * 0.055;
+  txt(c, "FOB", x + w * 0.055, fuelY, h * 0.048, C_WHITE, "left");
+  const lowFuel = s.fuel < a.fuelCap * 0.05;
+  txt(c, Math.round(s.fuel).toLocaleString() + " KG", x + w * 0.30, fuelY,
+      h * 0.070, lowFuel ? C_AMBER : C_GREEN, "left");
+
+  line(c, x + w * 0.05, fuelY + h * 0.045, x + w * 0.95, fuelY + h * 0.045,
+       "#1b2b34", Math.max(1, h * 0.006));
+
+  /* The warning area. Title in its own colour, actions indented in cyan
+     underneath -- the Airbus grammar, where cyan means "still to do". */
+  const lines = ecamLines(s);
+  const top = fuelY + h * 0.075;
+  const room = y + h - top - h * 0.02;
+  /* Shrink to fit rather than truncate: a drill with its last step missing is
+     worse than a drill in small type. */
+  const lineH = Math.min(h * 0.066, room / Math.max(lines.length, 1));
+  let ly = top;
+  for (const entry of lines) {
+    txtFit(c, entry.text, x + w * (entry.indent ? 0.16 : 0.055), ly,
+           Math.min(lineH * 0.86, h * (entry.indent ? 0.052 : 0.060)),
+           entry.colour, w * 0.80, "left");
+    ly += lineH;
+  }
+  if (!lines.length) {
+    txt(c, "NO MESSAGES", x + w / 2, fuelY + h * 0.16, h * 0.052, "#3c5460");
+  }
 }
 
 /* ==========================================================================
@@ -4422,6 +4698,7 @@ window.addEventListener("keydown", ev => {
   else if (k === "n") ndRangeIdx = Math.max(0, ndRangeIdx - 1);
   else if (k === "m") ndRangeIdx = Math.min(ND_RANGES.length - 1, ndRangeIdx + 1);
   else if (k === "t") ndTerrainOn = !ndTerrainOn;
+  else if (k === "w") rightScreen = rightScreen === "nd" ? "ewd" : "nd";
   else if (k === "p") paused = !paused;
   else if (k === "g") { s.gear = !s.gear; soundGear(s.gear); }
   else if (k === "s") s.spoilers = !s.spoilers;
@@ -4502,6 +4779,27 @@ selStart.addEventListener("change", () => { startMode = selStart.value; newFligh
    for the ND to draw -- which is the difference between a cockpit and a
    flight. Refilled whenever the aircraft moves to a new part of the world,
    because the airfields near it are not the ones it started among. */
+/* The failures menu. `arm` is the one worth having: an engine that quits at
+   the moment the takeoff can no longer be rejected. */
+let armedOnTakeoff = false;
+const selFail = el("sel-fail");
+selFail.innerHTML =
+  '<option value="">— nothing —</option>' +
+  '<option value="arm">Arm an engine failure at V1</option>' +
+  FAILURES.filter(f => f.key !== "engine" || true)
+          .map(f => `<option value="${f.key}">${f.name}</option>`).join("");
+selFail.addEventListener("change", () => {
+  const key = selFail.value;
+  armedOnTakeoff = key === "arm";
+  if (!key) { clearFailures(S); }
+  else if (key === "arm") { clearFailures(S); S.armedFailure = ["engine", 0]; }
+  else triggerFailure(craft, S, key, 0);
+  /* Something is wrong, so the E/WD is what you want to be looking at -- which
+     is what the real one does when it calls a page up by itself. */
+  if (key && key !== "arm") rightScreen = "ewd";
+  updateFcu();
+});
+
 const selDest = el("sel-dest");
 function refreshDestinations() {
   const near = airfieldsNear(S.x, S.y, 90).slice(0, 12);
@@ -4556,6 +4854,7 @@ function frame(now) {
        and the HUD, and searching the airfield grid a hundred times a frame
        would cost more than the whole integrator. */
     S.approach = approachGuidance(craft, S);
+    checkArmedFailure(craft, S, lastReadout.ias);
     if (!activeFields.length ||
         activeFields[0].distanceNm(S.x, S.y) > 26) refreshActiveFields(S.x, S.y);
     /* Once a frame, on the same schedule and for the same reason as the

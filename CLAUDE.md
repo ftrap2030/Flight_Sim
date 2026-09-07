@@ -6,7 +6,7 @@ Python is stdlib only, `unittest`, no dependencies.
 
 ```bash
 python main.py                                  # play it
-python -m unittest discover -s tests -t .       # 416 tests, ~75 s
+python -m unittest discover -s tests -t .       # 454 tests, ~70 s
 python main.py --list                           # fleet and weather menus
 python main.py --spec a350-1000                 # one type's card and drawing
 open web/anfell.html                            # the browser build
@@ -30,6 +30,8 @@ flight_sim/
   navigation.py    Routes, leg guidance, the end-of-flight debrief.
   autopilot.py     ALT / V/S / HDG / SPD / NAV / APPR, and the FMA.
   fbw.py           Normal / alternate / direct law and the protections.
+  engines.py       N1 as state, the spool, and the E/WD's numbers.
+  failures.py      Seven failures, the V1 cut, and the ECAM lines.
   physics.py       FlightState, Readout, Simulator. The integrator.
   narrator.py      The 251-clause prose engine.
   dashboard.py     Markdown instrument panel, spec cards, the law card.
@@ -167,7 +169,7 @@ has an owner.
 
 ## Testing patterns
 
-- One test file per module, named for it. 416 tests, ~75 s.
+- One test file per module, named for it. 454 tests, ~70 s.
 - Assert against **published figures** where they exist: ISA density tables,
   cruise fuel flow, service ceilings, Vmca. These catch calibration drift that
   self-consistent tests never would.
@@ -199,6 +201,36 @@ Two conventions live side by side there and are not a mistake: VLS is
 1.23 · Vs1g, the modern certification number, and Vref is 1.3 · Vs1g, the older
 one the touchdown grader has always used. Vref therefore sits a little *above*
 VLS, which is the right way round — VLS is a floor and Vref is a target.
+
+`engines.readouts` and `failures.ecam` join them: N1, N2, EGT and fuel flow per
+engine, and every warning line with its colour. The E/WD picks the font.
+
+## N1 is state; N2 and EGT are not
+
+The one rule in `engines.py` that everything else follows from. **Thrust is
+derived from the fan speed, and the fan speed chases the levers** — slower up
+(3.2 s) than down (1.6 s), which is what a turbofan does and what makes a late
+go-around a commitment rather than a keystroke. Before this, moving a lever
+rewrote the thrust in the same substep.
+
+What makes the change safe is the constraint it was built under: **at
+equilibrium the fan has caught up with the levers, so steady-state thrust is
+unchanged** and the nine calibrated cruise figures are exactly as they were.
+Only the transient moved. A standing start with the levers slammed forward now
+costs an A320neo about 150 ft more runway, 3% — which is roughly right, and is
+also why a real crew stands the engines up before releasing the brakes.
+
+The consequence to remember: **anywhere `throttle_pct` is assigned from outside
+the integrator, `Simulator.settle_engines()` belongs immediately after it** —
+the trim solvers, a state placed rather than flown into, a test setting up a
+condition. Without it the aeroplane is at cruise thrust levers with idle fans.
+This was found the honest way: cruise fuel flow fell 65% the moment thrust
+started following N1, because `trimmed_at_cruise` never told the engines.
+
+N2 and EGT are **derived, and shown, and nothing else**. EGT in particular is a
+plausible function of fan speed and the air going in; it is not published data
+for any of these types, and if it ever feeds a force it has become a fudge
+factor with a temperature's name on it.
 
 ## The control laws
 
@@ -255,10 +287,23 @@ figures in `tests/test_physics.py::CRUISE_TARGETS` only catch it on one side.
 is the guard; run it after touching `aircraft.py` or `physics.py`.
 
 `web/tools/parity_check.js` and `.py` are the other guard, and they cover what
-the glass cockpit puts on the glass: the speed marks, the V-speeds and the five
-Flight Mode Annunciator columns, across fifty-two states and four types. That is
-the easier half to get wrong — a speed tape with its marks in the wrong place
-still looks exactly like a speed tape.
+the glass cockpit puts on the glass: the speed marks, the V-speeds, the five
+Flight Mode Annunciator columns, the per-engine N1/N2/EGT/fuel flow and every
+ECAM line with its colour, across sixty-eight states and four types. That is the
+easier half to get wrong — a speed tape with its marks in the wrong place still
+looks exactly like a speed tape, and an E/WD announcing the failure of the
+engine that is still running still looks exactly like an E/WD.
+
+Four of those states are broken on purpose, and they carry a fixed number of
+spool substeps so N1 is compared **mid-decay**. A fan at idle or at the takeoff
+rating agrees in both builds whatever the two time constants are; a fan that is
+one second into running down does not.
+
+The two builds are also flown against each other rather than only sampled: the
+same world (seed 20260905 grows the same ANFL, to every printed digit), the same
+A320neo at 71.19 t, wind zeroed, levers to 100% — 5,600 ft of ground roll in the
+Python and 5,630 ft in the browser, 0.5% apart, with the residue explained by
+the Python script's coarser control cadence.
 
 Only rendering exists solely in the browser now. Nothing in `flight_sim/` may
 import from or depend on `web/`.
@@ -272,11 +317,17 @@ which the airfield search reads — is untouched by both.
 
 ## Things deliberately not modelled
 
-No failures beyond engines. No multi-leg
-route command, though `navigation.Route` fully supports one. The A321 is the
-neo; there is no A321ceo.
+No multi-leg route command, though `navigation.Route` fully supports one. The
+A321 is the neo; there is no A321ceo.
 
 Only the two control-law reversions a point-mass model can honestly represent
 are implemented: all engines out, and gear down in alternate law. Air data and
 inertial reference failures have no analogue here, which is why the law can also
 be selected by hand.
+
+`failures.py` draws the same line, and its docstring says so: electrical,
+pressurisation, air data and inertial reference are absent because **every
+failure that is present changes a number the flight model already reads**. A
+failure whose only consequence is a message about itself is not a failure, it is
+a label. The ECAM has the E/WD but no system synoptic pages (ENG, FUEL, F/CTL,
+WHEEL) — those would be drawings of systems that do not exist.

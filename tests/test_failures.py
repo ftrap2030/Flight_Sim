@@ -7,6 +7,7 @@ that a flag was set.
 """
 
 import os
+import re
 import tempfile
 import unittest
 
@@ -40,6 +41,21 @@ class TestCommands(unittest.TestCase):
             self.assertEqual(command.target, target, text)
         self.assertEqual(cmd.parse("arm fail engine").kind, "arm_failure")
         self.assertEqual(cmd.parse("failures").kind, "show_failures")
+
+    def test_every_command_the_menu_prints_actually_parses(self):
+        """A menu offering a command the parser rejects is the worst version of
+        the two-places-for-one-command bug: the aeroplane advertises it.
+
+        `arm engine failure` was exactly that -- the menu's own closing line,
+        and a ParseError.
+        """
+        offered = re.findall(r"`([^`]+)`", failures.menu())
+        self.assertTrue(offered, "the menu offers no commands at all")
+        for text in offered:
+            with self.subTest(text):
+                self.assertIn(
+                    cmd.parse(text).kind, ("failure", "arm_failure"), text
+                )
 
     def test_naming_an_engine_still_reaches_the_engine_matcher(self):
         """`fail engine 2` is about engine two, not about the word 'engine'.

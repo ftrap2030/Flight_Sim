@@ -1,13 +1,16 @@
 # Flight_Sim
 
-A text-based Airbus flight simulator with a real point-mass physics model and a
-cinematic description engine. Pick an aircraft, pick your weather, and you start
-at 5,000 feet in straight and level flight. Everything after that is up to you.
+An Airbus flight simulator with a real point-mass physics model, in two front
+ends over one model: a text simulator with a cinematic description engine, and
+an Airbus glass cockpit in the browser. Pick an aircraft, pick your weather, and
+start either lined up on the runway or at 5,000 feet in straight and level
+flight. Everything after that is up to you.
 
 No dependencies — Python 3.9+ and the standard library.
 
 ```
-python main.py
+python main.py              # the text simulator
+open web/anfell.html        # the browser build
 ```
 
 ## The fleet
@@ -122,6 +125,7 @@ Commands are typed the way a pilot would say them:
 | Turning | `turn left heading 180`, `heading 090`, `bank right 25`, `roll level` |
 | Rudder | `rudder left 10`, `full right rudder`, `centre rudder` |
 | Engines | `engine failure`, `shutdown engine 2`, `restart engines` |
+| Failures | `failures`, `fail fuel leak`, `fail hydraulics`, `arm engine failure` |
 | Configuration | `flaps 2`, `flaps full`, `gear down`, `speedbrakes out` |
 | On the ground | `max brakes`, `release brakes`, `reverse thrust`, `stow reversers` |
 | Time | `hold`, `wait 60 seconds`, `wait 2 minutes` |
@@ -155,6 +159,14 @@ the CFM56 against a published 0.59, 0.505 for the LEAP against 0.51, 0.501 for
 the Trent 7000 against 0.50, 0.434 for the Trent XWB against 0.44, and 0.427 for
 the Trent 970 against 0.43. That agreement is the evidence the numbers are
 physical rather than fudge factors, and it is a test.
+
+**The engines have inertia.** N1 is real state: the levers ask for a fan speed,
+the fan chases it — slower up than down, as a turbofan does — and thrust follows
+the *fan*, not the lever. That one lag is most of what makes an airliner feel
+heavy to fly, and it is why a late go-around is a commitment rather than a
+keystroke. Steady-state thrust is unchanged, so the calibrated cruise figures
+above are exactly as they were; only the transient moved. A standing start with
+the levers slammed forward costs an A320neo about 150 feet more runway.
 
 **Integration** — one command advances ten seconds, integrated semi-implicitly
 at 0.1 s substeps. The substepping matters: turn rate and flight path angle are
@@ -267,6 +279,52 @@ the runway, then hands the elevator back — on the centreline, at Vref, descend
 — and retards the thrust levers at 28 feet, as a real autoland does. **The flare
 is still yours.** That is the part worth flying by hand, and it is the part that
 decides whether you get a greaser or a hard landing.
+
+## Things going wrong
+
+For a long time the aeroplane could only succeed. Now seven things can break,
+and the rule every one of them obeys is that **it has to change a number the
+flight model already reads**. A failure whose only consequence is a message
+about itself is not a failure, it is a label.
+
+| `fail …` | On the ECAM | What it does to the aeroplane |
+| --- | --- | --- |
+| `engine failure` | `ENG 1 FAIL` | the fan runs down, and the live engine's arm yaws you |
+| `engine fire` | `ENG 1 FIRE` | as above, and it is a warning rather than a caution |
+| `fuel leak` | `FUEL LEAK` | drains beyond the burn, and takes the mass with it |
+| `flap jam` | `F/CTL FLAPS LOCKED` | stuck where it is, so VLS and Vref move and the approach must be flown faster |
+| `gear jam` | `L/G GEAR NOT DOWNLOCKED` | stuck up, or stuck down — and gear down reverts the law |
+| `hydraulic failure` | `HYD SYS LO PR` | roll and pitch rates fall to 45% |
+| `brake failure` | `BRAKES DEGRADED` | a third of the friction, and a much longer rollout |
+
+Deliberately absent: electrical, pressurisation, air data, inertial reference.
+None of them has an analogue in a point-mass model, which is the same line the
+control laws already draw.
+
+**The V1 cut is the scenario worth practising**, and `arm engine failure` sets
+one up: the engine quits the moment the airspeed passes V1, which is the last
+point at which the takeoff could still have been abandoned. Everything it needs
+was already here — the V-speeds, the ground roll, the asymmetric thrust and the
+rudder that has to hold it straight. Flown properly it is survivable: an A320neo
+at 71 tonnes uses about 500 feet more runway, gets airborne, and climbs away at
+around 1,000 feet a minute on the remaining engine with 11° of rudder in.
+
+The **ECAM** says what is wrong and what to do about it, in the Airbus grammar —
+red for a warning, amber for a caution, cyan for an action still to take,
+warnings above cautions because that is the order they have to be dealt with:
+
+```
+ENG 1 FIRE
+    THR LEVER 1 . . . IDLE
+    ENG MASTER 1 . . . OFF
+    AGENT 1 . . . DISCHARGE
+FUEL LEAK
+    FUEL X FEED . . . OFF
+    LAND ASAP
+```
+
+Those lines are *model* data, not display data, so the text simulator and the
+glass cockpit cannot disagree about what the aeroplane is complaining about.
 
 ## Somewhere to go
 
@@ -393,20 +451,47 @@ Other flags: `--seed` picks the world, `--altitude` the starting height,
 `--list` prints the menus, `--spec TYPE` prints one aircraft's card and drawing,
 `--json` dumps the raw readout to stderr.
 
+## The other front end
+
+```
+open web/anfell.html
+```
+
+One HTML file, no build step and no dependencies: a WebGL view out of the
+windscreen and an Airbus glass cockpit under it — PFD, Navigation Display with
+terrain, and the Engine/Warning Display. Flown continuously with the keyboard
+rather than ten seconds at a time.
+
+**It is a port of this model, not a second one.** The atmosphere, the drag
+polar, the thrust lapse, the solved TSFC figures, the control laws, the engine
+spool, the failures and the terrain function are all the same numbers again in
+JavaScript, because a browser cannot import Python. An A350-900 trimmed at FL370
+and M0.85 at 252.4 tonnes burns 5,793 kg/h in both, and a seed grows the same
+mountains in both, down to the 32-bit lattice hash.
+
+Two Playwright tools in `web/tools/` are what hold that claim up.
+`cruise_check.js` puts the browser build against the same published fuel flows
+the Python is tested on. `parity_check` compares what the glass actually shows —
+every speed mark, the V-speeds, all five Flight Mode Annunciator columns, the
+per-engine N1, N2, EGT and fuel flow, and every ECAM line with its colour —
+across sixty-eight states and four types. That is the easier half to get wrong:
+a speed tape with its marks in the wrong place still looks exactly like a speed
+tape.
+
 ## Tests
 
 ```bash
 python -m unittest discover -s tests -t .
 ```
 
-374 tests, no dependencies. They check the atmosphere against published ISA
+455 tests, no dependencies. They check the atmosphere against published ISA
 tables, stall speed against its closed form, cruise fuel flow and service
 ceiling against published figures for all nine aircraft, terrain determinism,
 save/load fidelity, that every prose template renders against a live context,
 that the artificial horizon is not upside down, that Vmc falls out of the engine
 geometry rather than being asserted, that every authored runway has a clear
-3-degree approach from both ends, and that a stopped aircraft reads zero on the
-airspeed indicator.
+3-degree approach from both ends, that a V1 cut is survivable on the remaining
+engine, and that a stopped aircraft reads zero on the airspeed indicator.
 
 Two families are worth calling out because they guard things that are easy to
 break silently. Every solved TSFC is checked against its real engine's published

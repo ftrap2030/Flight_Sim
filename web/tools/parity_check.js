@@ -6,9 +6,10 @@
 
    This is the guard on the claim that the glass cockpit shows *model* data.
    A PFD is a plausible-looking thing: a speed tape with the marks in the wrong
-   place still looks like a speed tape, and an FMA saying OP CLB when the
-   aeroplane is levelling off still looks like an FMA. Only comparing them
-   against the side with the tests catches that.
+   place still looks like a speed tape, an FMA saying OP CLB when the aeroplane
+   is levelling off still looks like an FMA, and an E/WD announcing the failure
+   of the engine that is still running still looks like an E/WD. Only comparing
+   them against the side with the tests catches any of it.
 
    Set PW and CHROMIUM to point at Playwright and a Chromium if they are not on
    the default path. */
@@ -45,7 +46,20 @@ const CASES = [
   { name: 'takeoff roll',     alt: 2367, ias: 120, flaps: 1, gear: true,
     ground: true, throttle: 100, ap: {} },
   { name: 'heavy departure',  alt: 2367, ias: 90, flaps: 2, gear: true,
-    ground: true, throttle: 100, mass: 'mtow', ap: {} }
+    ground: true, throttle: 100, mass: 'mtow', ap: {} },
+  /* Broken. The ECAM text has one owner too, and a failed engine's gauges are
+     the case where the engine readouts are least like each other -- the fan is
+     running down, so N1 is mid-decay rather than at either end of its range. */
+  { name: 'the V1 cut',       alt: 2367, ias: 150, flaps: 1, gear: true,
+    ground: true, throttle: 100, fail: [['engine', 0]], spool: 25, ap: {} },
+  { name: 'fire and a leak',  alt: 20000, ias: 280, flaps: 0, gear: false,
+    fail: [['fire', 1], ['fuel', 0]], spool: 40,
+    ap: { engaged: true, altFt: 20000, spdKt: 280, hdgDeg: 90 } },
+  { name: 'jammed and slow',  alt: 4000, ias: 170, flaps: 2, gear: true,
+    fail: [['flaps', 0], ['hydraulics', 0], ['brakes', 0]], spool: 5, ap: {} },
+  { name: 'everything wrong', alt: 9000, ias: 220, flaps: 3, gear: true,
+    fail: [['engine', 0], ['fire', 1], ['fuel', 0], ['gear', 0]], spool: 60,
+    ap: {} }
 ];
 
 const TYPES = ['a320neo', 'a350', 'a380', 'a330neo'];
@@ -66,6 +80,11 @@ const TYPES = ['a320neo', 'a350', 'a380', 'a330neo'];
 
   const rows = await p.evaluate(([cases, types]) => {
     paused = true;
+    /* The browser draws the Airbus grammar in hex; the Python names it. This is
+       the only place the two vocabularies meet, so a colour drawn from outside
+       the grammar shows up here as an unmapped hex rather than passing. */
+    const ECAM_NAMES = { [ECAM_RED]: 'red', [ECAM_AMBER]: 'amber',
+                         [ECAM_CYAN]: 'cyan', [ECAM_GREEN]: 'green' };
     const out = [];
     for (const key of types) {
       const a = FLEET.find(f => f.key === key);
@@ -77,7 +96,8 @@ const TYPES = ['a320neo', 'a350', 'a380', 'a330neo'];
           onGround: !!c.ground, status: c.ground ? 'rollout' : 'flying',
           pitch: c.ground ? 0 : 2, bank: 0, gamma: 0,
           beta: 0, rudder: 0, enginesRunning: true, enginesFailed: [],
-          alphaFloorLatched: false,
+          enginesOnFire: [], failures: [], jammedFlaps: null, jammedGear: null,
+          armedFailure: null, alphaFloorLatched: false,
           throttle: c.throttle === undefined ? 60 : c.throttle, approach: null,
           mass: c.mass === 'mtow' ? a.mtow : a.oew + a.payload + a.startFuel,
           ap: freshAutopilot(), dest: null, fmaChanged: {}, t: 100
@@ -86,6 +106,13 @@ const TYPES = ['a320neo', 'a350', 'a380', 'a330neo'];
         settleEngines(a, S);        // the levers were just assigned
         Object.assign(S.ap, c.ap);
         if (c.dest) S.dest = airfieldsNear(S.x, S.y, 90)[0] || null;
+
+        /* Break it, then let the fans run down for as long as the case says.
+           The spool is where a port is easiest to get subtly wrong -- two time
+           constants and a direction test -- and a half-decayed N1 is the only
+           value that catches an error in any of the three. */
+        for (const [key, index] of (c.fail || [])) triggerFailure(a, S, key, index);
+        for (let i = 0; i < (c.spool || 0); i++) spoolEngines(a, S, 0.1);
 
         const sp = characteristicSpeeds(a, S);
         const vs = vSpeeds(a, S);
@@ -106,7 +133,12 @@ const TYPES = ['a320neo', 'a350', 'a380', 'a330neo'];
             n1: Math.round(e.n1 * 1000) / 1000,
             n2: Math.round(e.n2 * 1000) / 1000,
             egt: Math.round(e.egt * 1000) / 1000,
-            flow: Math.round(e.flow * 1000) / 1000
+            flow: Math.round(e.flow * 1000) / 1000,
+            failed: !!e.failed, fire: !!e.fire
+          })),
+          ecam: ecamLines(S).map(l => ({
+            text: l.text, colour: ECAM_NAMES[l.colour] || l.colour,
+            indent: !!l.indent
           }))
         });
       }

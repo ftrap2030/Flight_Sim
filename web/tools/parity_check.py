@@ -7,8 +7,9 @@ The browser's flight model is a *port* of the Python's, and CLAUDE.md says the
 two must not drift. `cruise_check.js` guards the aerodynamics. This guards what
 the glass cockpit puts on the glass -- which is the easier half to get wrong,
 because a speed tape with its marks in the wrong place still looks like a speed
-tape, and an FMA announcing OP CLB while the aeroplane levels off still looks
-like an FMA. Neither is caught by looking at a screenshot.
+tape, an FMA announcing OP CLB while the aeroplane levels off still looks like
+an FMA, and an ECAM naming the wrong engine still looks like an ECAM. None of
+them is caught by looking at a screenshot.
 
 Exits non-zero on the first disagreement, and says which one.
 """
@@ -22,6 +23,7 @@ from flight_sim import aircraft as fleet  # noqa: E402
 from flight_sim import atmosphere as atm  # noqa: E402
 from flight_sim import autopilot  # noqa: E402
 from flight_sim import engines  # noqa: E402
+from flight_sim import failures as broken  # noqa: E402
 from flight_sim import fbw  # noqa: E402
 from flight_sim import navigation  # noqa: E402
 from flight_sim import physics  # noqa: E402
@@ -55,6 +57,12 @@ def python_row(key, case):
     state.bank_deg = state.gamma_deg = 0.0
     state.sideslip_deg = state.rudder_deg = 0.0
     state.alpha_floor_latched = False
+    state.engines_failed = []
+    state.engines_on_fire = []
+    state.failures = []
+    state.jammed_flaps = None
+    state.jammed_gear_down = None
+    state.armed_failure = None
     state.throttle_pct = float(case.get("throttle", 60))
     state.elapsed_s = 100.0
     state.mass_kg = (
@@ -80,12 +88,21 @@ def python_row(key, case):
     # for one here would cost a terrain scan per case for an answer both sides
     # already agree is None.
     sim.settle_engines()
+
+    # Break it in the case's order, then run the fans down for as long as it
+    # says: a half-decayed N1 is the value that catches an error in either time
+    # constant or in the direction test between them.
+    for key, index in case.get("fail", ()):
+        broken.trigger(sim, key, index)
+    for _ in range(case.get("spool", 0)):
+        engines.spool(state, craft, 0.1)
+
     speeds = fbw.characteristic_speeds(sim)
     takeoff = fbw.takeoff_speeds(sim)
     autopilot.note_mode_changes(sim, None)
     annunciator = autopilot.fma(sim, None)
     return (speeds, takeoff, annunciator, autopilot.channels(state),
-            engines.readouts(sim))
+            engines.readouts(sim), broken.ecam(sim))
 
 
 def main():
@@ -99,7 +116,7 @@ def main():
     for row in data["rows"]:
         case = by_name[row["case"]]
         where = "{} / {}".format(row["key"], row["case"])
-        speeds, takeoff, annunciator, channels, motors = python_row(
+        speeds, takeoff, annunciator, channels, motors, ecam = python_row(
             row["key"], case
         )
 
@@ -145,6 +162,26 @@ def main():
                         "{}: ENG {} {} is {:.3f} in Python and {:.3f} in the browser"
                         .format(where, index + 1, field, mine, theirs)
                     )
+            for field in ("failed", "fire"):
+                if getattr(mine_e, field) != theirs_e[field]:
+                    failures.append(
+                        "{}: ENG {} {} is {} in Python and {} in the browser"
+                        .format(where, index + 1, field,
+                                getattr(mine_e, field), theirs_e[field])
+                    )
+
+        # The ECAM. Compared line for line, colour included: the whole point of
+        # giving the messages one owner is that the two builds cannot complain
+        # about different things, in a different order, in different colours.
+        mine_lines = [(line.text, line.colour, line.indent) for line in ecam]
+        their_lines = [
+            (line["text"], line["colour"], line["indent"]) for line in row["ecam"]
+        ]
+        if mine_lines != their_lines:
+            failures.append(
+                "{}: the ECAM reads {} in Python and {} in the browser"
+                .format(where, mine_lines, their_lines)
+            )
 
         if channels != row["channels"]:
             failures.append(
@@ -161,7 +198,8 @@ def main():
         if len(failures) > 40:
             print("  ... and {} more".format(len(failures) - 40))
         return 1
-    print("the two builds agree on every speed, engine parameter and flight mode")
+    print("the two builds agree on every speed, engine parameter, flight mode "
+          "and ECAM line")
     return 0
 
 
