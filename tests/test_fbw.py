@@ -8,7 +8,10 @@ protections away in the order the real reversions do.
 
 import unittest
 
+from flight_sim import aircraft as fleet
+from flight_sim import atmosphere as atm
 from flight_sim import fbw
+from flight_sim import landing
 from flight_sim import physics
 from flight_sim.game import Session
 
@@ -337,6 +340,182 @@ class TestLowEnergy(unittest.TestCase):
     def test_it_stays_quiet_when_the_aircraft_has_energy(self):
         session = Session.new("a320neo", "clear", seed=42)
         self.assertNotIn("SPEED SPEED SPEED", session.sim.readout().warnings)
+
+
+class TestCharacteristicSpeeds(unittest.TestCase):
+    """The speed tape.
+
+    These assert *relationships* -- the order the marks come in, and the ratios
+    Airbus publishes them as -- rather than absolute knots, because the absolute
+    numbers are a function of the weight and the tape has to be right at every
+    weight.
+    """
+
+    def every_case(self):
+        """Every type, configuration and weight the tape has to be right at."""
+        for craft in fleet.FLEET:
+            session = Session.new(craft.key, "clear", seed=42)
+            for flaps in range(5):
+                for mass in (craft.oew_kg + 4000.0, craft.mtow_kg):
+                    session.sim.state.flaps = flaps
+                    session.sim.state.mass_kg = mass
+                    yield craft, flaps, mass, fbw.characteristic_speeds(session.sim)
+
+    def test_the_marks_come_in_the_right_order(self):
+        """A tape whose marks cross over is worse than no tape."""
+        for craft, flaps, mass, s in self.every_case():
+            where = "{} flaps {} at {:,.0f} kg".format(craft.key, flaps, mass)
+            self.assertLessEqual(s.alpha_max, s.alpha_prot, where)
+            self.assertLess(s.alpha_prot, s.vls, where)
+            self.assertLess(s.vls, s.vref, where)
+            self.assertLess(s.vref, s.vmax, where)
+
+    def test_vls_is_1_23_times_the_stall_speed(self):
+        """The certification number, and the reason VLS exists at all."""
+        for craft, flaps, mass, s in self.every_case():
+            self.assertAlmostEqual(s.vls / s.stall, 1.23, places=6)
+
+    def test_alpha_max_speed_is_the_stall_speed_or_a_whisker_above(self):
+        """Airbus quotes alpha max as Vs1g, and here it is Vs1g or just over.
+
+        It can never be *under*: the wing makes no more than CL_max, so the
+        speed at alpha max is floored at the stall speed. It comes out a shade
+        over on the A380 alone, whose aspect ratio of 7.5 gives the shallowest
+        lift curve in the fleet -- shallow enough that the wing has not quite
+        reached CL_max by the time the protection stops it. That is a margin,
+        not an error, and it is the A380's wing rather than anything here.
+        """
+        for craft, flaps, mass, s in self.every_case():
+            where = "{} flaps {}".format(craft.key, flaps)
+            self.assertGreaterEqual(s.alpha_max, s.stall - 1e-9, where)
+            self.assertLess(s.alpha_max, s.stall * 1.02, where)
+
+    def test_alpha_prot_sits_between_the_stall_and_vls(self):
+        """Where alpha prot lands, and why it is not the published 1.13 Vs1g.
+
+        Airbus puts alpha prot near 1.13 Vs1g. Clean, this model gets 1.08-1.11;
+        in the landing configuration it tightens to about 1.04, because flaps
+        here add the same bonus to CL_0 as to CL_max -- they lift the whole lift
+        curve, as real flaps mostly do -- which leaves less angle between zero
+        lift and the stall for a fixed 3.5 degree margin to sit in.
+
+        That is worth knowing and not worth chasing. The margin is
+        ALPHA_PROT_MARGIN_DEG, it governs when the protection actually engages,
+        it has its own tests above, and re-tuning flight behaviour to make a
+        mark on a display sit where a brochure says would be the wrong way round.
+        What the tape needs is only that the mark stays where it belongs.
+        """
+        for craft, flaps, mass, s in self.every_case():
+            where = "{} flaps {}".format(craft.key, flaps)
+            self.assertGreater(s.alpha_prot / s.stall, 1.02, where)
+            self.assertLess(s.alpha_prot / s.stall, 1.20, where)
+            self.assertLess(s.alpha_prot, s.vls, where)
+
+    def test_speeds_rise_with_weight(self):
+        """Every mark on the tape is a speed to carry a weight."""
+        for craft in fleet.FLEET:
+            session = Session.new(craft.key, "clear", seed=42)
+            session.sim.state.flaps = 3
+            session.sim.state.mass_kg = craft.oew_kg + 4000.0
+            light = fbw.characteristic_speeds(session.sim)
+            session.sim.state.mass_kg = craft.mtow_kg
+            heavy = fbw.characteristic_speeds(session.sim)
+            for mark in ("stall", "alpha_max", "alpha_prot", "vls", "green_dot", "vref"):
+                self.assertLess(
+                    getattr(light, mark), getattr(heavy, mark),
+                    "{} {}".format(craft.key, mark),
+                )
+
+    def test_flaps_lower_the_speeds_they_exist_to_lower(self):
+        for craft in fleet.FLEET:
+            session = Session.new(craft.key, "clear", seed=42)
+            session.sim.state.mass_kg = craft.mtow_kg
+            previous = None
+            for flaps in range(5):
+                session.sim.state.flaps = flaps
+                s = fbw.characteristic_speeds(session.sim)
+                if previous is not None:
+                    self.assertLess(s.vls, previous, "{} flaps {}".format(craft.key, flaps))
+                previous = s.vls
+
+    def test_vmax_honours_whichever_limit_bites_first(self):
+        session = Session.new("a350", "clear", seed=42)
+        state = session.sim.state
+
+        # Low down, clean: the airframe limit.
+        state.altitude_ft = 5000.0
+        state.flaps = 0
+        self.assertAlmostEqual(
+            fbw.characteristic_speeds(session.sim).vmax,
+            session.sim.aircraft.vmo_kt, places=6,
+        )
+
+        # High up, clean: Mach bites well before VMO does, which is the whole
+        # shape of the coffin corner.
+        state.altitude_ft = 39000.0
+        self.assertLess(
+            fbw.characteristic_speeds(session.sim).vmax,
+            session.sim.aircraft.vmo_kt,
+        )
+
+        # Anything extended: the flap placard.
+        state.altitude_ft = 5000.0
+        state.flaps = 3
+        self.assertAlmostEqual(
+            fbw.characteristic_speeds(session.sim).vmax,
+            fleet.FLAP_LIMIT_KT[3], places=6,
+        )
+
+    def test_green_dot_is_the_best_lift_to_drag_speed(self):
+        """Green dot is where induced drag equals profile drag.
+
+        Checked by flying the aeroplane at it and either side of it, and finding
+        that the middle is the shallowest -- which is what the speed is *for*,
+        and a check the closed form cannot fake.
+        """
+        session = Session.new("a350", "clear", seed=42)
+        sim = session.sim
+        green_dot = fbw.characteristic_speeds(sim).green_dot
+
+        def lift_to_drag_at(ias_kt):
+            sim.state.tas_ms = atm.ias_to_tas(
+                ias_kt * atm.MS_PER_KT, sim.state.altitude_ft
+            )
+            sim.state.pitch_deg = sim.level_flight_pitch_deg()
+            aero = sim._aero_state()
+            return aero.lift / aero.drag
+
+        self.assertGreater(lift_to_drag_at(green_dot), lift_to_drag_at(green_dot * 0.85))
+        self.assertGreater(lift_to_drag_at(green_dot), lift_to_drag_at(green_dot * 1.15))
+
+
+class TestOneOwner(unittest.TestCase):
+    def test_the_grader_and_the_tape_agree_about_vref(self):
+        """The bug this arrangement exists to prevent.
+
+        Vref used to be computed in `landing` and would have been computed again
+        for the speed tape. Two definitions of "how fast should this approach
+        be" is how a PFD comes to disagree with the report card at the end.
+        """
+        for craft in fleet.FLEET:
+            session = Session.new(craft.key, "clear", seed=42)
+            for flaps in range(5):
+                session.sim.state.flaps = flaps
+                self.assertAlmostEqual(
+                    landing.vref_kt(session.sim),
+                    fbw.characteristic_speeds(session.sim).vref,
+                    places=9,
+                )
+
+    def test_the_readout_carries_the_same_numbers(self):
+        session = Session.new("a330neo", "clear", seed=42)
+        readout = session.sim.readout()
+        self.assertAlmostEqual(readout.vref_kt, readout.speeds.vref, places=9)
+        self.assertAlmostEqual(
+            readout.speeds.alpha_prot,
+            fbw.characteristic_speeds(session.sim).alpha_prot,
+            places=9,
+        )
 
 
 if __name__ == "__main__":

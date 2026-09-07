@@ -8,6 +8,7 @@ import unittest
 from flight_sim import autopilot
 from flight_sim import commands as cmd
 from flight_sim import dashboard
+from flight_sim import navigation
 from flight_sim import physics
 from flight_sim.game import Session
 
@@ -325,6 +326,255 @@ class TestPersistence(unittest.TestCase):
         self.assertAlmostEqual(state.ap_altitude_ft, 15000.0)
         self.assertAlmostEqual(state.ap_speed_kt, 275.0)
         self.assertAlmostEqual(state.ap_heading_deg, 120.0)
+
+
+def with_route(session, north_nm=40.0, east_nm=0.0, cruise_ft=None):
+    """Put a waypoint at a fixed offset and return the session.
+
+    `cruise_ft` lifts the aircraft out of the terrain first. A flight starts at
+    5,000 ft and the ridges here reach past 7,000, so a forty-mile leg flown at
+    the starting altitude ends against a mountain -- which says nothing at all
+    about whether the lateral channel works.
+    """
+    state = session.sim.state
+    if cruise_ft is not None:
+        state.altitude_ft = cruise_ft
+    session.sim.route = navigation.Route([
+        navigation.Waypoint("TGT", state.x_nm + east_nm, state.y_nm + north_nm)
+    ])
+    session.sim.sync_route()
+    return session
+
+
+class TestNav(unittest.TestCase):
+    """LNAV: the channel that flies the route rather than a heading."""
+
+    def test_the_parser_understands_it(self):
+        """CLAUDE.md: a parse test whenever a matcher is added.
+
+        `_MATCHERS` is tried in order and the first hit wins, so these check the
+        new patterns actually reach `_match_autopilot` rather than being
+        swallowed by the lateral or navigation matchers ahead of it.
+        """
+        for text in ("nav", "lnav", "arm nav", "managed nav", "follow the route",
+                     "managed lateral"):
+            self.assertEqual(cmd.parse(text).kind, "ap_nav", text)
+        for text in ("nav off", "lnav off"):
+            self.assertEqual(cmd.parse(text).kind, "ap_nav_off", text)
+        # The neighbours must still parse as themselves.
+        self.assertEqual(cmd.parse("heading 270").kind, "heading")
+        self.assertEqual(cmd.parse("direct to KEBR").kind, "direct_to")
+        self.assertEqual(cmd.parse("approach").kind, "ap_approach")
+
+    def test_it_holds_track_where_heading_hold_drifts_away(self):
+        """The whole reason LNAV exists, in one comparison.
+
+        Holding the bearing as a *heading* in a 45 kt crosswind looks right for
+        the first minute and arrives miles abeam, because the wind has been
+        pushing the aircraft sideways the entire time. NAV aims the *track* at
+        the waypoint instead, which is one term's difference and the difference
+        between arriving and not.
+        """
+        def run(managed):
+            session = with_route(cruising("a350", "crosswind"), cruise_ft=24000.0)
+            state = session.sim.state
+            state.ap_engaged = True
+            state.ap_altitude_ft = state.altitude_ft
+            state.ap_speed_kt = 280.0
+            if managed:
+                state.ap_nav = True
+            else:
+                state.ap_heading_deg = 0.0
+            for _ in range(240):
+                session.sim.step_tick()
+                if session.sim.state.status != physics.FLYING:
+                    break
+                leg = session.sim.readout().leg
+                if leg is not None and leg.distance_nm < 1.0:
+                    break
+            self.assertEqual(session.sim.state.status, physics.FLYING)
+            return session.sim.readout().leg.distance_nm
+
+        self.assertLess(run(managed=True), 1.0)
+        self.assertGreater(run(managed=False), 10.0)
+
+    def test_it_crabs_into_the_wind_rather_than_pointing_at_the_waypoint(self):
+        """The nose is *not* on the bearing, and that is the point."""
+        # A long leg, so the aircraft is still on its way rather than past the
+        # waypoint with the bearing swinging round behind it.
+        session = with_route(cruising("a350", "crosswind"),
+                             north_nm=120.0, cruise_ft=24000.0)
+        state = session.sim.state
+        state.ap_engaged = True
+        state.ap_nav = True
+        state.ap_altitude_ft = state.altitude_ft
+        state.ap_speed_kt = 280.0
+        fly(session, 20)          # long enough for the turn to have settled
+        readout = session.sim.readout()
+        offset = abs((readout.leg.bearing_deg - state.heading_deg + 180.0) % 360.0 - 180.0)
+        self.assertGreater(offset, 3.0)
+        # ...and the track, which is what actually matters, is on the bearing.
+        track_error = abs(
+            (readout.leg.bearing_deg - readout.track_deg + 180.0) % 360.0 - 180.0
+        )
+        self.assertLess(track_error, 1.5)
+
+    def test_selecting_a_heading_takes_lateral_control_back(self):
+        session = with_route(cruising())
+        session.execute("nav")
+        self.assertTrue(session.sim.state.ap_nav)
+        session.execute("heading 210")
+        self.assertFalse(session.sim.state.ap_nav)
+        self.assertIn(autopilot.HEADING, autopilot.channels(session.sim.state))
+
+    def test_nav_wins_over_a_leftover_selected_heading(self):
+        """Engaging NAV clears the selected heading rather than racing it."""
+        session = with_route(cruising())
+        session.execute("heading 090")
+        session.execute("nav")
+        self.assertIsNone(session.sim.state.ap_heading_deg)
+        self.assertEqual(autopilot.channels(session.sim.state).count(autopilot.NAV), 1)
+        self.assertNotIn(autopilot.HEADING, autopilot.channels(session.sim.state))
+
+    def test_dropping_nav_leaves_the_aircraft_where_it_is_pointing(self):
+        session = with_route(cruising())
+        session.execute("nav")
+        fly(session, 4)
+        session.execute("nav off")
+        state = session.sim.state
+        self.assertFalse(state.ap_nav)
+        self.assertAlmostEqual(state.ap_heading_deg, state.heading_deg)
+
+    def test_it_does_nothing_without_a_route(self):
+        """No route is not an error, and must not steer the aeroplane anywhere."""
+        session = cruising()
+        session.execute("nav")
+        before = session.sim.state.heading_deg
+        fly(session, 6)
+        # Not exact: a real aeroplane in air that is moving wanders a fraction of
+        # a degree. What matters is that nothing steered it.
+        self.assertAlmostEqual(session.sim.state.heading_deg, before, delta=0.5)
+
+    def test_it_survives_a_save_and_load(self):
+        path = os.path.join(tempfile.mkdtemp(), "nav.json")
+        session = with_route(cruising())
+        session.execute("nav")
+        fly(session, 3)
+        session.save(path)
+        self.assertTrue(Session.load(path).sim.state.ap_nav)
+
+
+class TestFlightModeAnnunciator(unittest.TestCase):
+    """The five columns of what is flying the aeroplane."""
+
+    def test_it_says_nothing_is_flying_when_nothing_is(self):
+        session = cruising()
+        annunciator = autopilot.fma(session.sim, session.sim.readout())
+        self.assertEqual(annunciator["thrust"]["engaged"][0], "MAN THR")
+        self.assertIsNone(annunciator["lateral"]["engaged"])
+        self.assertIsNone(annunciator["engagement"]["engaged"])
+
+    def test_the_columns_name_the_engaged_modes(self):
+        session = with_route(cruising())
+        session.execute("set altitude 12000")
+        session.execute("set speed 280")
+        session.execute("nav")
+        annunciator = autopilot.fma(session.sim, session.sim.readout())
+        self.assertEqual(annunciator["thrust"]["engaged"][0], "SPEED")
+        self.assertEqual(annunciator["lateral"]["engaged"][0], "NAV")
+        self.assertIn("AP1", annunciator["engagement"]["engaged"][0])
+        self.assertIn("A/THR", annunciator["engagement"]["engaged"][0])
+
+    def test_the_vertical_column_walks_through_the_climb(self):
+        """OP CLB with ALT armed, then ALT* on the capture, then ALT.
+
+        One controller flies all three; the annunciator only says which part of
+        the manoeuvre the aircraft is in, and a pilot reads the difference.
+        """
+        session = cruising("a350")
+        session.execute("set speed 280")
+        session.execute("set altitude 20000")
+        seen = []
+        for _ in range(200):
+            session.sim.step_tick()
+            column = autopilot.fma(session.sim, session.sim.readout())["vertical"]
+            text = column["engaged"][0]
+            if not seen or seen[-1] != text:
+                seen.append(text)
+        self.assertEqual(seen[0], "OP CLB")
+        self.assertIn("ALT*", seen)
+        self.assertEqual(seen[-1], "ALT")
+
+    def test_arming_the_approach_shows_loc_and_gs_in_blue(self):
+        session = cruising()
+        session.execute("approach")
+        annunciator = autopilot.fma(session.sim, session.sim.readout())
+        self.assertEqual(annunciator["lateral"]["armed"], ("LOC", autopilot.BLUE))
+        self.assertEqual(annunciator["vertical"]["armed"], ("G/S", autopilot.BLUE))
+        # Armed is not engaged, and claiming a capability we have not got is a
+        # lie told in green.
+        self.assertIsNone(annunciator["lateral"]["engaged"])
+        self.assertIsNone(annunciator["capability"]["engaged"])
+
+    def test_a_mode_change_is_boxed_for_ten_seconds(self):
+        """The box is how a pilot notices the mode changed at all."""
+        def boxed(session):
+            return autopilot.fma(session.sim, session.sim.readout())["lateral"]["boxed"]
+
+        session = cruising()
+        fly(session, 2)
+        self.assertFalse(boxed(session))
+        session.execute("autopilot on")      # lateral: nothing -> HDG
+        session.sim.readout()
+        self.assertTrue(boxed(session))
+        # A tick is twenty seconds, so one takes it past the ten.
+        fly(session, 1)
+        self.assertFalse(boxed(session))
+
+    def test_retargeting_a_channel_is_not_a_mode_change(self):
+        """A new heading in the same mode must not box the column.
+
+        If it did, the box would fire so often that it would stop meaning
+        anything -- which is the same as not having one.
+        """
+        session = cruising()
+        session.execute("autopilot on")
+        fly(session, 2)
+        session.execute("heading 200")
+        self.assertFalse(
+            autopilot.fma(session.sim, session.sim.readout())["lateral"]["boxed"]
+        )
+
+    def test_nothing_is_boxed_at_the_start_of_a_flight(self):
+        """Or every flight would begin with all five boxed for existing."""
+        session = cruising()
+        for column in autopilot.fma(session.sim, session.sim.readout()).values():
+            self.assertFalse(column["boxed"])
+
+    def test_the_box_survives_a_save_and_load(self):
+        """CLAUDE.md: anything that must survive a save lives on FlightState.
+
+        A session resumed from disk has to keep showing the box it was showing,
+        which means the moment of the change is state and not a display's timer.
+        """
+        path = os.path.join(tempfile.mkdtemp(), "fma.json")
+        session = cruising()
+        fly(session, 2)
+        session.execute("autopilot on")
+        session.sim.readout()
+        session.save(path)
+        restored = Session.load(path)
+        self.assertTrue(
+            autopilot.fma(restored.sim, restored.sim.readout())["lateral"]["boxed"]
+        )
+
+    def test_the_text_form_carries_engaged_and_armed_together(self):
+        session = cruising()
+        session.execute("set altitude 30000")
+        session.execute("approach")
+        text = autopilot.fma_text(session.sim, session.sim.readout())
+        self.assertIn("(G/S)", text)
+        self.assertIn("(LOC)", text)
 
 
 if __name__ == "__main__":

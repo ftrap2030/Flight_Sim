@@ -126,7 +126,7 @@ Commands are typed the way a pilot would say them:
 | On the ground | `max brakes`, `release brakes`, `reverse thrust`, `stow reversers` |
 | Time | `hold`, `wait 60 seconds`, `wait 2 minutes` |
 | Time of day | `time 0530`, `dawn`, `midday`, `dusk`, `night` |
-| Autopilot | `autopilot on/off`, `set altitude 12000`, `set speed 280`, `vertical speed 1500`, `approach mode` |
+| Autopilot | `autopilot on/off`, `set altitude 12000`, `set speed 280`, `vertical speed 1500`, `nav`, `approach mode` |
 | Navigation | `direct to KEBR`, `show plan`, `clear route`, `airfields`, `debrief` |
 | Flight controls | `law`, `normal law`, `alternate law`, `direct law` |
 | Reference | `spec`, `spec a380`, `fleet` |

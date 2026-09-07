@@ -146,6 +146,15 @@ class FlightState:
     ap_heading_deg: float = None
     ap_speed_kt: float = None
     ap_approach: bool = False
+    # Managed lateral: steer to the route rather than to a selected heading.
+    ap_nav: bool = False
+
+    # When each Flight Mode Annunciator column last changed, in elapsed seconds.
+    # The box that appears round a column for ten seconds after a mode change is
+    # how a pilot notices the mode changed at all, so *when* it changed is state
+    # and belongs here -- a session resumed from disk must not lose the box it
+    # was showing, any more than it may lose the turbulence filter.
+    fma_changed_s: dict = field(default_factory=dict)
 
     # Local time in hours, for the sun and the narrator's sense of light.
     time_of_day_h: float = 10.0
@@ -217,6 +226,9 @@ class Readout:
     terrain_ahead_name: str = ""
     approach: object = None
     vref_kt: float = 0.0
+    # The whole speed tape -- VLS, the alpha marks, green dot, Vmax. `vref_kt`
+    # is one of its fields, kept here as well because it predates the set.
+    speeds: object = None
     leg: object = None
     wind_speed_kt: float = 0.0
     wind_dir_deg: float = 0.0
@@ -1027,9 +1039,15 @@ class Simulator:
             alpha_max_deg=fbw.alpha_thresholds(craft)[2],
         )
         readout.approach = landing.approach_guidance(self)
-        readout.vref_kt = landing.vref_kt(self)
+        readout.speeds = fbw.characteristic_speeds(self)
+        readout.vref_kt = readout.speeds.vref
         readout.leg = navigation.leg_for(self, readout)
         readout.warnings = self._warnings(readout)
+        # Once the approach is known, so is whether the localiser is captured,
+        # which is the last thing the annunciator needs to say what mode it is
+        # in. Timing the mode change here rather than in a display keeps the two
+        # front ends boxing the same column at the same moment.
+        autopilot.note_mode_changes(self, readout)
         return readout
 
     def _warnings(self, r):

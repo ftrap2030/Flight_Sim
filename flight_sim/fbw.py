@@ -34,7 +34,9 @@ the wing past alpha max, which is exactly what it does on the aeroplane.
 """
 
 import math
+from dataclasses import dataclass
 
+from . import aircraft as fleet
 from . import atmosphere as atm
 
 NORMAL = "normal"
@@ -93,6 +95,18 @@ MACH_OVERSPEED_KT = 500.0
 # Low-energy ("SPEED SPEED SPEED") threshold, as a multiple of the stall speed.
 LOW_ENERGY_RATIO = 1.18
 
+# VLS -- the lowest speed the autopilot may be asked to fly -- is 1.23 times the
+# 1g stall speed. That is the modern certification number.
+VLS_FACTOR = 1.23
+# Vref is quoted here against the *older* convention, 1.3 times the minimum
+# steady flight speed, which is what the touchdown grader has always been
+# calibrated to. The two are nearly the same speed said two ways, because the
+# old stall speed sits about 6% below Vs1g -- but they are not identical, so
+# Vref comes out a little above VLS. That ordering is the right way round: VLS
+# is a floor and Vref is a target, and an approach flown at Vref has margin over
+# the floor by construction.
+VREF_FACTOR = 1.3
+
 # How much of a commanded excess over the alpha ceiling Alternate Law's
 # low-speed stability takes back. Below 1.0 by definition: it is a demand the
 # pilot can hold the stick against, not a limit, so a determined pull still
@@ -111,6 +125,88 @@ def alpha_thresholds(craft):
         craft.alpha_crit_deg - ALPHA_PROT_MARGIN_DEG,
         craft.alpha_crit_deg - ALPHA_FLOOR_MARGIN_DEG,
         alpha_max,
+    )
+
+
+@dataclass(frozen=True)
+class Speeds:
+    """The speed tape, as numbers rather than as pixels.
+
+    Everything a speed scale marks, in knots indicated, at the current weight and
+    configuration. This exists so that the two front ends draw the same tape: a
+    display may choose what to show and in what colour, but it may not work out
+    *where a mark goes*, because then there would be two answers to that.
+    """
+
+    stall: float  # Vs1g, in the current configuration
+    alpha_max: float  # where the protection stops you
+    alpha_prot: float  # where it starts pushing back
+    vls: float  # lowest selectable
+    green_dot: float  # best lift-to-drag, clean wing
+    vref: float  # approach reference
+    vmax: float  # the top of the tape
+
+
+def _ias_for_cl(craft, mass_kg, cl):
+    """The IAS at which a lift coefficient carries the weight, in knots.
+
+    Sea-level density is the right term because the answer is an *indicated*
+    speed -- the same reason `stall_speed_ias_ms` uses it, and the reason a
+    stall speed reads the same on the ASI at every altitude.
+    """
+    lift_cl = max(cl, 1e-3)
+    ms = math.sqrt(
+        2.0 * mass_kg * atm.G0 / (atm.RHO0 * craft.wing_area_m2 * lift_cl)
+    )
+    return ms * atm.KT_PER_MS
+
+
+def _ias_for_alpha(craft, mass_kg, flaps, alpha_deg):
+    """The speed at which level flight sits at a given angle of attack.
+
+    The cap at CL_max here is *not* the mistake `alpha_for_load_factor` warns
+    about. That one clamps a demand, and clamping a demand silently invents a
+    protection. This one asks what lift the wing actually makes at an angle, and
+    past CL_max the answer is: no more than CL_max.
+    """
+    cl = craft.cl_0_for_flaps(flaps) + craft.cl_alpha * math.radians(alpha_deg)
+    return _ias_for_cl(craft, mass_kg, min(cl, craft.cl_max_for_flaps(flaps)))
+
+
+def characteristic_speeds(sim):
+    """Every speed the tape marks, from one set of assumptions.
+
+    Both front ends read this, and so does the touchdown grader -- so a change
+    here moves the mark on the PFD and the number the landing is judged against
+    together, which is the point of there being one of it.
+    """
+    s = sim.state
+    craft = sim.aircraft
+    alpha_prot, _floor, alpha_max = alpha_thresholds(craft)
+    stall_kt = craft.stall_speed_ias_ms(s.mass_kg, 1.0, s.flaps) * atm.KT_PER_MS
+
+    # Best lift-to-drag is where induced drag equals profile drag, so
+    # CL = sqrt(CD_0 / k). Airbus derives green dot from a rule of thumb on
+    # weight; taking it from the type's own polar keeps it right for all nine.
+    green_cl = math.sqrt(craft.cd_0 / craft.induced_drag_factor)
+
+    # The top of the tape is whichever limit bites first: the airframe's, the
+    # Mach limit converted to what the ASI would be reading at this altitude,
+    # or the flap placard if anything is extended.
+    mach_limit_kt = (
+        atm.tas_to_ias(atm.mach_to_tas(craft.mmo, s.altitude_ft), s.altitude_ft)
+        * atm.KT_PER_MS
+    )
+    flap_limit_kt = fleet.FLAP_LIMIT_KT[fleet._clamp_flap(s.flaps)]
+
+    return Speeds(
+        stall=stall_kt,
+        alpha_max=_ias_for_alpha(craft, s.mass_kg, s.flaps, alpha_max),
+        alpha_prot=_ias_for_alpha(craft, s.mass_kg, s.flaps, alpha_prot),
+        vls=stall_kt * VLS_FACTOR,
+        green_dot=_ias_for_cl(craft, s.mass_kg, green_cl),
+        vref=stall_kt * VREF_FACTOR,
+        vmax=min(craft.vmo_kt, mach_limit_kt, flap_limit_kt),
     )
 
 

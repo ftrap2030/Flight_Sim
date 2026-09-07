@@ -44,6 +44,46 @@ def slip_ball(sideslip_deg, max_deg=15.0):
     return "[" + "".join(cells) + "]"
 
 
+SPEED_TAPE_WIDTH = 44
+
+
+def speed_tape(readout):
+    """The speed scale, in one line of characters.
+
+    The same marks the glass PFD draws, from the same `readout.speeds`: the
+    alpha protection at `<`, the lowest selectable speed at `[`, green dot at
+    `o`, the top of the envelope at `]`, and where the aircraft actually is at
+    `^`. A text simulator cannot show an amber barber pole, but it can show that
+    you are eight knots above VLS with the flaps out, which is the part that
+    changes what a pilot does.
+    """
+    speeds = readout.speeds
+    if speeds is None:
+        return ""
+    low = min(speeds.alpha_max, readout.ias_kt) - 20.0
+    high = max(speeds.vmax, readout.ias_kt) + 20.0
+    span = max(high - low, 1.0)
+
+    cells = ["·"] * SPEED_TAPE_WIDTH
+    def put(value, glyph):
+        column = int(round((value - low) / span * (SPEED_TAPE_WIDTH - 1)))
+        if 0 <= column < SPEED_TAPE_WIDTH:
+            cells[column] = glyph
+
+    # Drawn weakest first, so a mark that matters is never overwritten by one
+    # that does not -- at low weight several of these land in the same column.
+    put(speeds.green_dot, "o")
+    put(speeds.vmax, "]")
+    put(speeds.vls, "[")
+    put(speeds.alpha_prot, "<")
+    put(readout.ias_kt, "^")
+    # Piped rather than bracketed, because `[` is one of the marks and a frame
+    # made of the same glyph reads as a sixth mark that never moves.
+    return "  SPD |{}|  VLS {:.0f}  MAX {:.0f}".format(
+        "".join(cells), speeds.vls, speeds.vmax
+    )
+
+
 def attitude_indicator(pitch_deg, bank_deg):
     """A small ASCII artificial horizon: the horizon line tilts with bank."""
     rows = []
@@ -105,6 +145,13 @@ def render(sim, readout, title=None):
         lines.append("> **{}**".format("  |  ".join(r.warnings)))
         lines.append("")
 
+    # The Flight Mode Annunciator, in the position it occupies on the aeroplane:
+    # above everything, because it is what a pilot looks at first. Same five
+    # columns and the same box the browser build draws; the words come from
+    # `autopilot.fma`, so the two front ends cannot disagree about them.
+    lines.append("`FMA  {}`".format(autopilot.fma_text(sim, r)))
+    lines.append("")
+
     law_line = fbw.status_text(s)
     if s.ap_engaged:
         law_line = "{}   |   {}".format(autopilot.status_text(s), law_line)
@@ -115,6 +162,7 @@ def render(sim, readout, title=None):
     for row in attitude_indicator(r.pitch_deg, r.bank_deg):
         lines.append(row)
     lines.append("")
+    lines.append(speed_tape(r))
     lines.append(
         "  IAS {:>5.0f} kt   ALT {:>7,.0f} ft   HDG {:>03.0f}".format(
             r.ias_kt, r.altitude_ft, r.heading_deg

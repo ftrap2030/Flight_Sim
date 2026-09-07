@@ -14,6 +14,7 @@ import math
 from dataclasses import dataclass
 
 from . import atmosphere as atm
+from . import fbw
 from .airfield import FT_PER_NM
 
 # Sink rate bands at touchdown, in feet per minute.
@@ -26,7 +27,6 @@ HARD_FPM = 900.0  # beyond this the gear does not survive
 MAX_TOUCHDOWN_BANK_DEG = 8.0  # further and a wingtip or a pod strikes first
 MAX_TOUCHDOWN_CRAB_DEG = 20.0  # landing sideways collapses the gear
 FAST_APPROACH_FACTOR = 1.35  # of Vref: survivable, but you will need the runway
-VREF_FACTOR = 1.3  # Vref is 1.3 x the stall speed in the landing configuration
 
 # The glidepath every instrument approach flies.
 GLIDESLOPE_DEG = 3.0
@@ -83,11 +83,13 @@ class Touchdown:
 
 
 def vref_kt(sim):
-    """Reference approach speed: 1.3 x stall in the current configuration."""
-    stall_ms = sim.aircraft.stall_speed_ias_ms(
-        sim.state.mass_kg, 1.0, sim.state.flaps
-    )
-    return stall_ms * atm.KT_PER_MS * VREF_FACTOR
+    """Reference approach speed, in the current configuration.
+
+    The number itself lives in `fbw.characteristic_speeds`, with the rest of the
+    speed tape, because the grader and the PFD must not be able to disagree
+    about how fast an approach was flown.
+    """
+    return fbw.characteristic_speeds(sim).vref
 
 
 def grade_touchdown(sim, field, readout, on_runway=True):

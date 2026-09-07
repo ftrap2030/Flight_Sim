@@ -180,6 +180,26 @@ has an owner.
   corpus must be added there — it is the only thing standing between a
   placeholder typo and prose silently vanishing at runtime.
 
+## Numbers a display shows have exactly one owner
+
+A speed mark, a mode name and the moment a mode changed are all **model data**,
+not display data — because there are two front ends and they must not be able to
+disagree. `fbw.characteristic_speeds` owns the whole speed tape (VLS, the alpha
+marks, green dot, Vref, Vmax) and `landing.vref_kt` calls it rather than keeping
+its own factor; `autopilot.fma` owns the five annunciator columns and
+`autopilot.note_mode_changes`, called once a tick from `Simulator.readout`, owns
+when each last changed. A display picks fonts and colours. It does not work out
+*where a mark goes*.
+
+The bug this prevents is the one that was already latent: Vref was computed in
+`landing` with a `1.3` factor, and a speed tape computing its own VLS would have
+put a different number on the PFD from the one grading the landing.
+
+Two conventions live side by side there and are not a mistake: VLS is
+1.23 · Vs1g, the modern certification number, and Vref is 1.3 · Vs1g, the older
+one the touchdown grader has always used. Vref therefore sits a little *above*
+VLS, which is the right way round — VLS is a floor and Vref is a target.
+
 ## The control laws
 
 `fbw.py` sits between whoever is flying — pilot or autopilot — and the
@@ -232,11 +252,6 @@ have one; whether it belongs here too is an open question.) No failures beyond
 engines. No multi-leg
 route command, though `navigation.Route` fully supports one. The A321 is the
 neo; there is no A321ceo.
-
-**No LNAV.** `direct to KEBR` sets a destination and the panel shows bearing,
-ETA and fuel on arrival, but the autopilot holds a *heading* — it will not fly
-the route unless you also command a heading toward it. Easy to mistake for a
-bug when a scripted flight sails past its destination.
 
 Only the two control-law reversions a point-mass model can honestly represent
 are implemented: all engines out, and gear down in alternate law. Air data and

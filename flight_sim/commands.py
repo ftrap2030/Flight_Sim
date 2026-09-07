@@ -320,6 +320,14 @@ def _match_autopilot(text, raw):
 
     if re.match(r"^(?:arm\s+)?(?:approach|appr|ils)(?:\s+mode)?$", text):
         return Command("ap_approach", text=raw, advances_time=False)
+    # Registered after the approach matcher and before nothing, but note that
+    # `_match_lateral` runs earlier in _MATCHERS and owns anything starting with
+    # "heading" -- so "nav" must not be spelled in a way that reaches for it.
+    if re.match(r"^(?:arm\s+)?(?:nav|lnav|managed\s+(?:nav|lateral)|"
+                r"follow\s+(?:the\s+)?route)(?:\s+mode)?$", text):
+        return Command("ap_nav", text=raw, advances_time=False)
+    if re.match(r"^(?:nav|lnav)\s+off$", text):
+        return Command("ap_nav_off", text=raw, advances_time=False)
     return None
 
 
@@ -514,7 +522,19 @@ def apply(sim, command):
     elif kind == "ap_approach":
         s.ap_engaged = True
         s.ap_approach = True
-        pass
+    elif kind == "ap_nav":
+        s.ap_engaged = True
+        s.ap_nav = True
+        # Selected heading goes when managed lateral comes on, so that dropping
+        # NAV later reverts to the aircraft's own heading rather than to some
+        # number typed twenty minutes ago.
+        s.ap_heading_deg = None
+        if s.ap_altitude_ft is None and s.ap_vs_fpm is None:
+            s.ap_altitude_ft = s.altitude_ft
+    elif kind == "ap_nav_off":
+        s.ap_nav = False
+        if s.ap_engaged and s.ap_heading_deg is None:
+            s.ap_heading_deg = s.heading_deg
 
 
 HELP_TEXT = """\
@@ -530,7 +550,7 @@ HELP_TEXT = """\
 | **On the ground** | `brakes`, `max brakes`, `release brakes`, `reverse thrust`, `stow reversers` |
 | **Configuration** | `flaps 1`, `flaps full`, `flaps up`, `gear down`, `gear up`, `speedbrakes out`, `speedbrakes in` |
 | **Time** | `hold` (advance 10 s unchanged), `wait 60 seconds`, `wait 2 minutes` |
-| **Autopilot** | `autopilot on/off`, `set altitude 12000`, `set speed 280`, `vertical speed 1500`, `approach mode` |
+| **Autopilot** | `autopilot on/off`, `set altitude 12000`, `set speed 280`, `vertical speed 1500`, `nav`, `approach mode` |
 | **Time of day** | `time 0530`, `dawn`, `midday`, `dusk`, `night` |
 | **Navigation** | `direct to KEBR`, `show plan`, `clear route`, `airfields`, `debrief` |
 | **Flight controls** | `law` (what is protecting you), `direct law`, `alternate law`, `normal law` |

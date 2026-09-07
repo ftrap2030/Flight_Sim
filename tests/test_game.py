@@ -110,6 +110,34 @@ class TestDashboard(unittest.TestCase):
         self.assertGreater(sky_rows(20.0), sky_rows(0.0))
         self.assertLess(sky_rows(-20.0), sky_rows(0.0))
 
+    def test_the_panel_carries_the_flight_mode_annunciator(self):
+        """The text front end says the same five things the glass one does."""
+        session = Session.new("a350", "clear", seed=42)
+        session.execute("set altitude 20000")
+        session.execute("set speed 280")
+        text = dashboard.render(session.sim, session.sim.readout())
+        self.assertIn("FMA", text)
+        self.assertIn("SPEED", text)
+        self.assertIn("OP CLB", text)
+        self.assertIn("AP1", text)
+
+    def test_the_speed_tape_marks_come_in_the_right_order(self):
+        """Left to right: alpha prot, VLS, then the top of the envelope."""
+        session = Session.new("a350", "clear", seed=42)
+        session.sim.state.flaps = 3
+        tape = dashboard.speed_tape(session.sim.readout())
+        cells = tape.split("|")[1]
+        self.assertLess(cells.index("<"), cells.index("["))
+        self.assertLess(cells.index("["), cells.index("]"))
+
+    def test_the_speed_tape_shows_where_the_aircraft_is(self):
+        session = Session.new("a350", "clear", seed=42)
+        readout = session.sim.readout()
+        cells = dashboard.speed_tape(readout).split("|")[1]
+        self.assertIn("^", cells)
+        # Cruising clean, the aircraft is well above the low-speed marks.
+        self.assertGreater(cells.index("^"), cells.index("["))
+
     def test_clock_rounds_a_ten_second_tick_to_ten(self):
         session = Session.new("a320", "clear", seed=42)
         session.execute("hold")
