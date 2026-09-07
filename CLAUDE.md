@@ -1,13 +1,15 @@
 # Flight_Sim — notes for working on this codebase
 
-A text-based Airbus flight simulator: a real point-mass physics model with a
-procedural prose engine on top. Stdlib only, `unittest`, no dependencies.
+An Airbus flight simulator in two front ends over one physics model: a text
+simulator with a procedural prose engine, and a WebGL cockpit in the browser.
+Python is stdlib only, `unittest`, no dependencies.
 
 ```bash
 python main.py                                  # play it
 python -m unittest discover -s tests -t .       # 374 tests, ~60 s
 python main.py --list                           # fleet and weather menus
 python main.py --spec a350-1000                 # one type's card and drawing
+open web/anfell.html                            # the browser build
 ```
 
 ## Layout
@@ -34,6 +36,9 @@ flight_sim/
   mapview.py       Track-up ASCII terrain plan view.
   commands.py      Natural-language command parsing.
   game.py          Session: setup, the loop, persistence.
+web/
+  anfell.html      The whole browser build. One file, no build step.
+  tools/           Playwright checks: cruise flow, and render screenshots.
 ```
 
 ## Conventions
@@ -194,10 +199,37 @@ CL_max — it limits the g demanded, not the g the wing can make. Clamping it ma
 it a second, accidental AoA protection, silently active in the two laws that are
 supposed to have none.
 
+## `web/` is a port of this model, not a second one
+
+`web/anfell.html` carries the atmosphere, the drag polar, the thrust lapse, the
+TSFC figures, the control laws and the terrain function again, in JavaScript,
+because a browser cannot import Python. They are the *same numbers*. An A350-900
+trimmed at FL370 and M0.85 at 252.4 t burns 5,793 kg/h in both, and a seed grows
+the same mountains in both, down to the 32-bit lattice hash.
+
+**Change one and you must change the other**, or the two quietly diverge and the
+figures in `tests/test_physics.py::CRUISE_TARGETS` only catch it on one side.
+`web/tools/cruise_check.js` holds the browser build to those same targets, which
+is the guard; run it after touching `aircraft.py` or `physics.py`.
+
+Two things exist only in the browser build, and `web/README.md` says why:
+**takeoff**, which the text simulator deliberately has none of, and everything
+to do with rendering. Nothing in `flight_sim/` may import from or depend on
+`web/`.
+
+Two places the picture and the physics deliberately disagree, both rendering
+only and both bounded: sub-kilometre relief is *carved down* into the height
+texture by at most 165 ft, because the terrain function's finest octave is
+4,560 ft long and the mesh was finer than the function it sampled; and lakes are
+filled to a level surface up to 900 ft above their bed. `natural_elevation` —
+which the airfield search reads — is untouched by both.
+
 ## Things deliberately not modelled
 
-No takeoff — every flight begins airborne at 5,000 ft, and `on_ground` exists
-only for the rollout after landing. No failures beyond engines. No multi-leg
+No takeoff in the Python — every flight begins airborne at 5,000 ft, and
+`on_ground` exists only for the rollout after landing. (The browser build does
+have one; whether it belongs here too is an open question.) No failures beyond
+engines. No multi-leg
 route command, though `navigation.Route` fully supports one. The A321 is the
 neo; there is no A321ceo.
 

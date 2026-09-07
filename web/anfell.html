@@ -1,0 +1,3147 @@
+<title>Anfell Flight Deck</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Archivo:wght@400;500;600&display=swap">
+
+<style>
+  /* Committed single theme. A flight deck is a dark room, and the Airbus EFIS
+     colour code below is a real standard, not a palette choice: green is a
+     normal parameter, amber a caution, red a warning, cyan a selected value,
+     magenta a managed target. Inverting any of it would be wrong. */
+  :root {
+    --ground:      #080d10;   /* near-black, biased blue-green */
+    --panel:       #111a1f;
+    --panel-hi:    #1b262d;
+    --edge:        #27363f;
+    --edge-soft:   #1b262d;
+
+    --ink:         #d9e6ec;
+    --ink-dim:     #7c929d;
+    --ink-faint:   #4a5f6a;
+
+    --efis-green:  #31e07a;
+    --efis-amber:  #ffb020;
+    --efis-red:    #ff4433;
+    --efis-cyan:   #4fd8ff;
+    --efis-magenta:#ff6be0;
+    --efis-white:  #eef5f8;
+
+    --pfd-sky:     #2e6da8;
+    --pfd-ground:  #8c6a38;
+
+    --font-inst: "Chakra Petch", "DIN Alternate", "Roboto Condensed", system-ui, sans-serif;
+    --font-body: "Archivo", "Helvetica Neue", system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--font-body);
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  #deck {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    display: grid;
+    grid-template-rows: 1fr auto;
+    background: var(--ground);
+  }
+
+  /* ---- the windscreen ---- */
+  #screen-wrap {
+    position: relative;
+    overflow: hidden;
+    background: #05080a;
+  }
+  #gl, #hud { display: block; position: absolute; inset: 0; width: 100%; height: 100%; }
+  #hud { pointer-events: none; }
+
+  /* Cockpit view gets a faint window frame; chase view does not. */
+  #vignette {
+    position: absolute; inset: 0; pointer-events: none;
+    box-shadow: inset 0 0 140px 40px rgba(0,0,0,.55);
+    opacity: 0; transition: opacity .35s ease;
+  }
+  #deck[data-view="cockpit"] #vignette { opacity: 1; }
+
+  /* ---- floating panels over the windscreen ---- */
+  .float {
+    position: absolute;
+    background: rgba(8, 13, 16, .82);
+    border: 1px solid var(--edge);
+    backdrop-filter: blur(7px);
+    -webkit-backdrop-filter: blur(7px);
+  }
+
+  #setup { top: 14px; left: 14px; padding: 11px 13px; display: grid; gap: 9px; min-width: 216px; }
+  #legend { top: 14px; right: 14px; padding: 11px 13px; max-width: 244px; }
+
+  .float-title {
+    font-family: var(--font-inst);
+    font-size: 10px; font-weight: 700; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--ink-faint);
+    margin: 0 0 3px;
+  }
+
+  label.field { display: grid; gap: 3px; }
+  label.field > span {
+    font-family: var(--font-inst);
+    font-size: 10px; letter-spacing: .11em; text-transform: uppercase;
+    color: var(--ink-dim);
+  }
+  select {
+    font-family: var(--font-inst);
+    font-size: 13px; font-weight: 500;
+    background: var(--panel-hi); color: var(--ink);
+    border: 1px solid var(--edge); padding: 5px 7px;
+    width: 100%; cursor: pointer;
+  }
+  select:focus-visible, button:focus-visible {
+    outline: 2px solid var(--efis-cyan); outline-offset: 1px;
+  }
+
+  .btn-row { display: flex; gap: 6px; }
+  button {
+    flex: 1;
+    font-family: var(--font-inst);
+    font-size: 11px; font-weight: 600; letter-spacing: .09em;
+    text-transform: uppercase;
+    background: var(--panel-hi); color: var(--ink);
+    border: 1px solid var(--edge); padding: 6px 4px; cursor: pointer;
+  }
+  button:hover { background: var(--edge); }
+  button.on { background: var(--efis-cyan); border-color: var(--efis-cyan); color: #05141a; }
+
+  #legend dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; }
+  #legend dt {
+    font-family: var(--font-inst); font-size: 11px; font-weight: 600;
+    color: var(--efis-cyan); white-space: nowrap;
+  }
+  #legend dd { margin: 0; font-size: 11.5px; color: var(--ink-dim); line-height: 1.35; }
+
+  #audio-hint {
+    margin: 0; font-family: var(--font-inst);
+    font-size: 10px; letter-spacing: .11em; text-transform: uppercase;
+    color: var(--efis-amber);
+  }
+
+  /* ---- warning strip ---- */
+  #warnstrip {
+    position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 6px; flex-wrap: wrap; justify-content: center;
+    max-width: 54%; pointer-events: none;
+  }
+  .warn {
+    font-family: var(--font-inst);
+    font-size: 13px; font-weight: 700; letter-spacing: .08em;
+    padding: 3px 10px; border: 1px solid currentColor;
+    background: rgba(8,13,16,.86);
+    color: var(--efis-amber);
+  }
+  .warn.red { color: var(--efis-red); }
+
+  /* ---- the instrument bar ---- */
+  #panel {
+    border-top: 1px solid var(--edge);
+    background: linear-gradient(180deg, var(--panel) 0%, var(--ground) 100%);
+    /* Instruments glow as the light goes; --night is written each frame. */
+    filter: brightness(calc(1 + var(--night, 0) * 0.34))
+            saturate(calc(1 + var(--night, 0) * 0.25));
+    padding: 9px 14px 11px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+    gap: 2px 0;
+    align-items: end;
+  }
+
+  .gauge {
+    display: grid; gap: 1px;
+    padding: 0 10px;
+    border-left: 1px solid var(--edge-soft);
+  }
+  .gauge:first-child { border-left: 0; }
+  .gauge .lbl {
+    font-family: var(--font-inst);
+    font-size: 9.5px; font-weight: 600; letter-spacing: .15em;
+    text-transform: uppercase; color: var(--ink-faint);
+  }
+  .gauge .val {
+    font-family: var(--font-inst);
+    font-size: 21px; font-weight: 600; line-height: 1.05;
+    font-variant-numeric: tabular-nums;
+    color: var(--efis-green);
+  }
+  .gauge .val small {
+    font-size: 12px; font-weight: 500; color: var(--ink-dim);
+    margin-left: 2px; letter-spacing: .04em;
+  }
+  .gauge .val.law { font-size: 13px; line-height: 1.25; white-space: normal; }
+  .val.amber { color: var(--efis-amber); }
+  .val.red   { color: var(--efis-red); }
+  .val.cyan  { color: var(--efis-cyan); }
+  .val.white { color: var(--efis-white); }
+  .val.small { font-size: 16px; }
+
+  /* thin bars under fuel and throttle */
+  .meter { height: 3px; background: var(--edge-soft); margin-top: 4px; }
+  .meter > i { display: block; height: 100%; background: var(--efis-green); }
+  .meter > i.amber { background: var(--efis-amber); }
+
+  /* ---- ending card ---- */
+  #ending {
+    position: absolute; inset: 0; display: none;
+    place-items: center; background: rgba(4,7,9,.86);
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  }
+  #ending.show { display: grid; }
+  #ending .card {
+    background: var(--panel); border: 1px solid var(--edge);
+    padding: 26px 30px; max-width: 460px; text-align: left;
+  }
+  #ending h2 {
+    font-family: var(--font-inst); margin: 0 0 4px;
+    font-size: 26px; font-weight: 700; letter-spacing: .04em;
+    text-wrap: balance; color: var(--efis-amber);
+  }
+  #ending h2.good { color: var(--efis-green); }
+  #ending h2.bad  { color: var(--efis-red); }
+  #ending p { margin: 0 0 14px; font-size: 14px; line-height: 1.55; color: var(--ink-dim); }
+  #ending dl {
+    margin: 0 0 18px; display: grid; grid-template-columns: 1fr auto;
+    gap: 3px 16px; font-family: var(--font-inst); font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+  #ending dt { color: var(--ink-faint); }
+  #ending dd { margin: 0; text-align: right; color: var(--ink); }
+
+  @media (max-width: 900px) {
+    #legend { display: none; }
+    .gauge .val { font-size: 18px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #vignette { transition: none; }
+  }
+</style>
+
+<div id="deck" data-view="cockpit">
+  <div id="screen-wrap">
+    <canvas id="gl"></canvas>
+    <canvas id="hud"></canvas>
+    <div id="vignette"></div>
+
+    <div id="setup" class="float">
+      <p class="float-title">Aircraft</p>
+      <label class="field">
+        <span>Type</span>
+        <select id="sel-type"></select>
+      </label>
+      <label class="field">
+        <span>Conditions</span>
+        <select id="sel-wx"></select>
+      </label>
+      <label class="field">
+        <span>Time of day</span>
+        <select id="sel-time">
+          <option value="6.6">Dawn — 06:36</option>
+          <option value="10.0" selected>Morning — 10:00</option>
+          <option value="13.0">Midday — 13:00</option>
+          <option value="17.5">Dusk — 17:30</option>
+          <option value="22.0">Night — 22:00</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Start</span>
+        <select id="sel-start">
+          <option value="runway">On the runway — ANFL 07</option>
+          <option value="approach">On the ILS — 17 nm out</option>
+          <option value="airborne">Airborne — 5,000 ft</option>
+        </select>
+      </label>
+      <div class="btn-row">
+        <button id="btn-view" type="button">Chase</button>
+        <button id="btn-reset" type="button">Reset</button>
+      </div>
+      <p id="audio-hint">Press any key for sound</p>
+    </div>
+
+    <div id="legend" class="float">
+      <p class="float-title">Controls</p>
+      <dl>
+        <dt>↑ ↓</dt><dd>Pitch (sidestick)</dd>
+        <dt>← →</dt><dd>Roll</dd>
+        <dt>A / Z</dt><dd>Throttle up / down</dd>
+        <dt>Q / E</dt><dd>Rudder left / right</dd>
+        <dt>X</dt><dd>Centre rudder</dd>
+        <dt>G</dt><dd>Landing gear</dd>
+        <dt>[ ]</dt><dd>Flaps up / down</dd>
+        <dt>S</dt><dd>Speedbrake</dd>
+        <dt>B</dt><dd>Brakes — hold to set, A to release</dd>
+        <dt>C</dt><dd>Cockpit / chase view</dd>
+        <dt>L</dt><dd>Cycle control law</dd>
+        <dt>P</dt><dd>Pause</dd>
+      </dl>
+    </div>
+
+    <div id="warnstrip"></div>
+
+    <div id="ending">
+      <div class="card">
+        <h2 id="end-title">—</h2>
+        <p id="end-text">—</p>
+        <dl id="end-stats"></dl>
+        <div class="btn-row"><button id="end-again" type="button">Fly again</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="panel">
+    <div class="gauge"><span class="lbl">IAS</span><span class="val" id="g-ias">—</span></div>
+    <div class="gauge"><span class="lbl">Mach</span><span class="val small" id="g-mach">—</span></div>
+    <div class="gauge"><span class="lbl">Altitude</span><span class="val" id="g-alt">—</span></div>
+    <div class="gauge"><span class="lbl">Radio alt</span><span class="val small" id="g-agl">—</span></div>
+    <div class="gauge"><span class="lbl">V/S</span><span class="val small" id="g-vs">—</span></div>
+    <div class="gauge"><span class="lbl">Heading</span><span class="val" id="g-hdg">—</span></div>
+    <div class="gauge"><span class="lbl">Pitch / Bank</span><span class="val small" id="g-att">—</span></div>
+    <div class="gauge"><span class="lbl">AoA / Load</span><span class="val small" id="g-aoa">—</span></div>
+    <div class="gauge">
+      <span class="lbl">Thrust</span><span class="val small" id="g-thr">—</span>
+      <span class="meter"><i id="m-thr"></i></span>
+    </div>
+    <div class="gauge">
+      <span class="lbl">Fuel</span><span class="val small" id="g-fuel">—</span>
+      <span class="meter"><i id="m-fuel"></i></span>
+    </div>
+    <div class="gauge"><span class="lbl">Flow</span><span class="val small" id="g-ff">—</span></div>
+    <div class="gauge"><span class="lbl">Config</span><span class="val small white" id="g-cfg">—</span></div>
+    <div class="gauge"><span class="lbl">Flight controls</span><span class="val law cyan" id="g-law">—</span></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ==========================================================================
+   ANFELL FLIGHT DECK
+
+   The flight model is a port of the Python simulator in this repository, not a
+   re-invention. The atmosphere, drag polar, thrust lapse, TSFC values and
+   control-law protections are the same numbers, so an A350-900 trimmed at
+   FL370 and M0.85 burns the same 5,793 kg/h here that it does there. The
+   terrain is the same ridged multifractal over the same 32-bit integer hash,
+   which is why a given seed produces the same mountains in both.
+   ========================================================================== */
+
+/* ---------- ISA atmosphere (atmosphere.py) ---------- */
+const T0_K = 288.15, P0_PA = 101325.0, RHO0 = 1.225;
+const R_SPEC = 287.05287, GAMMA_AIR = 1.4, G0 = 9.80665;
+const LAPSE_K_PER_FT = 1.98120e-3, TROPOPAUSE_FT = 36089.24;
+const T_TROP_K = 216.65, P_TROP_PA = 22632.06, PRESSURE_EXP = 5.25588;
+const M_PER_FT = 0.3048, FT_PER_M = 1 / M_PER_FT;
+const MS_PER_KT = 0.514444444, KT_PER_MS = 1 / MS_PER_KT;
+const FPM_PER_MS = 196.850393701, FT_PER_NM = 6076.115, NM_PER_M = 1 / 1852;
+
+const temperatureK = ft => ft < TROPOPAUSE_FT ? T0_K - LAPSE_K_PER_FT * ft : T_TROP_K;
+function pressurePa(ft) {
+  if (ft < TROPOPAUSE_FT) return P0_PA * Math.pow(temperatureK(ft) / T0_K, PRESSURE_EXP);
+  return P_TROP_PA * Math.exp(-G0 * (ft - TROPOPAUSE_FT) * M_PER_FT / (R_SPEC * T_TROP_K));
+}
+const density      = ft => pressurePa(ft) / (R_SPEC * temperatureK(ft));
+const densityRatio = ft => density(ft) / RHO0;
+const soundMs      = ft => Math.sqrt(GAMMA_AIR * R_SPEC * temperatureK(ft));
+const tasToIas     = (v, ft) => v * Math.sqrt(densityRatio(ft));
+const iasToTas     = (v, ft) => v / Math.sqrt(densityRatio(ft));
+const machOf       = (v, ft) => v / soundMs(ft);
+
+const clamp  = (v, lo, hi) => v < lo ? lo : (v > hi ? hi : v);
+const rad    = d => d * Math.PI / 180;
+const deg    = r => r * 180 / Math.PI;
+const wrap360 = d => ((d % 360) + 360) % 360;
+const wrap180 = d => ((d + 180) % 360 + 360) % 360 - 180;
+
+/* ---------- the fleet (aircraft.py, exported verbatim) ---------- */
+const FLEET = [
+{key:"a319neo",name:"A319neo",icao:"A19N",engines:"2 × CFM LEAP-1A24",wingArea:122.6,span:35.8,length:33.84,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,oew:42600,mtow:75500,payload:12000,startFuel:10000,fuelCap:19182.6,thrust:215200,tsfc:1.43e-5,idleFrac:.05,cd0:.019,e:.82,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.795,waveK:18,vmo:350,mmo:.82,ceiling:39800,cruiseMach:.78,rollRate:16,pitchRate:3.4,arms:[-5.75,5.75],rudderPower:.0022,dirStab:.0035,dihedral:.62,yawTau:1.9,maxRudder:30},
+{key:"a320",name:"A320-200",icao:"A320",engines:"2 × CFM56-5B4",wingArea:122.6,span:34.1,length:37.57,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,oew:42600,mtow:78000,payload:15000,startFuel:12000,fuelCap:19182.6,thrust:240200,tsfc:1.66e-5,idleFrac:.05,cd0:.0199,e:.82,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.79,waveK:18,vmo:350,mmo:.82,ceiling:39000,cruiseMach:.78,rollRate:15,pitchRate:3.2,arms:[-5.75,5.75],rudderPower:.0022,dirStab:.0035,dihedral:.6,yawTau:2,maxRudder:30},
+{key:"a320neo",name:"A320neo",icao:"A20N",engines:"2 × CFM LEAP-1A26",wingArea:122.6,span:35.8,length:37.57,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,oew:44300,mtow:79000,payload:15000,startFuel:12000,fuelCap:19182.6,thrust:241200,tsfc:1.43e-5,idleFrac:.05,cd0:.0195,e:.82,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.795,waveK:18,vmo:350,mmo:.82,ceiling:39800,cruiseMach:.78,rollRate:15,pitchRate:3.2,arms:[-5.75,5.75],rudderPower:.0022,dirStab:.0035,dihedral:.6,yawTau:2,maxRudder:30},
+{key:"a321",name:"A321neo",icao:"A21N",engines:"2 × CFM LEAP-1A32",wingArea:122.6,span:35.8,length:44.51,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,oew:50100,mtow:97000,payload:20000,startFuel:15000,fuelCap:19054.8,thrust:286200,tsfc:1.43e-5,idleFrac:.05,cd0:.02,e:.82,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.792,waveK:18,vmo:350,mmo:.82,ceiling:39800,cruiseMach:.78,rollRate:12,pitchRate:2.7,arms:[-5.75,5.75],rudderPower:.0022,dirStab:.0035,dihedral:.55,yawTau:2.2,maxRudder:30},
+{key:"a321xlr",name:"A321XLR",icao:"A21N",engines:"2 × CFM LEAP-1A35",wingArea:122.6,span:35.8,length:44.51,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,oew:52300,mtow:101000,payload:20000,startFuel:22000,fuelCap:29426.4,thrust:286200,tsfc:1.43e-5,idleFrac:.05,cd0:.0202,e:.82,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.792,waveK:18,vmo:350,mmo:.82,ceiling:39800,cruiseMach:.78,rollRate:11.5,pitchRate:2.6,arms:[-5.75,5.75],rudderPower:.0022,dirStab:.0035,dihedral:.55,yawTau:2.3,maxRudder:30},
+{key:"a330neo",name:"A330-900neo",icao:"A339",engines:"2 × Rolls-Royce Trent 7000",wingArea:361.6,span:64,length:63.66,height:16.79,fusW:5.64,fusH:5.64,sweep:30,decks:1,oew:137000,mtow:251000,payload:40000,startFuel:58000,fuelCap:111828.4,thrust:648000,tsfc:1.42e-5,idleFrac:.05,cd0:.019,e:.82,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.835,waveK:18,vmo:330,mmo:.86,ceiling:41450,cruiseMach:.82,rollRate:10.2,pitchRate:2.35,arms:[-10,10],rudderPower:.0024,dirStab:.0035,dihedral:.5,yawTau:2.75,maxRudder:30},
+{key:"a350",name:"A350-900",icao:"A359",engines:"2 × Rolls-Royce Trent XWB-84",wingArea:442,span:64.75,length:66.8,height:17.08,fusW:5.96,fusH:6.09,sweep:31.9,decks:1,oew:142400,mtow:280000,payload:40000,startFuel:70000,fuelCap:110952,thrust:749000,tsfc:1.23e-5,idleFrac:.05,cd0:.0167,e:.85,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.86,waveK:18,vmo:340,mmo:.89,ceiling:43100,cruiseMach:.85,rollRate:10,pitchRate:2.3,arms:[-10.6,10.6],rudderPower:.0024,dirStab:.0035,dihedral:.5,yawTau:2.8,maxRudder:30},
+{key:"a350k",name:"A350-1000",icao:"A35K",engines:"2 × Rolls-Royce Trent XWB-97",wingArea:464.3,span:64.75,length:73.79,height:17.08,fusW:5.96,fusH:6.09,sweep:31.9,decks:1,oew:155000,mtow:319000,payload:45000,startFuel:85000,fuelCap:127668,thrust:863000,tsfc:1.23e-5,idleFrac:.05,cd0:.017,e:.85,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.858,waveK:18,vmo:340,mmo:.89,ceiling:43100,cruiseMach:.85,rollRate:9,pitchRate:2.1,arms:[-10.6,10.6],rudderPower:.0024,dirStab:.0035,dihedral:.48,yawTau:3,maxRudder:30},
+{key:"a380",name:"A380-800",icao:"A388",engines:"4 × Rolls-Royce Trent 970",wingArea:845,span:79.75,length:72.72,height:24.09,fusW:7.14,fusH:8.41,sweep:33.5,decks:2,oew:277000,mtow:575000,payload:60000,startFuel:160000,fuelCap:257280,thrust:1242800,tsfc:1.21e-5,idleFrac:.05,cd0:.0145,e:.84,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.858,waveK:18,vmo:340,mmo:.89,ceiling:43100,cruiseMach:.85,rollRate:7,pitchRate:1.8,arms:[-21.6,-12.4,12.4,21.6],rudderPower:.002,dirStab:.0038,dihedral:.4,yawTau:3.5,maxRudder:30}
+];
+const FLEET_BY_KEY = Object.fromEntries(FLEET.map(a => [a.key, a]));
+
+/* Flap detents 0..4, from aircraft.py */
+const FLAP_CL   = [0, .40, .75, 1.05, 1.35];
+const FLAP_CD   = [0, .008, .020, .038, .062];
+const FLAP_NAME = ["UP", "1", "2", "3", "FULL"];
+const FLAP_VFE  = [999, 230, 200, 185, 177];
+
+const aspectRatio = a => a.span * a.span / a.wingArea;
+const clAlpha = a => { const ar = aspectRatio(a); return 2 * Math.PI * ar / (2 + Math.sqrt(ar * ar + 4)); };
+const inducedK = a => 1 / (Math.PI * aspectRatio(a) * a.e);
+const clMaxFlaps = (a, f) => a.clMax + FLAP_CL[f];
+const cl0Flaps   = (a, f) => a.cl0  + FLAP_CL[f];
+function cd0Config(a, f, gear, spoil) {
+  let cd = a.cd0 + FLAP_CD[f];
+  if (gear)  cd += .018;
+  if (spoil) cd += .030;
+  return cd;
+}
+function stallIasKt(a, mass, n, flaps) {
+  return Math.sqrt(2 * n * mass * G0 / (RHO0 * a.wingArea * clMaxFlaps(a, flaps))) * KT_PER_MS;
+}
+
+/* ---------- weather (weather.py) ---------- */
+const WEATHER = [
+  { key:"clear",     name:"Clear Skies",      windKt:8,  windDir:270, gust:0,  turb:0.00, visNm:36, cloudBase:38000, cover:0.10, tint:"#7fa8c4", sky:"#0e4c8f" },
+  { key:"crosswind", name:"Heavy Crosswinds", windKt:45, windDir:290, gust:20, turb:0.42, visNm:25, cloudBase:9000,  cover:0.55,  tint:"#93a6b0", sky:"#2a5478" },
+  { key:"stormy",    name:"Stormy",           windKt:55, windDir:210, gust:25, turb:0.95, visNm:2.0, cloudBase:4200, cover:0.88, tint:"#59636b", sky:"#20303c" },
+  { key:"foggy",     name:"Foggy",            windKt:5,  windDir:180, gust:0,  turb:0.12, visNm:0.3, cloudBase:7200, cover:0.30, tint:"#b9c2c6", sky:"#8d9ba3" }
+];
+const WEATHER_BY_KEY = Object.fromEntries(WEATHER.map(w => [w.key, w]));
+
+/* ---------- terrain (terrain.py) ----------
+   Same 32-bit hash, same ridged multifractal, same constants. Math.imul gives
+   the low 32 bits of the product, which is what Python's & 0xFFFFFFFF leaves,
+   so the lattice matches value for value. */
+const BASE_ELEV_FT = 150, MIN_RELIEF_FT = 1100, MAX_RELIEF_FT = 8400;
+const RIDGE_SCALE_NM = 6, MASSIF_SCALE_NM = 44, OCTAVES = 4;
+
+function hash01(ix, iy, seed) {
+  let h = (Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(seed, 1442695041)) >>> 0;
+  h = (h ^ (h >>> 13)) >>> 0;
+  h = Math.imul(h, 1274126177) >>> 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  return h / 4294967296;
+}
+const smoothstep = t => t * t * (3 - 2 * t);
+
+function valueNoise(x, y, seed) {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  const fx = smoothstep(x - ix), fy = smoothstep(y - iy);
+  const n00 = hash01(ix, iy, seed),     n10 = hash01(ix + 1, iy, seed);
+  const n01 = hash01(ix, iy + 1, seed), n11 = hash01(ix + 1, iy + 1, seed);
+  const top = n00 + (n10 - n00) * fx, bot = n01 + (n11 - n01) * fx;
+  return top + (bot - top) * fy;
+}
+function ridgedFbm(x, y, seed) {
+  let total = 0, amp = 1, freq = 1, norm = 0;
+  for (let o = 0; o < OCTAVES; o++) {
+    const n = valueNoise(x * freq, y * freq, seed + o * 1013);
+    let r = 1 - Math.abs(2 * n - 1);
+    r *= r;
+    total += r * amp; norm += amp;
+    amp *= .5; freq *= 2;
+  }
+  return total / norm;
+}
+
+const WORLD_SEED = 20260905 & 0x7fffffff;
+function reliefAt(x, y) {
+  const m = valueNoise(x / MASSIF_SCALE_NM, y / MASSIF_SCALE_NM, WORLD_SEED + 7717);
+  return MIN_RELIEF_FT + (MAX_RELIEF_FT - MIN_RELIEF_FT) * smoothstep(m);
+}
+function naturalElevation(x, y) {
+  return BASE_ELEV_FT + ridgedFbm(x / RIDGE_SCALE_NM, y / RIDGE_SCALE_NM, WORLD_SEED) * reliefAt(x, y);
+}
+
+/* ---------- airfields (airfield.py) ----------
+   Two sources behind one interface. Procedural fields are infinite and seeded;
+   authored fields have hand-written identities but their *positions* still come
+   from the same flat-ground search, so an authored field sits in the same
+   terrain as everything else with no seam and no separate elevation function.
+
+   Site selection reads naturalElevation, never elevation, so the search that
+   places a runway never sees the flattening it is about to cause. */
+
+const HEADING_CANDIDATES = 8, ROUGHNESS_SAMPLES = 7;
+const MAX_GRADEABLE_ROUGHNESS_FT = 420;
+const GRADE_INNER_FACTOR = 0.62, GRADE_BLEND_NM = 1.2;
+const APPROACH_LENGTH_NM = 12.0, APPROACH_HALF_WIDTH_NM = 0.35, APPROACH_SLOPE_DEG = 2.4;
+const HOME_CENTRE = [0, 0], HOME_RADIUS_NM = 70;
+
+function runwayRoughness(x, y, headingDeg, lengthFt) {
+  const halfNm = lengthFt / FT_PER_NM / 2, r = rad(headingDeg);
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < ROUGHNESS_SAMPLES; i++) {
+    const t = -halfNm + 2 * halfNm * i / (ROUGHNESS_SAMPLES - 1);
+    const e = naturalElevation(x + Math.sin(r) * t, y + Math.cos(r) * t);
+    if (e < lo) lo = e;
+    if (e > hi) hi = e;
+  }
+  return hi - lo;
+}
+
+/* The flattest axis through a point. In mountainous country the flattest line
+   runs along the valley, so this gives the answer a surveyor would without any
+   code that knows what a valley is. */
+function bestRunwayHeading(x, y, lengthFt) {
+  let bestH = 0, bestR = Infinity;
+  for (let i = 0; i < HEADING_CANDIDATES; i++) {
+    const h = 180 * i / HEADING_CANDIDATES;
+    const r = runwayRoughness(x, y, h, lengthFt);
+    if (r < bestR) { bestH = h; bestR = r; }
+  }
+  return { heading: bestH, roughness: bestR };
+}
+
+/* Two passes, because the heading sweep is expensive: score candidates cheaply
+   on local relief, then run the full sweep on the best handful. */
+function findFlatSite(cx, cy, boxNm, lengthFt, seed, attempts = 48) {
+  const candidates = [];
+  for (let i = 0; i < attempts; i++) {
+    const x = cx + (hash01(i, 3, seed) - 0.5) * 2 * boxNm;
+    const y = cy + (hash01(i, 7, seed + 31) - 0.5) * 2 * boxNm;
+    const here = naturalElevation(x, y);
+    let spread = 0;
+    for (const [d, e] of [[0.7, 0], [-0.7, 0], [0, 0.7], [0, -0.7]]) {
+      spread = Math.max(spread, Math.abs(naturalElevation(x + d, y + e) - here));
+    }
+    candidates.push({ spread, x, y, elev: here });
+  }
+  candidates.sort((a, b) => a.spread - b.spread);
+  let best = null;
+  for (const c of candidates.slice(0, 5)) {
+    const { heading, roughness } = bestRunwayHeading(c.x, c.y, lengthFt);
+    if (!best || roughness < best.roughness) {
+      best = { x: c.x, y: c.y, heading, elev: c.elev, roughness };
+    }
+  }
+  return best;
+}
+
+class Airfield {
+  constructor(o) { Object.assign(this, o); }
+  get lengthNm() { return this.lengthFt / FT_PER_NM; }
+  get gradedRadiusNm() { return this.lengthNm * GRADE_INNER_FACTOR; }
+  distanceNm(x, y) { return Math.hypot(x - this.x, y - this.y); }
+  bearingFrom(x, y) { return wrap360(deg(Math.atan2(this.x - x, this.y - y))); }
+  directions() { return [this.heading, wrap360(this.heading + 180)]; }
+
+  /* Whichever end you are lined up to use: fly at it from the south-west and
+     you are using the north-east end, and that is that. */
+  directionForHeading(hdg) {
+    const [primary, reciprocal] = this.directions();
+    return Math.abs(wrap180(hdg - primary)) <= 90 ? primary : reciprocal;
+  }
+
+  /* Position relative to the threshold you are using, in feet: distance along
+     the runway, and offset from the centreline positive to the right. */
+  frameFor(x, y, directionDeg) {
+    const half = this.lengthNm / 2, r = rad(directionDeg);
+    const tx = this.x - Math.sin(r) * half, ty = this.y - Math.cos(r) * half;
+    const dx = (x - tx) * FT_PER_NM, dy = (y - ty) * FT_PER_NM;
+    return {
+      along:  dx * Math.sin(r) + dy * Math.cos(r),
+      across: dx * Math.cos(r) - dy * Math.sin(r)
+    };
+  }
+  isOverRunway(x, y) {
+    const f = this.frameFor(x, y, this.heading);
+    return f.along >= 0 && f.along <= this.lengthFt && Math.abs(f.across) <= this.widthFt / 2;
+  }
+  isOnSurface(x, y) { return this.distanceNm(x, y) <= this.gradedRadiusNm; }
+}
+
+const IDENT_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+function proceduralIdent(cx, cy, seed) {
+  let s = "X";
+  for (let i = 0; i < 3; i++) {
+    s += IDENT_LETTERS[Math.floor(hash01(cx, cy, seed + 200 + i * 37) * IDENT_LETTERS.length)];
+  }
+  return s;
+}
+function runwayLengthFor(seedValue) {
+  const roll = hash01(seedValue & 0xffff, 17, 4441);
+  if (roll < 0.25) return 5200;      // short: a real problem for a widebody
+  if (roll < 0.72) return 7800;
+  return 11500;
+}
+
+/* Authored identity, procedural position. */
+const HOME_SPEC = [
+  { ident: "ANFL", name: "Anfell International", off: [-18, 6], lengthFt: 12200, widthFt: 200, ils: true,
+    note: "Long, wide, instrument-equipped, low ground all around. Everything fits, including the A380." },
+  { ident: "KEBR", name: "Kettlebridge", off: [14, 22], lengthFt: 7600, widthFt: 150, ils: true,
+    note: "A working regional field. Fine for the narrowbodies, tight for an A350." },
+  { ident: "HRWD", name: "Harrow Deep", off: [30, -16], lengthFt: 5400, widthFt: 120, ils: false,
+    note: "Short, narrow, no ILS, set well back in the hills. Visual only, and you want to be slow and stable early." },
+  { ident: "VSPR", name: "Vesper Shelf", off: [-8, -34], lengthFt: 6400, widthFt: 150, ils: false,
+    note: "High ground. Thin air means a longer roll and a faster true airspeed for the same indicated." },
+  { ident: "CROW", name: "Crowmarsh", off: [42, 30], lengthFt: 8800, widthFt: 150, ils: true,
+    note: "Long enough to be comfortable, but the approach threads between two ridges." }
+];
+
+const inHomeRegion = (x, y) => Math.hypot(x - HOME_CENTRE[0], y - HOME_CENTRE[1]) <= HOME_RADIUS_NM;
+
+const CELL_NM = 55, POPULATED_FRACTION = 0.62;
+const airfields = { authored: null, cells: new Map() };
+
+function buildAuthored() {
+  if (airfields.authored) return airfields.authored;
+  airfields.authored = HOME_SPEC.map(spec => {
+    let identSeed = 0;
+    for (const ch of spec.ident) identSeed += ch.charCodeAt(0);
+    const site = findFlatSite(HOME_CENTRE[0] + spec.off[0], HOME_CENTRE[1] + spec.off[1],
+                              8.0, spec.lengthFt, WORLD_SEED + identSeed);
+    return new Airfield({
+      ident: spec.ident, name: spec.name, x: site.x, y: site.y,
+      elev: site.elev, heading: site.heading,
+      lengthFt: spec.lengthFt, widthFt: spec.widthFt, ils: spec.ils, note: spec.note
+    });
+  });
+  return airfields.authored;
+}
+
+function cellAirfield(cx, cy) {
+  const key = cx + "," + cy;
+  if (airfields.cells.has(key)) return airfields.cells.get(key);
+  let field = null;
+  if (hash01(cx, cy, WORLD_SEED + 6151) <= POPULATED_FRACTION) {
+    const cellSeed = WORLD_SEED + cx * 7919 + cy * 104729;
+    const lengthFt = runwayLengthFor(cellSeed);
+    const site = findFlatSite((cx + 0.5) * CELL_NM, (cy + 0.5) * CELL_NM,
+                              CELL_NM * 0.42, lengthFt, cellSeed);
+    /* Reject anything the search could not make flat enough to land on. */
+    if (site && site.roughness < MAX_GRADEABLE_ROUGHNESS_FT) {
+      field = new Airfield({
+        ident: proceduralIdent(cx, cy, WORLD_SEED), name: "Field " + proceduralIdent(cx, cy, WORLD_SEED),
+        x: site.x, y: site.y, elev: site.elev, heading: site.heading,
+        lengthFt, widthFt: 150, ils: hash01(cx, cy, WORLD_SEED + 991) < 0.45, note: ""
+      });
+    }
+  }
+  airfields.cells.set(key, field);
+  return field;
+}
+
+function airfieldsNear(x, y, radiusNm = 90) {
+  const found = buildAuthored().filter(a => a.distanceNm(x, y) <= radiusNm);
+  const reach = Math.floor(radiusNm / CELL_NM) + 1;
+  const cx = Math.floor(x / CELL_NM), cy = Math.floor(y / CELL_NM);
+  for (let i = cx - reach; i <= cx + reach; i++) {
+    for (let j = cy - reach; j <= cy + reach; j++) {
+      const a = cellAirfield(i, j);
+      /* Procedural cells overlapping the home region would drop runways on top
+         of the authored ones, so they are suppressed there. */
+      if (a && !inHomeRegion(a.x, a.y) && a.distanceNm(x, y) <= radiusNm) found.push(a);
+    }
+  }
+  found.sort((p, q) => p.distanceNm(x, y) - q.distanceNm(x, y));
+  return found;
+}
+const nearestAirfield = (x, y, r) => airfieldsNear(x, y, r)[0] || null;
+
+/* ---------- terrain, with the airfields cut into it ----------
+   Grading flattens; approach surfaces only ever cut high ground *down*, never
+   fill a valley, so the landscape keeps its character. Both are applied here
+   and in the height shader from the same numbers. */
+function elevation(x, y) {
+  let h = naturalElevation(x, y);
+  for (const a of activeFields) {
+    const dx = x - a.x, dy = y - a.y;
+    const inner = a.gradedRadiusNm, outer = inner + GRADE_BLEND_NM;
+    if (Math.abs(dx) > outer || Math.abs(dy) > outer) continue;
+    const d = Math.hypot(dx, dy);
+    if (d >= outer) continue;
+    h = d <= inner ? a.elev
+      : a.elev + (h - a.elev) * smoothstep((d - inner) / (outer - inner));
+  }
+  return applyApproachSurfaces(x, y, h);
+}
+
+function applyApproachSurfaces(x, y, elevFt) {
+  const slope = Math.tan(rad(APPROACH_SLOPE_DEG));
+  for (const a of activeFields) {
+    const half = a.lengthNm / 2;
+    for (const dir of a.directions()) {
+      const r = rad(dir);
+      const tx = a.x - Math.sin(r) * half, ty = a.y - Math.cos(r) * half;
+      const dx = x - tx, dy = y - ty;
+      /* `along` runs back from the threshold, out along the approach. */
+      const along = -(dx * Math.sin(r) + dy * Math.cos(r));
+      if (along <= 0 || along >= APPROACH_LENGTH_NM) continue;
+      const across = Math.abs(dx * Math.cos(r) - dy * Math.sin(r));
+      if (across >= APPROACH_HALF_WIDTH_NM) continue;
+      const ceiling = a.elev + along * slope * FT_PER_NM;
+      if (elevFt <= ceiling) continue;
+      /* Both tapers act over the outer fifth only. Spread across the whole
+         corridor they would apply half the cut in the middle, which is exactly
+         where the glidepath is lowest and the protection matters most. */
+      const edge = smoothstep(Math.min(1, (1 - across / APPROACH_HALF_WIDTH_NM) / 0.2));
+      const far  = smoothstep(Math.min(1, (1 - along / APPROACH_LENGTH_NM) / 0.2));
+      const strength = edge * far;
+      elevFt = elevFt * (1 - strength) + ceiling * strength;
+    }
+  }
+  return elevFt;
+}
+
+/* The fields close enough to matter, refreshed as the aircraft moves. Both the
+   CPU elevation above and the height shader read this same list, so the ground
+   you can see is the ground you can hit. */
+let activeFields = [];
+function refreshActiveFields(x, y) {
+  activeFields = airfieldsNear(x, y, 34).slice(0, 4);
+}
+
+/* ---------- approach guidance (landing.py) ---------- */
+const GLIDESLOPE_DEG = 3.0, APPROACH_RANGE_NM = 20.0;
+/* A real glidepath aims a thousand feet down the runway, not at the threshold.
+   Aiming at the threshold makes the guidance run out exactly where the aircraft
+   still has fifty feet to descend, and it floats the length of the runway. */
+const AIM_POINT_FT = 1000.0, MAX_LOCALISER_DEG = 12.0, MAX_APPROACH_CRAB_DEG = 45.0;
+const VREF_FACTOR = 1.3;
+
+const vrefKt = (a, s) => stallIasKt(a, s.mass, 1, s.flaps) * VREF_FACTOR;
+
+function approachGuidance(a, s) {
+  const field = nearestAirfield(s.x, s.y, APPROACH_RANGE_NM);
+  if (!field) return null;
+  const direction = field.directionForHeading(s.hdg);
+  const { along, across } = field.frameFor(s.x, s.y, direction);
+
+  const toThresholdFt = -along;
+  const distanceNm = Math.hypot(toThresholdFt, across) / FT_PER_NM;
+  const toAimFt = AIM_POINT_FT - along;
+  const target = field.elev + Math.max(0, toAimFt) * Math.tan(rad(GLIDESLOPE_DEG));
+  /* Guard the singularity over the threshold, where a foot of lateral offset
+     would otherwise read as tens of degrees. */
+  const localiser = deg(Math.atan2(across, Math.max(Math.abs(toThresholdFt), 500)));
+
+  return {
+    field, direction, distanceNm, along, across,
+    gsDevFt: s.alt - target,
+    locDevDeg: localiser,
+    targetAltFt: target,
+    /* "On approach" must mean *positioned to land on this runway*, not merely
+       near it -- a cruising aircraft five miles abeam a field is not on its
+       approach, and showing it guidance is noise. Guidance runs to the far end
+       of the runway rather than stopping at the aim point. */
+    onApproach: along < field.lengthFt
+             && distanceNm < APPROACH_RANGE_NM
+             && Math.abs(localiser) < MAX_LOCALISER_DEG
+             && Math.abs(wrap180(s.hdg - direction)) < MAX_APPROACH_CRAB_DEG
+  };
+}
+
+/* ---------- touchdown grading (landing.py) ----------
+   Order matters: what destroys the aircraft is checked before what merely
+   embarrasses the pilot. */
+const BRAKING_FRICTION = 0.30, ROLLING_FRICTION = 0.02;
+const REVERSE_FRACTION = 0.45, STOPPED_KT = 25.0;
+const SINK_GREASER = 60, SINK_NORMAL = 240, SINK_FIRM = 600, SINK_HARD = 900;
+const MAX_TD_BANK_DEG = 8, MAX_TD_CRAB_DEG = 20;
+
+function gradeTouchdown(a, s, field, onRunway) {
+  const direction = field.directionForHeading(s.hdg);
+  const { along, across } = field.frameFor(s.x, s.y, direction);
+  const crab = wrap180(s.hdg - direction);
+  const sink = Math.abs(s.tas * Math.sin(rad(s.gamma)) * FPM_PER_MS);
+  const ias = tasToIas(s.tas, s.alt) * KT_PER_MS;
+  const vref = vrefKt(a, s);
+  const td = {
+    ident: field.ident, name: field.name, sink, ias, vref,
+    ratio: ias / Math.max(vref, 1), across, crab, bank: s.bank, along,
+    remaining: Math.max(0, field.lengthFt - along), onRunway
+  };
+
+  if (!onRunway) {
+    const gentle = sink < SINK_FIRM && Math.abs(s.bank) <= MAX_TD_BANK_DEG;
+    return Object.assign(td, {
+      grade: "runway excursion", survivable: gentle,
+      reason: gentle ? "" :
+        `left the paved surface at ${Math.round(sink).toLocaleString()} feet a minute ` +
+        `and ${Math.abs(s.bank).toFixed(0)} degrees of bank; the gear folded in the soft ground`
+    });
+  }
+  if (sink >= SINK_HARD) return Object.assign(td, { grade: "gear collapse", survivable: false,
+    reason: `arrived at ${Math.round(sink).toLocaleString()} feet a minute; the gear is rated for nothing like it` });
+  if (Math.abs(s.bank) > MAX_TD_BANK_DEG) return Object.assign(td, { grade: "wingtip strike", survivable: false,
+    reason: `${Math.abs(s.bank).toFixed(0)} degrees of bank put the wingtip into the runway before the wheels` });
+  if (Math.abs(crab) > MAX_TD_CRAB_DEG) return Object.assign(td, { grade: "gear collapse", survivable: false,
+    reason: `touched down ${Math.abs(crab).toFixed(0)} degrees out of line; the gear is not built to be dragged sideways` });
+
+  let grade = "hard landing";
+  if (sink < SINK_GREASER) grade = "greaser";
+  else if (sink < SINK_NORMAL) grade = "normal landing";
+  else if (sink < SINK_FIRM) grade = "firm landing";
+  return Object.assign(td, { grade, survivable: true, reason: "" });
+}
+
+/* ---------- flight control laws (fbw.py) ---------- */
+const LAWS = ["normal", "alternate", "direct"];
+const LAW_NAME = { normal: "NORMAL LAW", alternate: "ALTERNATE LAW", direct: "DIRECT LAW" };
+const ALPHA_MAX_MARGIN = 0.5, ALPHA_FLOOR_MARGIN = 2.0, ALPHA_PROT_MARGIN = 3.5;
+const N_MAX_CLEAN = 2.5, N_MAX_FLAPS = 2.0, N_MIN_CLEAN = -1.0, N_MIN_FLAPS = 0.0;
+const PITCH_MAX = 30, PITCH_MIN = -15;
+const BANK_LIMIT = 67, BANK_LIMIT_HS = 45, BANK_LIMIT_DIRECT = 85;
+const ALPHA_FLOOR_MIN_AGL = 100;
+const HS_PITCH_GAIN = 0.30, HS_PITCH_MAX = 10, MACH_OVERSPEED_KT = 500;
+const MAX_DEMANDED_ALPHA = 40, ALTERNATE_STABILITY = 0.55;
+
+const alphaThresholds = a => ({
+  prot:  a.alphaCrit - ALPHA_PROT_MARGIN,
+  floor: a.alphaCrit - ALPHA_FLOOR_MARGIN,
+  max:   a.alphaCrit - ALPHA_MAX_MARGIN
+});
+const loadLimits = s => s.flaps > 0 ? [N_MIN_FLAPS, N_MAX_FLAPS] : [N_MIN_CLEAN, N_MAX_CLEAN];
+
+/* Deliberately does not stop at CL_max: the load factor law limits the g that
+   is *demanded*, not the g the wing can make. Clamping here would turn it into
+   a second, accidental angle-of-attack protection, silently active in the two
+   laws that are supposed to have none. */
+function alphaForLoadFactor(a, s, q, n) {
+  const clNeeded = n * s.mass * G0 / Math.max(q * a.wingArea, 1);
+  return clamp(deg((clNeeded - cl0Flaps(a, s.flaps)) / clAlpha(a)),
+               -MAX_DEMANDED_ALPHA, MAX_DEMANDED_ALPHA);
+}
+function overspeedKt(a, s) {
+  const ias = tasToIas(Math.max(s.tas, 1), s.alt) * KT_PER_MS;
+  const m = machOf(Math.max(s.tas, 1), s.alt);
+  return Math.max(0, ias - a.vmo, (m - a.mmo) * MACH_OVERSPEED_KT);
+}
+
+function degradeForFailures(s) {
+  if (s.law === "direct") return;
+  if (!s.enginesRunning && s.law === "normal") { s.law = "alternate"; return; }
+  if (s.law === "alternate" && s.gear) s.law = "direct";
+}
+
+/* Sets s.lawPitch / s.lawBank — the attitude the controls actually fly toward.
+   The pilot's own command is never written back to: overwriting it turns
+   alternate law's resistible demand into a hard limit, because a command taken
+   away stays away. */
+function applyLaws(a, s, dt) {
+  s.lawPitch = s.cmdPitch;
+  s.lawBank  = s.cmdBank;
+  s.prot = [];
+
+  if (s.law === "direct") {
+    s.lawBank = clamp(s.cmdBank, -BANK_LIMIT_DIRECT, BANK_LIMIT_DIRECT);
+    s.alphaFloorLatched = false;
+    return;
+  }
+
+  const th = alphaThresholds(a);
+  const alphaNow = s.pitch - s.gamma;
+  const [nMin, nMax] = loadLimits(s);
+  const over = overspeedKt(a, s);
+  const q = 0.5 * density(s.alt) * Math.pow(Math.max(s.tas, 25), 2);
+
+  let ceilingA = alphaForLoadFactor(a, s, q, nMax), limitName = "LOAD n";
+  if (s.law === "normal" && th.max < ceilingA) { ceilingA = th.max; limitName = "α-MAX"; }
+  const bottomA = alphaForLoadFactor(a, s, q, nMin);
+
+  if (s.law === "normal" && alphaNow > th.prot) s.prot.push("α-PROT");
+
+  const cmdAlpha = s.cmdPitch - s.gamma;
+  if (cmdAlpha > ceilingA) {
+    s.lawPitch = s.gamma + ceilingA;
+    s.prot.push(limitName);
+  } else if (cmdAlpha < bottomA) {
+    s.lawPitch = s.gamma + bottomA;
+    s.prot.push("LOAD n");
+  }
+
+  if (s.law === "alternate") {
+    const demanded = s.lawPitch - s.gamma;
+    if (demanded > th.max) {
+      s.lawPitch -= (demanded - th.max) * ALTERNATE_STABILITY;
+      s.prot.push("LOW SPEED STAB");
+    }
+  }
+
+  if (s.law === "normal") {
+    const lim = clamp(s.lawPitch, PITCH_MIN, PITCH_MAX);
+    if (Math.abs(lim - s.lawPitch) > 1e-9) { s.lawPitch = lim; s.prot.push("PITCH LIM"); }
+  }
+
+  if (over > 0) {
+    let bias = Math.min(over * HS_PITCH_GAIN, HS_PITCH_MAX);
+    if (s.law === "alternate") bias *= .5;
+    const wanted = levelFlightPitch(a, s) + bias;
+    if (wanted > s.lawPitch) {
+      s.lawPitch = Math.min(wanted, s.gamma + ceilingA);
+      s.prot.push(s.law === "normal" ? "HIGH SPEED PROT" : "HIGH SPEED STAB");
+    }
+  }
+
+  if (s.law === "normal") {
+    const lim = over > 0 ? BANK_LIMIT_HS : BANK_LIMIT;
+    if (Math.abs(s.cmdBank) > lim) {
+      s.lawBank = Math.sign(s.cmdBank) * lim;
+      s.prot.push("BANK LIM");
+    }
+    alphaFloor(a, s, alphaNow, th);
+  } else {
+    s.lawBank = clamp(s.cmdBank, -BANK_LIMIT_DIRECT, BANK_LIMIT_DIRECT);
+    s.alphaFloorLatched = false;
+  }
+}
+
+function alphaFloor(a, s, alphaNow, th) {
+  const agl = s.alt - elevation(s.x, s.y);
+  if (agl < ALPHA_FLOOR_MIN_AGL || s.onGround) { s.alphaFloorLatched = false; return; }
+  if (alphaNow >= th.floor) s.alphaFloorLatched = true;
+  else if (alphaNow < th.prot) s.alphaFloorLatched = false;
+  if (s.alphaFloorLatched) { s.throttle = 100; s.prot.push("A.FLOOR TOGA"); }
+}
+
+/* ---------- forces and integration (physics.py) ---------- */
+const STRUCTURAL_G = 3.8, STALL_NOSE_DROP = 4.5, STALL_AUTHORITY = 0.30;
+const MAX_SIDESLIP = 25, SIDESLIP_DRAG_K = 8.0e-5, RUDDER_DRAG_K = 1.2e-4;
+const RUDDER_REF_KT = 160, MIN_RUDDER_TRAVEL = 4;
+
+function thrustAvailable(a, s) {
+  const sigma = densityRatio(s.alt);
+  let lapse;
+  if (s.alt <= TROPOPAUSE_FT) lapse = Math.pow(sigma, 0.7);
+  else {
+    const st = densityRatio(TROPOPAUSE_FT);
+    lapse = Math.pow(st, 0.7) * Math.pow(sigma / st, 1.2);
+  }
+  lapse *= Math.max(0.30, 1 - 0.45 * machOf(Math.max(s.tas, 1), s.alt));
+  const above = s.alt - a.ceiling;
+  if (above > 0) lapse *= Math.max(0, 1 - above / 2000);
+  return a.thrust * lapse;
+}
+function thrustN(a, s) {
+  if (!s.enginesRunning || s.fuel <= 0) return 0;
+  const frac = Math.max(a.idleFrac, s.throttle / 100);
+  const running = a.arms.length - s.enginesFailed.length;
+  return thrustAvailable(a, s) * frac * running / a.arms.length;
+}
+function maxRudderDeg(a, s) {
+  const ias = Math.max(tasToIas(Math.max(s.tas, 1), s.alt) * KT_PER_MS, 1);
+  return clamp(a.maxRudder * Math.min(1, Math.pow(RUDDER_REF_KT / ias, 2)),
+               MIN_RUDDER_TRAVEL, a.maxRudder);
+}
+function liftCoefficient(a, s, alpha) {
+  const clMax = clMaxFlaps(a, s.flaps);
+  let cl = clamp(cl0Flaps(a, s.flaps) + clAlpha(a) * rad(alpha), -clMax, clMax);
+  if (alpha > a.alphaCrit) {
+    cl *= Math.max(0.32, 1 - 0.055 * (alpha - a.alphaCrit));
+    return { cl, stalled: true };
+  }
+  return { cl, stalled: false };
+}
+function aeroState(a, s) {
+  const v = Math.max(s.tas, 25);
+  const rho = density(s.alt);
+  const m = machOf(v, s.alt);
+  const alpha = s.pitch - s.gamma;
+  const { cl, stalled } = liftCoefficient(a, s, alpha);
+  let cd = cd0Config(a, s.flaps, s.gear, s.spoilers) + inducedK(a) * cl * cl;
+  if (m > a.machCrit) cd += a.waveK * Math.pow(m - a.machCrit, 3);
+  cd += SIDESLIP_DRAG_K * s.beta * s.beta + RUDDER_DRAG_K * Math.abs(s.rudder);
+  const q = 0.5 * rho * v * v;
+  return { v, mach: m, alpha, cl, cd, stalled,
+           lift: q * a.wingArea * cl, drag: q * a.wingArea * cd, thrust: thrustN(a, s) };
+}
+function levelFlightPitch(a, s) {
+  const rho = density(s.alt), v = Math.max(s.tas, 25);
+  const required = s.mass * G0 / Math.max(Math.cos(rad(s.bank)), 0.2);
+  let clReq = required / (0.5 * rho * v * v * a.wingArea);
+  clReq = Math.min(clReq, clMaxFlaps(a, s.flaps));
+  return clamp(deg((clReq - cl0Flaps(a, s.flaps)) / clAlpha(a)), -10, a.alphaCrit - 0.5);
+}
+function trimThrottle(a, s) {
+  const aero = aeroState(a, s);
+  return clamp(100 * aero.drag / Math.max(thrustAvailable(a, s), 1), 5, 100);
+}
+
+function updateSideslip(a, s, dt) {
+  const lim = maxRudderDeg(a, s);
+  s.rudder = clamp(s.rudder, -lim, lim);
+  const v = Math.max(s.tas, 25);
+  const ref = 0.5 * density(s.alt) * v * v * a.wingArea * a.span;
+  const liveArm = a.arms.reduce((sum, arm, i) => s.enginesFailed.includes(i) ? sum : sum + arm, 0);
+  const cnThrust = -(thrustN(a, s) / Math.max(a.arms.length - s.enginesFailed.length, 1)) * liveArm / Math.max(ref, 1);
+  const target = clamp((a.rudderPower * s.rudder + cnThrust) / a.dirStab, -MAX_SIDESLIP, MAX_SIDESLIP);
+  s.beta += (target - s.beta) * Math.min(1, dt / a.yawTau);
+  s.beta = clamp(s.beta, -MAX_SIDESLIP, MAX_SIDESLIP);
+}
+
+function substep(a, s, wx, dt) {
+  if (s.status !== "flying" && s.status !== "rollout") return;
+
+  if (s.onGround) { groundSubstep(a, s, dt); return; }
+
+  /* Turbulence: a filtered random walk, so gusts have duration rather than
+     flickering every frame. */
+  const intensity = wx.turb;
+  if (intensity > 0) {
+    const decay = Math.exp(-dt / 2.5);
+    for (let i = 0; i < 3; i++) {
+      s.turb[i] = clamp(s.turb[i] * decay + (Math.random() * 2 - 1) * (1 - decay) * 3, -3, 3);
+    }
+  }
+
+  degradeForFailures(s);
+  applyLaws(a, s, dt);
+  updateSideslip(a, s, dt);
+
+  const departed = (s.pitch - s.gamma) > a.alphaCrit;
+  const authority = departed ? STALL_AUTHORITY : 1;
+
+  /* Dihedral effect as a bank offset, not a roll rate: a rate of a degree or
+     two a second is simply erased by the roll authority on the next substep. */
+  const bankTarget = s.lawBank + a.dihedral * s.beta;
+  const rollStep = a.rollRate * dt * authority;
+  s.bank += clamp(bankTarget - s.bank, -rollStep, rollStep);
+
+  const pitchStep = a.pitchRate * dt * authority;
+  s.pitch += clamp(s.lawPitch - s.pitch, -pitchStep, pitchStep);
+  if (departed) s.pitch -= STALL_NOSE_DROP * dt;
+
+  if (intensity > 0) {
+    s.pitch += s.turb[0] * intensity * 0.55 * dt;
+    s.bank  += s.turb[1] * intensity * 1.60 * dt;
+  }
+
+  const bankLim = s.law === "normal" ? BANK_LIMIT : BANK_LIMIT_DIRECT;
+  s.bank  = clamp(s.bank, -bankLim, bankLim);
+  s.pitch = clamp(s.pitch, -35, 35);
+
+  const aero = aeroState(a, s);
+  const v = aero.v;
+  const ar = rad(aero.alpha), gr = rad(s.gamma), br = rad(s.bank);
+
+  const dv = (aero.thrust * Math.cos(ar) - aero.drag) / s.mass - G0 * Math.sin(gr);
+  const dgamma = (aero.lift * Math.cos(br) + aero.thrust * Math.sin(ar) - s.mass * G0 * Math.cos(gr)) / (s.mass * v);
+  const dpsi = (aero.lift * Math.sin(br)) / (s.mass * v);
+
+  s.tas = Math.max(20, s.tas + dv * dt);
+  s.gamma = clamp(s.gamma + deg(dgamma * dt), -89, 89);
+  s.hdg = wrap360(s.hdg + deg(dpsi * dt));
+
+  const vNow = Math.max(s.tas, 20);
+  s.alt += vNow * Math.sin(rad(s.gamma)) * FT_PER_M * dt
+         + (s.turb[2] * intensity * 900) / 60 * dt;
+
+  /* Ground track: the aircraft travels along its flight path, not its nose —
+     with sideslip those differ by beta — plus the wind. */
+  const horiz = vNow * Math.cos(rad(s.gamma));
+  const trackRad = rad(s.hdg - s.beta);
+  const windMs = (wx.windKt + wx.gust * s.turb[0] * 0.3) * MS_PER_KT;
+  const windTo = rad(wx.windDir + 180);
+  const vx = horiz * Math.sin(trackRad) + windMs * Math.sin(windTo);
+  const vy = horiz * Math.cos(trackRad) + windMs * Math.cos(windTo);
+  s.x += vx * dt * NM_PER_M;
+  s.y += vy * dt * NM_PER_M;
+
+  if (aero.thrust > 0) {
+    const burn = Math.min(a.tsfc * aero.thrust * dt, s.fuel);
+    s.fuel -= burn; s.mass -= burn;
+    if (s.fuel <= 0) { s.fuel = 0; s.enginesRunning = false; }
+  }
+
+  s.t += dt;
+  s.maxG = Math.max(s.maxG, aero.lift / (s.mass * G0));
+  s.maxIas = Math.max(s.maxIas, tasToIas(s.tas, s.alt) * KT_PER_MS);
+  s.maxAlt = Math.max(s.maxAlt, s.alt);
+  s.distance += Math.hypot(vx, vy) * dt * NM_PER_M;
+
+  const groundFt = elevation(s.x, s.y);
+  s.minAgl = Math.min(s.minAgl, s.alt - groundFt);
+
+  const load = aero.lift / (s.mass * G0);
+  const iasKt = tasToIas(v, s.alt) * KT_PER_MS;
+  if (load > STRUCTURAL_G || iasKt > a.vmo + 65) { endFlight(a, s, "structural"); return; }
+
+  if (s.alt <= groundFt) touchDown(a, s, groundFt);
+}
+
+function touchDown(a, s, groundFt) {
+  /* Where you touched matters as much as how. Off the paving but on the
+     airfield is survivable if it was gentle; anywhere else is a crash. */
+  const field = nearestAirfield(s.x, s.y, 8);
+  const onPaving = field ? field.isOverRunway(s.x, s.y) : false;
+  const onSurface = field ? field.isOnSurface(s.x, s.y) : false;
+  if (!field || !onSurface) { endFlight(a, s, "terrain"); return; }
+
+  const td = gradeTouchdown(a, s, field, onPaving);
+  s.touchdown = td;
+  soundTouchdown(td.sink);
+  if (!td.survivable) { endFlight(a, s, "hardlanding"); return; }
+
+  s.onGround = true; s.status = "rollout";
+  s.landingField = field.ident;
+  s.rollDirection = field.directionForHeading(s.hdg);
+  s.alt = groundFt; s.gamma = 0; s.bank = 0; s.cmdBank = 0;
+  s.pitch = 0; s.cmdPitch = 0; s.beta = 0; s.throttle = 0;
+}
+
+/* V-speeds from the stall speed in the takeoff configuration. Vr is where the
+   nosewheel may leave the ground; V2 is the speed to climb away at; V1 is the
+   last point at which the takeoff can still be abandoned. */
+function vSpeeds(a, s) {
+  const vs = stallIasKt(a, s.mass, 1, Math.max(s.flaps, 1));
+  return { v1: vs * 1.09, vr: vs * 1.15, v2: vs * 1.20 };
+}
+
+/* Ground mode, used for both the takeoff roll and the landing rollout. It is
+   the same physics either way -- thrust against friction and drag -- which is
+   why there is one function and not two. The Python engine has no takeoff at
+   all; this is the one place the browser build goes beyond it. */
+function groundSubstep(a, s, dt) {
+  const field = fieldByIdent(s.landingField);
+  if (!field) { endFlight(a, s, "landed"); return; }
+
+  const dir = s.rollDirection, r = rad(dir);
+  const v = Math.max(s.tas, 0);
+  const iasKt = tasToIas(v, s.alt) * KT_PER_MS;
+  const aero = aeroState(a, s);
+  const thrust = s.reverse ? -REVERSE_FRACTION * aero.thrust : aero.thrust;
+
+  /* Weight on wheels falls as the wing starts carrying the aircraft, so
+     braking fades out exactly as it does in reality -- which is why you cannot
+     stop a fast aeroplane with the brakes alone. */
+  const weight = s.mass * G0;
+  const onWheels = Math.max(0, weight - aero.lift);
+  const mu = ROLLING_FRICTION + (BRAKING_FRICTION - ROLLING_FRICTION) * s.brakes;
+  const friction = mu * onWheels * (s.spoilers ? 1.25 : 1.0);
+
+  const accel = (thrust - aero.drag - friction) / s.mass;
+  s.tas = Math.max(0, s.tas + accel * dt);
+
+  /* Nosewheel steering while the rudder still has something to push against;
+     above 60 kt the fin takes over and the aircraft weathercocks instead. */
+  if (v * KT_PER_MS > 3) {
+    const authority = clamp(1 - (iasKt - 20) / 60, 0.15, 1);
+    s.hdg = wrap360(s.hdg + s.rudder * 0.55 * authority * dt);
+  }
+  s.beta = 0;
+
+  /* Rotation. The pitch command only bites past Vr, and the aircraft leaves the
+     ground when the wing genuinely carries it -- there is no lift-off speed
+     written down anywhere. */
+  const { vr } = vSpeeds(a, s);
+  const groundFt = elevation(s.x, s.y);
+  if (!s.touchdown && iasKt > vr * 0.98) {
+    const step = a.pitchRate * dt;
+    s.pitch += clamp(clamp(s.cmdPitch, 0, 15) - s.pitch, -step, step);
+  } else if (s.touchdown) {
+    s.pitch += clamp(0 - s.pitch, -a.pitchRate * dt, a.pitchRate * dt);
+  } else {
+    s.pitch = clamp(s.pitch, 0, 0.5);
+  }
+  s.cmdBank = 0; s.bank = 0; s.gamma = 0;
+
+  if (aero.lift > weight && s.pitch > 0.5 && !s.touchdown) {
+    s.onGround = false;                       // flying, because the wing says so
+    s.alt = groundFt + 1;
+    s.lawPitch = s.cmdPitch = s.pitch;
+  } else {
+    s.alt = groundFt;
+  }
+
+  s.x += Math.sin(r) * s.tas * dt * NM_PER_M;
+  s.y += Math.cos(r) * s.tas * dt * NM_PER_M;
+  s.t += dt;
+  s.maxIas = Math.max(s.maxIas, iasKt);
+
+  if (aero.thrust > 0 && !s.reverse) {
+    const burn = Math.min(a.tsfc * aero.thrust * dt, s.fuel);
+    s.fuel -= burn; s.mass -= burn;
+  }
+
+  const f = field.frameFor(s.x, s.y, dir);
+  if (f.along > field.lengthFt || Math.abs(f.across) > field.widthFt * 3) {
+    endFlight(a, s, s.touchdown ? "overrun" : "runwayoverrun");
+    return;
+  }
+  /* Only a landing ends when it stops. A takeoff roll that has not started yet
+     is just an aeroplane sitting on the runway. */
+  if (s.touchdown && s.tas * KT_PER_MS < STOPPED_KT) { s.tas = 0; endFlight(a, s, "landed"); }
+}
+
+const fieldByIdent = ident =>
+  buildAuthored().find(f => f.ident === ident) ||
+  airfieldsNear(S ? S.x : 0, S ? S.y : 0, 40).find(f => f.ident === ident) || null;
+
+/* ---------- session state ---------- */
+let craft = FLEET_BY_KEY["a350"];
+let weather = WEATHER_BY_KEY["clear"];
+let S = null;
+let paused = false;
+let view = "cockpit";
+let startMode = "runway";
+/* Cloud base is an above-ground figure, so it needs a datum. The home field's
+   elevation is the one the whole region is quoted against. */
+let cloudDatumFt = 0;
+
+/* Start positioned to fly an approach: out on the extended centreline of the
+   home field, pointed at it, high enough to descend the whole way in. */
+function approachStart(field, distNm) {
+  const dir = field.heading;                      // arrive on the primary end
+  const back = rad(wrap360(dir + 180));
+  return {
+    x: field.x + Math.sin(back) * distNm,
+    y: field.y + Math.cos(back) * distNm,
+    hdg: dir,
+    alt: field.elev + distNm * FT_PER_NM * Math.tan(rad(GLIDESLOPE_DEG)) + 900
+  };
+}
+
+function newFlight(keepView) {
+  const home = buildAuthored()[0];                       // ANFL
+  cloudDatumFt = home.elev;
+  const mode = startMode;
+  let x, y, alt, hdg, onGround = false, ias, flaps = 0, gear = false, throttle = 60;
+
+  if (mode === "runway") {
+    /* Lined up on the threshold, brakes set, ready to go. */
+    hdg = home.heading;
+    const back = rad(wrap360(hdg + 180)), half = home.lengthNm / 2;
+    x = home.x + Math.sin(back) * (half - 0.02);
+    y = home.y + Math.cos(back) * (half - 0.02);
+    alt = home.elev; ias = 0; onGround = true; flaps = 1; gear = true; throttle = 0;
+  } else if (mode === "approach") {
+    const st = approachStart(home, 17);
+    x = st.x; y = st.y; alt = st.alt; hdg = st.hdg;
+    ias = 180; flaps = 2; gear = false;
+  } else {
+    const st = approachStart(home, 40);
+    x = st.x; y = st.y; hdg = st.hdg;
+    alt = home.elev + 5000;
+    ias = craft.wingArea < 200 ? 250 : 270;
+  }
+  refreshActiveFields(x, y);
+
+  S = {
+    x, y, alt,
+    tas: ias > 0 ? iasToTas(ias * MS_PER_KT, alt) : 0,
+    pitch: 0, bank: 0, hdg, gamma: 0,
+    cmdPitch: 0, cmdBank: 0, lawPitch: 0, lawBank: 0,
+    throttle, beta: 0, rudder: 0,
+    flaps, gear, spoilers: false, brakes: onGround ? 1 : 0, reverse: false,
+    fuel: craft.startFuel, mass: craft.oew + craft.payload + craft.startFuel,
+    initialFuel: craft.startFuel,
+    enginesRunning: true, enginesFailed: [],
+    law: "normal", prot: [], alphaFloorLatched: false,
+    turb: [0, 0, 0],
+    onGround, status: onGround ? "rollout" : "flying", touchdown: null,
+    landingField: home.ident, rollDirection: hdg, approach: null,
+    t: 0, distance: 0, maxG: 1, maxIas: 0, maxAlt: alt, minAgl: 1e9,
+    warnings: []
+  };
+  if (!onGround) {
+    S.pitch = S.cmdPitch = S.lawPitch = levelFlightPitch(craft, S);
+    S.throttle = trimThrottle(craft, S);
+  }
+  S.approach = approachGuidance(craft, S);
+  htOriginNm = [NaN, NaN];      // the fields moved; re-bake both height textures
+  htFineOriginNm = [NaN, NaN];
+  if (!keepView) setView("cockpit");
+  document.getElementById("ending").classList.remove("show");
+}
+
+function endFlight(a, s, kind) {
+  s.status = kind;
+  s.impactIas = tasToIas(s.tas, s.alt) * KT_PER_MS;
+  s.impactVs = -s.tas * Math.sin(rad(s.gamma)) * FPM_PER_MS;
+  showEnding(a, s, kind);
+}
+
+/* ---------- warnings (physics._warnings) ---------- */
+function computeWarnings(a, s, aero, iasKt, aglFt, stallKt) {
+  const w = [];
+  if (s.law !== "normal") w.push({ t: LAW_NAME[s.law], red: false });
+  /* A stationary aeroplane is not slow, it is parked. */
+  if (!s.onGround) {
+    if (aero.stalled) w.push({ t: "STALL", red: true });
+    else if (aero.alpha > a.alphaCrit - 3) w.push({ t: "STALL WARNING", red: true });
+    else if (iasKt < stallKt * 1.10) w.push({ t: "LOW SPEED", red: false });
+  }
+
+  if (iasKt > a.vmo || aero.mach > a.mmo) w.push({ t: "OVERSPEED", red: true });
+  if (aero.lift / (s.mass * G0) > 2.5) w.push({ t: "OVERSTRESS", red: true });
+
+  /* Suppressed when configured to land and actually tracking a runway. Without
+     that, every correct approach sets off a terrain warning at 500 ft -- and a
+     warning that fires on every landing is a warning nobody reads. */
+  const app = s.approach;
+  const configured = s.gear && s.flaps >= 2 && app && app.onApproach && app.distanceNm < 10;
+  if (!configured && !s.onGround) {
+    if (aglFt < 500) w.push({ t: "TERRAIN — PULL UP", red: true });
+    else if (aglFt < 1000) w.push({ t: "TERRAIN", red: false });
+  }
+  if (!s.enginesRunning) w.push({ t: "ENGINES OUT", red: true });
+  else if (s.fuel / craft.fuelCap < 0.05) w.push({ t: "LOW FUEL", red: false });
+  if (s.flaps > 0 && iasKt > FLAP_VFE[s.flaps]) w.push({ t: "FLAP OVERSPEED", red: true });
+  if (s.gear && iasKt > 280) w.push({ t: "GEAR OVERSPEED", red: false });
+  return w;
+}
+
+/* ==========================================================================
+   SOUND
+
+   Everything here is synthesised. There are no audio files, nothing to load
+   and nothing to wait for: the engines are oscillators, the wind is filtered
+   noise, and the callouts are the browser's own speech synthesiser.
+
+   A silent flight simulator feels dead in a way no amount of rendering fixes,
+   and the reason is that almost everything a pilot knows about the aircraft's
+   energy arrives through the ears first. Speed is wind noise, thrust is fan
+   tone, and the first sign of a stall is the airframe starting to shake.
+   ========================================================================== */
+
+const audio = {
+  ctx: null, ready: false, master: null,
+  n1: 0.22,                     // spooled fan speed, lags the thrust levers
+  nodes: {}, lastCallout: 0, calloutsDone: new Set()
+};
+
+/* One second of white noise, looped. Cheaper than a ScriptProcessor and it
+   never underruns. */
+function makeNoiseBuffer(ctx) {
+  const buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  return buf;
+}
+
+function initAudio() {
+  if (audio.ctx) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  const ctx = new AC();
+  audio.ctx = ctx;
+  audio.noiseBuffer = makeNoiseBuffer(ctx);
+
+  const master = ctx.createGain();
+  master.gain.value = 0.9;
+  master.connect(ctx.destination);
+  audio.master = master;
+
+  const noiseSource = () => {
+    const s = ctx.createBufferSource();
+    s.buffer = audio.noiseBuffer; s.loop = true; s.start();
+    return s;
+  };
+
+  /* --- engines: a fan tone plus its harmonics, over a broadband core --- */
+  const engGain = ctx.createGain(); engGain.gain.value = 0; engGain.connect(master);
+  const engFilter = ctx.createBiquadFilter();
+  engFilter.type = "lowpass"; engFilter.frequency.value = 900; engFilter.Q.value = 0.7;
+  engFilter.connect(engGain);
+
+  const oscs = [];
+  /* Detuned pairs beat against each other, which is what gives a turbofan its
+     characteristic slow throb rather than a pure electronic tone. */
+  for (const [mult, detune, level] of [[1, 0, .55], [1, 7, .45], [2, -5, .22], [3, 4, .10]]) {
+    const o = ctx.createOscillator();
+    o.type = mult === 1 ? "sawtooth" : "triangle";
+    o.detune.value = detune;
+    const g = ctx.createGain(); g.gain.value = level;
+    o.connect(g); g.connect(engFilter); o.start();
+    oscs.push({ o, mult });
+  }
+  const core = noiseSource();
+  const coreFilter = ctx.createBiquadFilter();
+  coreFilter.type = "bandpass"; coreFilter.frequency.value = 260; coreFilter.Q.value = 0.9;
+  const coreGain = ctx.createGain(); coreGain.gain.value = 0.5;
+  core.connect(coreFilter); coreFilter.connect(coreGain); coreGain.connect(engGain);
+
+  /* --- wind over the airframe --- */
+  const windGain = ctx.createGain(); windGain.gain.value = 0; windGain.connect(master);
+  const windFilter = ctx.createBiquadFilter();
+  windFilter.type = "lowpass"; windFilter.frequency.value = 500;
+  windFilter.connect(windGain);
+  noiseSource().connect(windFilter);
+
+  /* --- airframe buffet: noise chopped at a few hertz --- */
+  const buffetGain = ctx.createGain(); buffetGain.gain.value = 0; buffetGain.connect(master);
+  const buffetFilter = ctx.createBiquadFilter();
+  buffetFilter.type = "bandpass"; buffetFilter.frequency.value = 90; buffetFilter.Q.value = 1.4;
+  buffetFilter.connect(buffetGain);
+  noiseSource().connect(buffetFilter);
+  const shake = ctx.createOscillator();
+  shake.type = "sine"; shake.frequency.value = 11;
+  const shakeDepth = ctx.createGain(); shakeDepth.gain.value = 0.9;
+  shake.connect(shakeDepth); shakeDepth.connect(buffetGain.gain); shake.start();
+
+  /* --- rumble of the wheels on the paving --- */
+  const rollGain = ctx.createGain(); rollGain.gain.value = 0; rollGain.connect(master);
+  const rollFilter = ctx.createBiquadFilter();
+  rollFilter.type = "lowpass"; rollFilter.frequency.value = 150;
+  rollFilter.connect(rollGain);
+  noiseSource().connect(rollFilter);
+
+  audio.nodes = { engGain, engFilter, oscs, coreFilter, windGain, windFilter,
+                  buffetGain, buffetFilter, rollGain, rollFilter };
+  audio.ready = true;
+}
+
+/* A short enveloped burst: gear doors, flap tracks, the touchdown thump. */
+function thump(freq, duration, level, type) {
+  if (!audio.ready) return;
+  const ctx = audio.ctx, t = ctx.currentTime;
+  const src = ctx.createBufferSource();
+  src.buffer = audio.noiseBuffer;
+  src.loop = true;
+  const f = ctx.createBiquadFilter();
+  f.type = type || "bandpass"; f.frequency.value = freq; f.Q.value = 1.1;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(level, t + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+  src.connect(f); f.connect(g); g.connect(audio.master);
+  src.start(t); src.stop(t + duration + 0.05);
+}
+
+/* A pure tone, for the warnings that are tones on the real aircraft. */
+function beep(freq, duration, level, type) {
+  if (!audio.ready) return;
+  const ctx = audio.ctx, t = ctx.currentTime;
+  const o = ctx.createOscillator();
+  o.type = type || "square"; o.frequency.value = freq;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(level, t + 0.006);
+  g.gain.setValueAtTime(level, t + duration - 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+  o.connect(g); g.connect(audio.master);
+  o.start(t); o.stop(t + duration + 0.02);
+}
+
+/* Radio-altitude callouts. The browser's own voice where there is one; a
+   descending pip where there is not, so the cue still exists either way. */
+function callout(text, pitchHz) {
+  if (window.speechSynthesis && speechSynthesis.getVoices().length) {
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 1.25; u.pitch = 0.85; u.volume = 0.85;
+    speechSynthesis.speak(u);
+  } else {
+    beep(pitchHz, 0.16, 0.16, "triangle");
+  }
+}
+
+const RA_CALLOUTS = [
+  [2500, "twenty five hundred", 500], [1000, "one thousand", 560],
+  [500, "five hundred", 620], [100, "one hundred", 700], [50, "fifty", 760],
+  [40, "forty", 800], [30, "thirty", 840], [20, "twenty", 880], [10, "ten", 920]
+];
+
+let warnClackerAt = 0, stallToneAt = 0;
+
+function updateAudio(a, s, readout, dt) {
+  if (!audio.ready || audio.ctx.state !== "running") return;
+  const n = audio.nodes, ctx = audio.ctx, t = ctx.currentTime;
+  const glide = 0.08;
+
+  /* N1 chases the thrust levers with a real spool time, so the levers never
+     produce an instant change in anything -- which is most of why a jet feels
+     heavy to fly. */
+  const running = s.enginesRunning && s.fuel > 0;
+  const demand = running ? Math.max(a.idleFrac + 0.14, s.throttle / 100) : 0.0;
+  const spool = demand > audio.n1 ? 0.42 : 0.85;      // spools up slower than down
+  audio.n1 += (demand - audio.n1) * Math.min(1, dt / spool);
+
+  /* Fan tone rises with N1; the whole engine quietens with altitude because
+     there is less air to carry the sound. */
+  const density = densityRatio(s.alt);
+  const fanHz = 46 + audio.n1 * 128;
+  for (const { o, mult } of n.oscs) o.frequency.setTargetAtTime(fanHz * mult, t, glide);
+  n.engFilter.frequency.setTargetAtTime(420 + audio.n1 * 2100, t, glide);
+  n.coreFilter.frequency.setTargetAtTime(180 + audio.n1 * 300, t, glide);
+  const engLevel = (0.030 + audio.n1 * 0.115) * (0.45 + 0.55 * density)
+                 * (view === "cockpit" ? 1 : 1.35);
+  n.engGain.gain.setTargetAtTime(running ? engLevel : 0.004, t, glide);
+
+  /* Wind: dynamic pressure is what you actually hear, so it goes as the square
+     of the speed and fades with density exactly as q does. */
+  const ias = readout.ias;
+  const q = ias * ias / (350 * 350);
+  n.windGain.gain.setTargetAtTime(clamp(q * 0.30, 0, 0.34), t, 0.12);
+  n.windFilter.frequency.setTargetAtTime(300 + ias * 7, t, 0.12);
+
+  /* Buffet arrives before the stall does, which is the point of it. */
+  const th = alphaThresholds(a);
+  const buffet = clamp((readout.alpha - (th.prot - 1.5)) / 4.5, 0, 1);
+  n.buffetGain.gain.setTargetAtTime(buffet * 0.16, t, 0.05);
+
+  n.rollGain.gain.setTargetAtTime(
+    s.onGround ? clamp(ias / 160, 0, 1) * 0.14 : 0, t, 0.08);
+  n.rollFilter.frequency.setTargetAtTime(70 + ias * 1.6, t, 0.08);
+
+  /* --- the warnings that are sounds on the real aeroplane --- */
+  const now = performance.now();
+  const over = ias > a.vmo || readout.mach > a.mmo;
+  if (over && now - warnClackerAt > 190) { warnClackerAt = now; beep(2400, 0.045, 0.12); }
+  const stallish = readout.stalled || readout.alpha > a.alphaCrit - 3;
+  if (stallish && !s.onGround && now - stallToneAt > 620) {
+    stallToneAt = now; beep(760, 0.34, 0.13, "sawtooth");
+  }
+
+  /* --- radio-altitude callouts, on the way down only --- */
+  const agl = readout.agl;
+  if (!s.onGround && readout.vs < -80) {
+    for (const [h, text, hz] of RA_CALLOUTS) {
+      if (agl <= h && agl > h - 60 && !audio.calloutsDone.has(h)) {
+        audio.calloutsDone.add(h);
+        callout(text, hz);
+        break;
+      }
+    }
+  }
+  if (agl > 2800) audio.calloutsDone.clear();
+}
+
+/* Configuration changes are events, not states, so they are announced from the
+   key handler rather than polled. */
+const soundGear  = down => thump(down ? 150 : 190, down ? 1.5 : 1.2, 0.16);
+const soundFlaps = ()   => thump(340, 1.1, 0.10);
+const soundTouchdown = sinkFpm => {
+  thump(90, 0.55, clamp(0.10 + sinkFpm / 900 * 0.32, 0.10, 0.44), "lowpass");
+  thump(1300, 0.30, 0.10);                       // tyre squeal
+};
+
+/* Browsers will not start audio until the user has done something, so the
+   context is created on the first key or click and the panel says so until it
+   is. */
+function armAudio() {
+  initAudio();
+  if (audio.ctx && audio.ctx.state === "suspended") audio.ctx.resume();
+  const hint = document.getElementById("audio-hint");
+  if (hint && audio.ctx && audio.ctx.state !== "suspended") hint.style.display = "none";
+}
+window.addEventListener("keydown", armAudio, { once: false });
+window.addEventListener("pointerdown", armAudio, { once: false });
+
+/* ==========================================================================
+   RENDERING — WebGL2
+
+   The world is a single camera-centred grid displaced in the vertex shader
+   from a height texture the GPU generates itself. The generation shader is a
+   line-for-line port of the same 32-bit lattice hash and ridged multifractal
+   the flight model uses on the CPU, so the terrain you fly into is the terrain
+   you can see, to within a fraction of a foot.
+
+   Heights are packed as 24-bit fixed point into RGBA8 rather than kept as
+   floats: an RGBA8 render target and an RGBA8 sampler need no extensions at
+   all, where R32F needs EXT_color_buffer_float to render into and
+   OES_texture_float_linear to filter. The bilinear fetch is written by hand
+   for the same reason.
+   ========================================================================== */
+
+const glc = document.getElementById("gl");
+const hudc = document.getElementById("hud");
+const hctx = hudc.getContext("2d");
+const gl = glc.getContext("webgl2", {
+  antialias: true, depth: true, alpha: false, powerPreference: "high-performance"
+});
+
+let VW = 0, VH = 0;
+const FOV_V = rad(52);
+const hex = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+/* Any JavaScript number spliced into GLSL has to carry a decimal point, or a
+   whole number types as int and every expression it touches fails to compile. */
+const glf = n => Number.isInteger(n) ? n.toFixed(1) : String(n);
+const NEAR_M = 3, FAR_M = 70000;
+
+/* ---------- small matrix helpers ---------- */
+function mat4Perspective(out, fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+  out.set([f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0]);
+  return out;
+}
+/* View matrix from an orthonormal camera basis. Column-major for WebGL. */
+function mat4View(out, eye, R, U, F) {
+  out[0] = R[0]; out[4] = R[1]; out[8]  = R[2];  out[12] = -(R[0]*eye[0] + R[1]*eye[1] + R[2]*eye[2]);
+  out[1] = U[0]; out[5] = U[1]; out[9]  = U[2];  out[13] = -(U[0]*eye[0] + U[1]*eye[1] + U[2]*eye[2]);
+  out[2] = -F[0]; out[6] = -F[1]; out[10] = -F[2]; out[14] =  (F[0]*eye[0] + F[1]*eye[1] + F[2]*eye[2]);
+  out[3] = 0; out[7] = 0; out[11] = 0; out[15] = 1;
+  return out;
+}
+function mat4Mul(out, a, b) {          // out = a * b
+  for (let c = 0; c < 4; c++) {
+    for (let r = 0; r < 4; r++) {
+      out[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] +
+                       a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+    }
+  }
+  return out;
+}
+
+/* Aircraft / camera basis. Starboard is (cos ψ, −sin ψ) and the nose is
+   (sin ψ, cos ψ) in east/north; a positive bank rolls starboard down, which is
+   a negative rotation about the nose in the right-handed (R, U, F) frame. */
+function basis(hdgDeg, pitchDeg, bankDeg) {
+  const ps = rad(hdgDeg), th = rad(pitchDeg), ph = rad(bankDeg);
+  const F0 = [Math.sin(ps), Math.cos(ps), 0];
+  const R0 = [Math.cos(ps), -Math.sin(ps), 0];
+  const ct = Math.cos(th), st = Math.sin(th);
+  const F = [F0[0] * ct, F0[1] * ct, st];
+  const U1 = [-F0[0] * st, -F0[1] * st, ct];
+  const cp = Math.cos(ph), sp = Math.sin(ph);
+  const R = [R0[0] * cp - U1[0] * sp, R0[1] * cp - U1[1] * sp, R0[2] * cp - U1[2] * sp];
+  const U = [R0[0] * sp + U1[0] * cp, R0[1] * sp + U1[1] * cp, R0[2] * sp + U1[2] * cp];
+  return { F, R, U };
+}
+
+/* ---------- shader plumbing ---------- */
+function compile(type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    throw new Error(gl.getShaderInfoLog(sh) + "\n" + src.split("\n").map((l, i) => (i + 1) + ": " + l).join("\n"));
+  }
+  return sh;
+}
+function makeProgram(vsSrc, fsSrc) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vsSrc));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fsSrc));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    /* Array uniforms are addressed by their first element. */
+  p.u = new Proxy({}, { get: (c, n) => n in c ? c[n]
+    : (c[n] = gl.getUniformLocation(p, n) || gl.getUniformLocation(p, n + "[0]")) });
+  return p;
+}
+
+/* ---------- the terrain function, in GLSL ----------
+   Identical to hash01 / valueNoise / ridgedFbm / reliefAt / naturalElevation
+   above. uint arithmetic wraps at 32 bits exactly as Python's & 0xFFFFFFFF
+   does, so the lattice is the same lattice. The one deliberate difference is
+   taking the top 24 bits of the hash rather than all 32, because that is what
+   a 32-bit float represents exactly -- a difference of six parts in a hundred
+   million, or well under a thousandth of a foot of terrain. */
+const GLSL_NOISE = `
+const uint SEED = ${WORLD_SEED}u;
+
+uint hashU(int ix, int iy, uint seed) {
+  uint h = uint(ix) * 374761393u + uint(iy) * 668265263u + seed * 1442695041u;
+  h = h ^ (h >> 13); h = h * 1274126177u; h = h ^ (h >> 16);
+  return h;
+}
+float h01(int ix, int iy, uint seed) { return float(hashU(ix, iy, seed) >> 8u) / 16777216.0; }
+float sstep(float t) { return t * t * (3.0 - 2.0 * t); }
+
+float vnoise(vec2 p, uint seed) {
+  vec2 i = floor(p);
+  float fx = sstep(p.x - i.x), fy = sstep(p.y - i.y);
+  int ix = int(i.x), iy = int(i.y);
+  float n00 = h01(ix, iy, seed),     n10 = h01(ix + 1, iy, seed);
+  float n01 = h01(ix, iy + 1, seed), n11 = h01(ix + 1, iy + 1, seed);
+  return mix(mix(n00, n10, fx), mix(n01, n11, fx), fy);
+}
+float ridged(vec2 p, uint seed) {
+  float total = 0.0, amp = 1.0, freq = 1.0, norm = 0.0;
+  for (int o = 0; o < 4; o++) {
+    float n = vnoise(p * freq, seed + uint(o) * 1013u);
+    float r = 1.0 - abs(2.0 * n - 1.0);
+    r *= r;
+    total += r * amp; norm += amp; amp *= 0.5; freq *= 2.0;
+  }
+  return total / norm;
+}
+float reliefNm(vec2 nm) {
+  return ${glf(MIN_RELIEF_FT)} + (${glf(MAX_RELIEF_FT)} - ${glf(MIN_RELIEF_FT)})
+         * sstep(vnoise(nm / ${glf(MASSIF_SCALE_NM)}, SEED + 7717u));
+}
+float naturalNm(vec2 nm) {
+  return ${glf(BASE_ELEV_FT)} + ridged(nm / ${glf(RIDGE_SCALE_NM)}, SEED) * reliefNm(nm);
+}
+`;
+
+const QUAD_VS = `#version 300 es
+in vec2 aPos;
+out vec2 vNdc;
+void main() { vNdc = aPos; gl_Position = vec4(aPos, 0.0, 1.0); }`;
+
+/* ---------- height texture generation ---------- */
+/* Two height textures, because one cannot be both wide and fine. The coarse
+   one reaches the horizon; the fine one follows the aircraft and carries the
+   detail the near rings of the clipmap need. They are blended in world space
+   rather than per level, so the changeover happens at a fixed radius and no
+   ring boundary ever coincides with it. */
+const HT_N = 1024;                 // texels per side, both textures
+const HT_SPAN_NM = 60;             // coarse: nautical miles covered
+const HT_REGEN_NM = 6;
+const HT_FINE_SPAN_NM = 5;         // fine: 29.7 ft per texel
+const HT_FINE_REGEN_NM = 1.5;
+const HT_MAX_FT = 14000.0;
+
+const HEIGHT_FS = `#version 300 es
+precision highp float;
+precision highp int;
+in vec2 vNdc;
+out vec4 fragColor;
+uniform vec2 uOriginNm;      // world nm at the texture's lower-left texel
+uniform float uSpanNm;
+uniform int   uFieldCount;
+uniform vec4  uField[4];      // x nm, y nm, elevation ft, heading deg
+uniform vec4  uFieldGeom[4];  // inner nm, outer nm, length ft, width ft
+uniform float uCarve;         // 1 in the fine texture, 0 in the coarse one
+${GLSL_NOISE}
+
+/* Relief below what the flight model can resolve.
+
+   naturalNm() is shared with the physics and with the airfield search, so it
+   cannot change -- but its finest octave has a wavelength of 4,560 ft, which is
+   why twenty-nine-foot triangles were resolving velvet. The mesh was finer than
+   the function it sampled. So the extra octaves live here, in the height
+   texture, and they only ever cut *downwards*: rendered ground is never higher
+   than the ground the aeroplane collides with, so no hill can appear that the
+   physics cannot see. Only the fine texture carries them -- the coarse one is
+   356 ft per texel and would alias them into a shimmer -- and the world-space
+   blend in heightFtAt() fades them out with distance for free. */
+float carveFt(vec2 nm, float relief) {
+  /* Wavelengths of 2,340 / 1,060 / 480 / 220 ft. The shortest is seven texels
+     of the fine texture across, which is as fine as 29.7 ft per texel can carry
+     without turning into a shimmer; the first attempt started four times longer
+     than this and read as nothing at all, because a hundred feet spread over
+     three-quarters of a mile is a slope of five degrees.
+
+     165 ft is also the most the rendered ground may sit below the ground the
+     radio altimeter is reading. Beyond an airfield's graded ground that is the
+     error you would be flying on, so it is deliberately small. */
+  float d = 0.0, a = 1.0, f = 2.6, norm = 0.0;
+  for (int o = 0; o < 4; o++) {
+    float n = vnoise(nm * f, SEED + 4409u + uint(o) * 733u);
+    float r = 1.0 - abs(2.0 * n - 1.0);
+    d += (1.0 - r * r) * a; norm += a;
+    a *= 0.55; f *= 2.2;
+  }
+  return min(relief * 0.040, 165.0) * (d / norm);
+}
+
+void main() {
+  vec2 nm = uOriginNm + (vNdc * 0.5 + 0.5) * uSpanNm;
+  float h = naturalNm(nm);
+  /* Before grading, so an airfield still flattens it away and the runway stays
+     exactly as level as the touchdown model believes it is. */
+  h -= uCarve * carveFt(nm, reliefNm(nm));
+  float surface = 0.0;
+
+  /* Grading, exactly as elevation() blends it on the CPU: flat inside the
+     inner radius, smoothstepped back to natural ground by the outer one.
+     Ungraded, a runway laid over ridged noise has a two-hundred-foot hump. */
+  for (int k = 0; k < 4; k++) {
+    if (k >= uFieldCount) break;
+    vec2 d = nm - uField[k].xy;
+    float inner = uFieldGeom[k].x, outer = uFieldGeom[k].y;
+    float dist = length(d);
+    if (dist >= outer) continue;
+    float elev = uField[k].z;
+    h = dist <= inner ? elev
+      : elev + (h - elev) * sstep((dist - inner) / (outer - inner));
+
+    if (dist < inner) {
+      surface = max(surface, 0.5);                    // graded apron
+      float halfNm = uFieldGeom[k].z / ${glf(FT_PER_NM)} * 0.5;
+      float r = radians(uField[k].w);
+      vec2 t = uField[k].xy - vec2(sin(r), cos(r)) * halfNm;
+      vec2 dt = (nm - t) * ${glf(FT_PER_NM)};
+      float along  = dt.x * sin(r) + dt.y * cos(r);
+      float across = dt.x * cos(r) - dt.y * sin(r);
+      if (along > 0.0 && along < uFieldGeom[k].z && abs(across) < uFieldGeom[k].w * 0.5) {
+        surface = 1.0;
+      }
+    }
+  }
+
+  /* Approach surfaces cut high ground *down* and never fill a valley, so the
+     landscape keeps its character. Both tapers act over the outer fifth only:
+     spread across the whole corridor they would apply half the cut in the
+     middle, which is where the glidepath is lowest and it matters most. */
+  float slope = tan(radians(${glf(APPROACH_SLOPE_DEG)}));
+  for (int k = 0; k < 4; k++) {
+    if (k >= uFieldCount) break;
+    float halfNm = uFieldGeom[k].z / ${glf(FT_PER_NM)} * 0.5;
+    for (int e = 0; e < 2; e++) {
+      float dir = uField[k].w + (e == 1 ? 180.0 : 0.0);
+      float r = radians(dir);
+      vec2 t = uField[k].xy - vec2(sin(r), cos(r)) * halfNm;
+      vec2 d = nm - t;
+      float along = -(d.x * sin(r) + d.y * cos(r));
+      if (along <= 0.0 || along >= ${glf(APPROACH_LENGTH_NM)}) continue;
+      float across = abs(d.x * cos(r) - d.y * sin(r));
+      if (across >= ${glf(APPROACH_HALF_WIDTH_NM)}) continue;
+      float ceilingFt = uField[k].z + along * slope * ${glf(FT_PER_NM)};
+      if (h <= ceilingFt) continue;
+      float edge = sstep(min(1.0, (1.0 - across / ${glf(APPROACH_HALF_WIDTH_NM)}) / 0.2));
+      float far  = sstep(min(1.0, (1.0 - along / ${glf(APPROACH_LENGTH_NM)}) / 0.2));
+      float strength = edge * far;
+      h = h * (1.0 - strength) + ceilingFt * strength;
+    }
+  }
+
+  uint v = uint(clamp(h / ${glf(HT_MAX_FT)}, 0.0, 1.0) * 16777215.0 + 0.5);
+  fragColor = vec4(float(v & 255u) / 255.0,
+                   float((v >> 8) & 255u) / 255.0,
+                   float((v >> 16) & 255u) / 255.0,
+                   surface);
+}`;
+
+/* ---------- terrain mesh: a geometry clipmap ----------
+   Seven nested squares, each centred on the camera and each with twice the
+   spacing of the one inside it. Every level but the innermost is hollow, so
+   the levels are disjoint -- no overdraw and nothing to z-fight. The result
+   puts 29 ft between vertices where you are looking and 1,830 ft at the
+   horizon, for fewer triangles than one uniform grid at 418 ft. */
+const CLIP_N = 256;                // vertices per side, every level
+const CLIP_LEVELS = 7;
+const CLIP_BASE_NM = 1.2;          // level 0's full extent
+const clipExtentNm = k => CLIP_BASE_NM * Math.pow(2, k);
+const clipCellM = k => clipExtentNm(k) * 1852 / (CLIP_N - 1);
+const G_SPAN_NM = clipExtentNm(CLIP_LEVELS - 1);   // how far the mesh reaches
+
+const DECODE = `
+uniform sampler2D uHeight;         // coarse, reaches the horizon
+uniform sampler2D uHeightFine;     // fine, follows the aircraft
+uniform vec2 uTexOriginM, uFineOriginM;
+uniform float uTexSpanM, uFineSpanM;
+const float HT_N_F = ${glf(HT_N)};
+
+float decodeH(vec4 c) {
+  return (c.r * 255.0 + c.g * 255.0 * 256.0 + c.b * 255.0 * 65536.0) / 16777215.0 * ${glf(HT_MAX_FT)};
+}
+/* Bilinear by hand -- the textures are sampled NEAREST so that the 24-bit
+   packing is never blended byte-wise, which would produce wild heights. */
+float sampleH(sampler2D tex, vec2 worldM, vec2 originM, float spanM) {
+  vec2 t = (worldM - originM) / spanM * HT_N_F - 0.5;
+  vec2 f = fract(t);
+  vec2 b = (floor(t) + 0.5) / HT_N_F;
+  float e = 1.0 / HT_N_F;
+  float h00 = decodeH(texture(tex, b));
+  float h10 = decodeH(texture(tex, b + vec2(e, 0.0)));
+  float h01 = decodeH(texture(tex, b + vec2(0.0, e)));
+  float h11 = decodeH(texture(tex, b + vec2(e, e)));
+  return mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
+}
+float heightFtAt(vec2 worldM) {
+  float hC = sampleH(uHeight, worldM, uTexOriginM, uTexSpanM);
+  vec2 c = uFineOriginM + uFineSpanM * 0.5;
+  float halfFine = uFineSpanM * 0.5;
+  float d = max(abs(worldM.x - c.x), abs(worldM.y - c.y));
+  if (d >= halfFine * 0.94) return hC;
+  float hF = sampleH(uHeightFine, worldM, uFineOriginM, uFineSpanM);
+  /* A long ramp, because the two textures disagree by up to the carve depth and
+     the boundary between them is a square. The eye finds a square edge in a
+     landscape instantly; spread over a mile and a half it finds nothing. */
+  return mix(hF, hC, smoothstep(halfFine * 0.40, halfFine * 0.94, d));
+}
+
+/* Where the water sits.
+
+   A fixed sea level is no use here: the lowest ground in the whole world is
+   244 ft, so a 330 ft shoreline flooded five ten-thousandths of it and the lake
+   shading had never once been seen from the air. Water needs a basin, and this
+   world's basins are at every altitude. So the level is regional -- a slow
+   field sets a local water table and there is water wherever the ground falls
+   below it. Tarns high in the massifs, broad water on the valley floors, and no
+   ocean anywhere. It covers about a twentieth of the world, which is between
+   Scotland and Finland. */
+float waterFtAt(vec2 nm) {
+  float t = vnoise(nm / 26.0, SEED + 3313u);
+  return ${glf(BASE_ELEV_FT)} + reliefNm(nm) * (0.10 + 0.26 * t * t);
+}
+/* The height texture's alpha already says "this is a graded airfield", so
+   asking it costs one fetch and needs no new uniforms -- and it is the only
+   thing standing between a low-lying runway and a lake on top of it. */
+float apronAt(vec2 worldM) {
+  return texture(uHeight, (worldM - uTexOriginM) / uTexSpanM).a;
+}`;
+
+const TERRAIN_VS = `#version 300 es
+precision highp float;
+in vec2 aGrid;                    // 0..1 across this level's square
+uniform vec2 uGridOriginM;
+uniform float uGridSpanM;
+uniform float uIsRing;            // 1 for the hollow levels
+uniform float uSkirtFt;           // how far the inner lip hangs down
+uniform mat4 uVP;
+${GLSL_NOISE}
+${DECODE}
+out vec3 vWorld;
+out float vHeightFt;
+out float vWater;
+void main() {
+  vec2 w = uGridOriginM + aGrid * uGridSpanM;
+  float hFt = heightFtAt(w);
+
+  /* A lake has to be *level*, and shading the basin blue leaves it following
+     the contours of its own bed. So the vertices inside one are lifted to the
+     water table. This is the one place the rendered ground sits above the
+     ground the aeroplane collides with -- which is the right way round: the
+     surface is water, and an aircraft that meets a lake goes through it and
+     hits the bed, exactly as the physics has it.
+
+     The fill is capped at nine hundred feet, which leaves nineteen lakes in
+     twenty exactly level and stops the handful of basins two thousand feet deep
+     from being lidded over with a blue plateau. */
+  float wFt = min(waterFtAt(w / 1852.0), hFt + 900.0);
+  vWater = (hFt < wFt && apronAt(w) < 0.25) ? 1.0 : 0.0;
+  hFt = mix(hFt, wFt, vWater);
+
+  /* A skirt on the inner boundary of each ring. The level inside has half the
+     spacing, so its edge follows the ground while this one cuts the corner
+     between vertices -- and wherever the fine edge dips below the coarse
+     segment there would be a crack straight through to the sky. Dropping this
+     lip fills it, and the finer geometry hides the lip. */
+  float m = max(abs(aGrid.x - 0.5), abs(aGrid.y - 0.5));
+  float cell = 1.0 / (${glf(CLIP_N)} - 1.0);
+  if (uIsRing > 0.5 && m < 0.25 + cell * 1.5) hFt -= uSkirtFt;
+
+  vHeightFt = hFt;
+  vWorld = vec3(w, hFt * ${glf(M_PER_FT)});
+  gl_Position = uVP * vec4(vWorld, 1.0);
+}`;
+
+const TERRAIN_FS = `#version 300 es
+precision highp float;
+precision highp int;
+in vec3 vWorld;
+in float vHeightFt;
+in float vWater;
+out vec4 fragColor;
+uniform vec3 uCam;
+uniform vec3 uSun;
+uniform vec3 uHaze;
+uniform float uFogDist;
+uniform float uDay;
+uniform float uTime;
+uniform vec3  uSunTint;
+uniform int   uFieldCount;
+uniform vec4  uField[4];
+uniform vec4  uFieldGeom[4];
+${GLSL_NOISE}
+${DECODE}
+
+/* Somewhere for people to live.
+
+   A valley floor with nothing on it reads as geology; the same valley with a
+   scatter of lights in it reads as a place. The field is slow -- one settled
+   region every nine miles or so -- and gated on gentle, low ground, because
+   that is where towns are and it costs nothing to say so. */
+float settledAt(vec2 nm, float relief, float steep, float h) {
+  float region = vnoise(nm / 9.0, SEED + 2207u);
+  float low = clamp((${glf(BASE_ELEV_FT)} + relief * 0.42 - h)
+                    / max(relief * 0.22, 300.0), 0.0, 1.0);
+  return smoothstep(0.62, 0.88, region) * low * clamp(1.0 - steep * 7.0, 0.0, 1.0);
+}
+
+/* Paved surface, computed analytically. The height texture is 332 ft to a
+   texel and a runway is 200 ft wide, so sampling its alpha would drop the
+   runway between texel centres and draw nothing. Returns 0 off the field,
+   1 on the apron, 2 on the paving, 3 on a centreline stripe. */
+int surfaceAt(vec2 nm) {
+  int best = 0;
+  for (int k = 0; k < 4; k++) {
+    if (k >= uFieldCount) break;
+    vec2 d = nm - uField[k].xy;
+    if (length(d) >= uFieldGeom[k].x) continue;
+    best = max(best, 1);
+    float halfNm = uFieldGeom[k].z / ${glf(FT_PER_NM)} * 0.5;
+    float r = radians(uField[k].w);
+    vec2 t = uField[k].xy - vec2(sin(r), cos(r)) * halfNm;
+    vec2 dt = (nm - t) * ${glf(FT_PER_NM)};
+    float along  = dt.x * sin(r) + dt.y * cos(r);
+    float across = dt.x * cos(r) - dt.y * sin(r);
+    if (along > 0.0 && along < uFieldGeom[k].z && abs(across) < uFieldGeom[k].w * 0.5) {
+      best = max(best, 2);
+      /* Centreline: 120 ft of stripe every 200 ft, and threshold bars. */
+      bool stripe = abs(across) < 3.0 && fract(along / 200.0) < 0.6;
+      bool bars = (along < 150.0 || along > uFieldGeom[k].z - 150.0)
+                  && abs(across) < uFieldGeom[k].w * 0.42
+                  && fract(across / 26.0) < 0.55;
+      if (stripe || bars) best = 3;
+    }
+    /* Edge and threshold lighting, just outside the paving. */
+    float edgeOff = abs(abs(across) - uFieldGeom[k].w * 0.62);
+    if (along > -60.0 && along < uFieldGeom[k].z + 60.0
+        && edgeOff < 5.0 && fract(along / 200.0) < 0.10) {
+      best = max(best, 4);
+    }
+    if ((abs(along) < 40.0 || abs(along - uFieldGeom[k].z) < 40.0)
+        && abs(across) < uFieldGeom[k].w * 0.62 && fract(across / 60.0) < 0.18) {
+      best = 5;
+    }
+  }
+  return best;
+}
+
+void main() {
+  /* Normals from the height texture rather than from the mesh: the texture is
+     finer than the triangles, so lighting stays smooth where the geometry is
+     not. */
+  float e = uFineSpanM / HT_N_F;   // the finest thing the mesh can resolve
+  float hL = heightFtAt(vWorld.xy - vec2(e, 0.0)) * ${glf(M_PER_FT)};
+  float hR = heightFtAt(vWorld.xy + vec2(e, 0.0)) * ${glf(M_PER_FT)};
+  float hD = heightFtAt(vWorld.xy - vec2(0.0, e)) * ${glf(M_PER_FT)};
+  float hU = heightFtAt(vWorld.xy + vec2(0.0, e)) * ${glf(M_PER_FT)};
+  vec3 n = normalize(vec3(hL - hR, hD - hU, 2.0 * e));
+
+  vec2 nm = vWorld.xy / 1852.0;
+  float dist = length(uCam - vWorld);
+  /* Detail finer than a few pixels across does not resolve, it crawls. So
+     everything below is faded toward its own mean with range rather than left
+     to alias -- toward the mean, not toward zero, or the fade itself becomes a
+     ring of the wrong brightness around the aircraft. */
+  float near = 1.0 - smoothstep(3500.0, 16000.0, dist);
+  int surface = surfaceAt(nm);
+  float relief = reliefNm(nm);
+  float t = clamp((vHeightFt - ${glf(BASE_ELEV_FT)}) / max(relief, 600.0), 0.0, 1.0);
+  float steep = 1.0 - clamp(n.z, 0.0, 1.0);        // 0 flat, 1 vertical
+
+  /* Ridged multifractal averages around 0.4, so the band boundaries have to
+     sit well above that or the whole world comes out the colour of the middle
+     band -- which is how this first read as desert rather than as valleys. */
+  vec3 col;
+  if (t < 0.30)      col = mix(vec3(0.19, 0.28, 0.15), vec3(0.26, 0.36, 0.19), t / 0.30);
+  else if (t < 0.56) col = mix(vec3(0.26, 0.36, 0.19), vec3(0.40, 0.41, 0.24), (t - 0.30) / 0.26);
+  else if (t < 0.78) col = mix(vec3(0.40, 0.41, 0.24), vec3(0.53, 0.47, 0.36), (t - 0.56) / 0.22);
+  else               col = mix(vec3(0.53, 0.47, 0.36), vec3(0.64, 0.62, 0.59), (t - 0.78) / 0.22);
+  /* Anything steep is bare rock whatever height it is, and only gentle high
+     ground holds snow -- which is what stops every peak reading as icing sugar. */
+  col = mix(col, vec3(0.42, 0.39, 0.36), steep * 0.55);
+  if (t > 0.87) col = mix(col, vec3(0.95, 0.96, 0.97),
+                          clamp((t - 0.87) / 0.13, 0.0, 1.0) * clamp(1.0 - steep * 1.6, 0.0, 1.0));
+
+  /* Forest. Dense on the valley floors, thinning as it climbs, and stopping
+     dead on anything steep -- which is what draws the treeline for free instead
+     of having to place one. Two scales: where the wood is, at a third of a
+     mile, and the crowns inside it at sixty feet. With only the first the trees
+     came out as blurred camouflage blotches, because a single octave at that
+     wavelength is a blotch. */
+  float treeline = ${glf(BASE_ELEV_FT)} + relief * 0.60;
+  float canopy = vnoise(nm * 14.0, SEED + 5501u);
+  float grain = mix(0.5, vnoise(nm * 96.0, SEED + 6607u), near);
+  float forest = clamp((treeline - vHeightFt) / max(relief * 0.34, 200.0), 0.0, 1.0)
+               * clamp(1.0 - steep * 2.4, 0.0, 1.0)
+               * smoothstep(0.24, 0.56, canopy);
+  col = mix(col, vec3(0.088, 0.152, 0.080) * (0.62 + canopy * 0.50 + grain * 0.62),
+            forest * 0.86);
+
+  /* Settlement: pale ground in daylight, lit at night. Cleared and built-on
+     land is lighter than the country round it, so the towns exist by day too
+     rather than appearing at dusk out of nothing. */
+  float settled = settledAt(nm, relief, steep, vHeightFt);
+  float parcels = mix(0.5, vnoise(nm * 46.0, SEED + 3907u), near);
+  col = mix(col, vec3(0.34, 0.33, 0.26) * (0.80 + parcels * 0.50), settled * 0.55);
+
+  /* Water. vWater is set on the vertices, so it arrives here interpolated and
+     the shoreline is a soft edge rather than a staircase. */
+  float wet = smoothstep(0.30, 0.72, vWater);
+  bool water = wet > 0.5 && surface == 0;
+  if (wet > 0.0 && surface == 0) {
+    /* Two scales of ripple, drifting. The normal they perturb is what makes
+       the sun break up across the surface instead of sitting on it as a disc. */
+    float r1 = vnoise(nm * 640.0 + vec2(uTime * 0.020, uTime * 0.013), SEED + 771u);
+    float r2 = vnoise(nm * 1900.0 - vec2(uTime * 0.031, uTime * 0.017), SEED + 991u);
+    vec2 ripple = (vec2(r1, r2) - 0.5) * 0.16 * near;
+    n = normalize(mix(n, normalize(vec3(ripple, 1.0)), wet));
+    col = mix(col, vec3(0.055, 0.115, 0.165), wet);
+  }
+  if (surface == 1)      col = mix(col, vec3(0.34, 0.36, 0.25), 0.7);   // mown apron
+  else if (surface == 2) col = vec3(0.15, 0.15, 0.17);                  // asphalt
+  else if (surface == 3) col = vec3(0.88, 0.88, 0.84);                  // markings
+
+  vec3 V = normalize(uCam - vWorld);
+  float lambert = max(dot(n, uSun), 0.0);
+  /* Water is mostly a mirror at a grazing angle and mostly dark looking
+     straight down -- that Fresnel swing is the whole reason a lake reads as
+     water rather than as blue paint. */
+  float fres = water ? pow(1.0 - clamp(dot(n, V), 0.0, 1.0), 4.0) : 0.0;
+  /* At night the ground is lit only by the sky, so the direct term goes and
+     the ambient goes blue -- the same reason snow looks blue by moonlight. */
+  float ambient = (0.30 + 0.18 * n.z) * mix(0.14, 1.0, uDay);
+  vec3 lit = col * ambient + col * uSunTint * lambert * 1.05 * uDay;
+  lit = mix(lit * vec3(0.72, 0.80, 1.0), lit, uDay);
+  if (water) {
+    /* The Fresnel term was being computed and then thrown away, which is why
+       lakes had been coming out as flat blue paint: without it there is no
+       difference between the near shore, where you are looking into the water,
+       and the far one, where you are looking at the sky in it. */
+    lit = mix(lit, uHaze * mix(0.42, 1.0, uDay), fres * 0.88);
+    vec3 h = normalize(uSun + V);
+    lit += uSunTint * pow(max(dot(n, h), 0.0), 90.0) * 0.75 * uDay;
+  }
+
+  /* The lights are emissive: they are not lit by the sun, they are the light,
+     so they go in after the shading and brighten as the day goes. */
+  if (surface >= 4) {
+    vec3 lamp = surface == 5 ? vec3(0.25, 1.0, 0.42) : vec3(1.0, 0.93, 0.76);
+    lit += lamp * (0.30 + 1.5 * (1.0 - uDay));
+  }
+
+  /* Town lights, on the same schedule as the runway lighting. The scatter is a
+     separate, much finer field than the one that says where the town is: a
+     settlement has to read as points with dark between them, and gating the
+     population field itself just produces an orange wash. Held to the near
+     ground, because a point light one pixel across at twenty miles is a
+     twinkle that has nothing to do with the terrain moving under it. */
+  float dark = 1.0 - uDay;
+  if (settled > 0.02 && dark > 0.03 && surface == 0 && wet < 0.5) {
+    float lamps = vnoise(nm * 70.0, SEED + 8821u);
+    float pop = smoothstep(0.80 - settled * 0.22, 0.97, lamps) * near;
+    lit += vec3(1.0, 0.80, 0.52) * pop * settled * dark * 1.9;
+  }
+
+  float fog = 1.0 - exp(-dist / uFogDist);
+  /* Fade the last tenth of the grid completely into haze, so its edge is
+     never a visible boundary. */
+  fog = max(fog, smoothstep(${glf(G_SPAN_NM * 1852 * 0.40)}, ${glf(G_SPAN_NM * 1852 * 0.49)}, dist));
+  fragColor = vec4(mix(lit, uHaze, clamp(fog, 0.0, 1.0)), 1.0);
+}`;
+
+/* ---------- sky ---------- */
+const SKY_FS = `#version 300 es
+precision highp float;
+in vec2 vNdc;
+out vec4 fragColor;
+uniform vec3 uF, uR, uU;
+uniform vec2 uTanHalf;
+uniform vec3 uSun, uHaze, uZenith;
+uniform float uSunVisible;
+uniform float uDay;            // 1 full daylight, 0 night
+uniform vec3 uSunTint;
+
+/* Cheap hashed stars: no texture, and they sit still because the hash is a
+   function of the ray direction rather than of time. */
+float stars(vec3 r) {
+  vec3 p = floor(r * 260.0);
+  float h = fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+  return h > 0.9985 ? pow(fract(h * 921.0), 2.0) : 0.0;
+}
+
+void main() {
+  vec3 ray = normalize(uF + uR * (vNdc.x * uTanHalf.x) + uU * (vNdc.y * uTanHalf.y));
+  float up = clamp(ray.z, -1.0, 1.0);
+
+  /* Haze piles up toward the horizon, so the gradient is steep near it and
+     flattens overhead. */
+  vec3 dayCol = mix(uHaze, uZenith, pow(clamp(up, 0.0, 1.0), 0.42));
+  vec3 nightCol = mix(vec3(0.035, 0.045, 0.075), vec3(0.008, 0.012, 0.030),
+                      pow(clamp(up, 0.0, 1.0), 0.5));
+  vec3 col = mix(nightCol, dayCol, uDay);
+
+  if (up < 0.0) {
+    vec3 below = mix(vec3(0.02, 0.025, 0.035), vec3(0.20, 0.21, 0.20), uDay);
+    col = mix(mix(nightCol, uHaze, uDay), below, clamp(-up * 2.2, 0.0, 1.0));
+  }
+
+  col += vec3(1.0) * stars(ray) * (1.0 - uDay) * step(0.0, up);
+
+  /* The sun reddens as it sinks, and the glow around it spreads -- one tint
+     drives both, so sunset is a single continuous change. */
+  float sd = max(dot(ray, uSun), 0.0);
+  float vis = uSunVisible * smoothstep(-0.06, 0.06, uSun.z);
+  col += uSunTint * pow(sd, 260.0) * 1.7 * vis;
+  col += uSunTint * pow(sd, 9.0) * 0.34 * vis;
+  /* Horizon glow on the sun's side, which lingers after it has set. */
+  float horizonGlow = pow(max(dot(normalize(vec3(ray.xy, 0.0)), normalize(vec3(uSun.xy, 0.0))), 0.0), 6.0)
+                    * exp(-abs(up) * 7.0) * clamp(1.0 - abs(uSun.z) * 3.0, 0.0, 1.0);
+  col += uSunTint * horizonGlow * 0.42;
+
+  fragColor = vec4(col, 1.0);
+}`;
+
+/* ---------- cloud deck ----------
+   A single plane at the weather's base with procedural holes in it. Drawn
+   after the terrain with blending on, so you see ground through the gaps; and
+   because the fog density spikes once you are inside the layer, entering it
+   actually takes the world away rather than just drawing grey over it. */
+const CLOUD_VS = `#version 300 es
+precision highp float;
+in vec2 aGrid;
+uniform vec2 uOriginM;
+uniform float uSpanM, uBaseM;
+uniform mat4 uVP;
+out vec2 vWorldXY;
+out float vDist;
+uniform vec3 uCam;
+void main() {
+  vec2 w = uOriginM + aGrid * uSpanM;
+  vWorldXY = w;
+  vec3 p = vec3(w, uBaseM);
+  vDist = length(p - uCam);
+  gl_Position = uVP * vec4(p, 1.0);
+}`;
+
+const CLOUD_FS = `#version 300 es
+precision highp float;
+precision highp int;
+in vec2 vWorldXY;
+in float vDist;
+out vec4 fragColor;
+uniform vec3 uHaze, uSunTint;
+uniform float uCover, uDay, uFogDist, uDrift;
+${GLSL_NOISE}
+void main() {
+  vec2 nm = vWorldXY / 1852.0 + vec2(uDrift, uDrift * 0.4);
+  /* Two octaves of the same value noise the terrain uses -- billowed by
+     squaring so the edges are soft and the middles are solid. */
+  float n = vnoise(nm / 3.4, SEED + 4211u) * 0.62
+          + vnoise(nm / 1.3, SEED + 8123u) * 0.38;
+  float a = smoothstep(1.0 - uCover, 1.0 - uCover + 0.34, n);
+  a *= a;
+  if (a < 0.02) discard;
+  /* Thicker where it is denser, and lit from above. */
+  vec3 col = mix(uHaze, vec3(1.0), 0.55) * mix(0.22, 1.0, uDay) * mix(vec3(1.0), uSunTint, 0.5);
+  col = mix(col * 0.62, col, a);
+  float fog = 1.0 - exp(-vDist / uFogDist);
+  fragColor = vec4(mix(col, uHaze, clamp(fog, 0.0, 1.0)), a * 0.92);
+}`;
+
+/* ---------- aircraft ---------- */
+const MODEL_VS = `#version 300 es
+precision highp float;
+in vec3 aPos;
+in vec3 aNormal;
+in vec3 aColor;
+uniform mat4 uVP;
+uniform mat4 uModel;
+uniform mat3 uNormalM;
+out vec3 vN;
+out vec3 vC;
+out vec3 vW;
+void main() {
+  vec4 w = uModel * vec4(aPos, 1.0);
+  vW = w.xyz; vN = normalize(uNormalM * aNormal); vC = aColor;
+  gl_Position = uVP * w;
+}`;
+
+const MODEL_FS = `#version 300 es
+precision highp float;
+in vec3 vN; in vec3 vC; in vec3 vW;
+out vec4 fragColor;
+uniform vec3 uCam, uSun, uHaze;
+uniform float uFogDist, uDay;
+uniform vec3 uSunTint;
+void main() {
+  vec3 n = normalize(vN);
+  vec3 V = normalize(uCam - vW);
+  if (dot(n, V) < 0.0) n = -n;          // two-sided: winding cannot darken a face
+  float lam = max(dot(n, uSun), 0.0);
+  float ambient = (0.42 + 0.18 * clamp(n.z, 0.0, 1.0)) * mix(0.20, 1.0, uDay);
+  vec3 h = normalize(uSun + V);
+  float spec = pow(max(dot(n, h), 0.0), 34.0) * 0.30 * uDay;
+  vec3 lit = vC * ambient + vC * uSunTint * lam * 0.85 * uDay + uSunTint * spec;
+  float fog = 1.0 - exp(-length(uCam - vW) / uFogDist);
+  fragColor = vec4(mix(lit, uHaze, clamp(fog, 0.0, 1.0)), 1.0);
+}`;
+
+/* ---------- GL objects ---------- */
+let progHeight, progTerrain, progSky, progModel, progCloud;
+let quadVao, terrainVao, solidIbo, ringIbo, solidCount, ringCount;
+let heightTex, heightFbo, heightTexFine, heightFboFine;
+let htOriginNm = [NaN, NaN];
+const VP = new Float32Array(16), PROJ = new Float32Array(16), VIEW = new Float32Array(16);
+const MODELM = new Float32Array(16), NORMALM = new Float32Array(9);
+
+function initGL() {
+  progHeight  = makeProgram(QUAD_VS, HEIGHT_FS);
+  progSky     = makeProgram(QUAD_VS, SKY_FS);
+  progTerrain = makeProgram(TERRAIN_VS, TERRAIN_FS);
+  progModel   = makeProgram(MODEL_VS, MODEL_FS);
+  progCloud   = makeProgram(CLOUD_VS, CLOUD_FS);
+
+  quadVao = gl.createVertexArray();
+  gl.bindVertexArray(quadVao);
+  const qb = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, qb);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+  /* One vertex buffer of grid coordinates serves every level -- where a level
+     lands in the world is entirely a uniform. Two index buffers: the solid
+     one for level 0, and a hollow one, missing its central quarter, for every
+     ring outside it. */
+  const N = CLIP_N;
+  const verts = new Float32Array(N * N * 2);
+  for (let j = 0, k = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) { verts[k++] = i / (N - 1); verts[k++] = j / (N - 1); }
+  }
+  const solid = [], ring = [];
+  const lo = Math.floor(N * 0.25), hi = Math.floor(N * 0.75);
+  for (let j = 0; j < N - 1; j++) {
+    for (let i = 0; i < N - 1; i++) {
+      const a = j * N + i, b = a + 1, c = a + N, d = c + 1;
+      const quad = [a, b, c, b, d, c];
+      solid.push(...quad);
+      if (i < lo || i >= hi || j < lo || j >= hi) ring.push(...quad);
+    }
+  }
+  terrainVao = gl.createVertexArray();
+  gl.bindVertexArray(terrainVao);
+  const vb = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+  gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+  solidIbo = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, solidIbo);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(solid), gl.STATIC_DRAW);
+  solidCount = solid.length;
+  ringIbo = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ringIbo);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(ring), gl.STATIC_DRAW);
+  ringCount = ring.length;
+
+  const makeHeightTarget = () => {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, HT_N, HT_N, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    for (const q of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, q, gl.NEAREST);
+    for (const q of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, q, gl.CLAMP_TO_EDGE);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { tex, fbo };
+  };
+  ({ tex: heightTex, fbo: heightFbo } = makeHeightTarget());
+  ({ tex: heightTexFine, fbo: heightFboFine } = makeHeightTarget());
+
+  gl.enable(gl.DEPTH_TEST);
+  /* No back-face culling anywhere. The terrain is a heightfield with nothing
+     behind it, and the aircraft model is small enough that drawing both sides
+     costs nothing -- while a single inverted winding would silently punch a
+     hole in either. The model shader two-sides its normals for the same
+     reason. */
+  gl.disable(gl.CULL_FACE);
+}
+
+/* The same fields the CPU elevation() uses, so what is drawn is what you can
+   hit. Four is what actually fits inside the height texture's 56 nm. */
+const fieldUniforms = { count: 0, xy: new Float32Array(16), geom: new Float32Array(16) };
+function packFields() {
+  const fields = activeFields.slice(0, 4);
+  fieldUniforms.count = fields.length;
+  fieldUniforms.xy.fill(0); fieldUniforms.geom.fill(0);
+  fields.forEach((f, k) => {
+    fieldUniforms.xy.set([f.x, f.y, f.elev, f.heading], k * 4);
+    fieldUniforms.geom.set([f.gradedRadiusNm, f.gradedRadiusNm + GRADE_BLEND_NM,
+                            f.lengthFt, f.widthFt], k * 4);
+  });
+}
+
+let htFineOriginNm = [NaN, NaN];
+
+function bakeHeight(fbo, originNm, spanNm, carve) {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.viewport(0, 0, HT_N, HT_N);
+  gl.disable(gl.DEPTH_TEST);
+  gl.useProgram(progHeight);
+  gl.bindVertexArray(quadVao);
+  gl.uniform2f(progHeight.u.uOriginNm, originNm[0], originNm[1]);
+  gl.uniform1f(progHeight.u.uSpanNm, spanNm);
+  gl.uniform1f(progHeight.u.uCarve, carve);
+  gl.uniform1i(progHeight.u.uFieldCount, fieldUniforms.count);
+  gl.uniform4fv(progHeight.u.uField, fieldUniforms.xy);
+  gl.uniform4fv(progHeight.u.uFieldGeom, fieldUniforms.geom);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.enable(gl.DEPTH_TEST);
+}
+
+/* The coarse texture is re-baked rarely; the fine one follows the aircraft and
+   is re-baked every twenty seconds or so at cruise. Each is a single
+   full-screen pass, so neither is worth spreading over frames. */
+function regenHeight(camNmX, camNmY, force) {
+  const drifted = (origin, span, limit) =>
+    isNaN(origin[0]) ||
+    Math.hypot(camNmX - (origin[0] + span / 2), camNmY - (origin[1] + span / 2)) > limit;
+
+  if (force || drifted(htOriginNm, HT_SPAN_NM, HT_REGEN_NM)) {
+    htOriginNm = [camNmX - HT_SPAN_NM / 2, camNmY - HT_SPAN_NM / 2];
+    bakeHeight(heightFbo, htOriginNm, HT_SPAN_NM, 0);
+  }
+  if (force || drifted(htFineOriginNm, HT_FINE_SPAN_NM, HT_FINE_REGEN_NM)) {
+    htFineOriginNm = [camNmX - HT_FINE_SPAN_NM / 2, camNmY - HT_FINE_SPAN_NM / 2];
+    bakeHeight(heightFboFine, htFineOriginNm, HT_FINE_SPAN_NM, 1);
+  }
+}
+
+/* ---------- per-type model buffers, with normals ---------- */
+const glModels = {};
+function modelBuffers(a) {
+  if (glModels[a.key]) return glModels[a.key];
+  const tris = modelFor(a);
+  const pos = new Float32Array(tris.length * 9);
+  const nrm = new Float32Array(tris.length * 9);
+  const col = new Float32Array(tris.length * 9);
+  tris.forEach((t, ti) => {
+    /* Body axes are (starboard, forward, up); the renderer wants
+       (east, north, up) before the model matrix, so forward becomes north. */
+    const p = t.p.map(v => [v[0], v[1], v[2]]);
+    const e1 = [p[1][0]-p[0][0], p[1][1]-p[0][1], p[1][2]-p[0][2]];
+    const e2 = [p[2][0]-p[0][0], p[2][1]-p[0][1], p[2][2]-p[0][2]];
+    let n = [e1[1]*e2[2]-e1[2]*e2[1], e1[2]*e2[0]-e1[0]*e2[2], e1[0]*e2[1]-e1[1]*e2[0]];
+    const len = Math.hypot(n[0], n[1], n[2]) || 1;
+    n = [n[0]/len, n[1]/len, n[2]/len];
+    const c = hex(t.col).map(v => v / 255);
+    for (let k = 0; k < 3; k++) {
+      const o = (ti * 3 + k) * 3;
+      pos[o] = p[k][0]; pos[o+1] = p[k][1]; pos[o+2] = p[k][2];
+      nrm[o] = n[0]; nrm[o+1] = n[1]; nrm[o+2] = n[2];
+      col[o] = c[0]; col[o+1] = c[1]; col[o+2] = c[2];
+    }
+  });
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  [pos, nrm, col].forEach((arr, i) => {
+    const b = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, b);
+    gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(i);
+    gl.vertexAttribPointer(i, 3, gl.FLOAT, false, 0, 0);
+  });
+  return (glModels[a.key] = { vao, count: tris.length * 3 });
+}
+
+/* ---------- 3D model, built from each type's real dimensions ----------
+   Unchanged in intent from the raycaster build: fuselage stations scaled by
+   length and cross-section, wing swept by the published quarter-chord angle,
+   fin reaching the published height, one nacelle per entry in engine_arms_m. */
+function buildModel(a) {
+  const L = a.length, B = a.span / 2, Hf = a.fusH / 2, Wf = a.fusW / 2;
+  const noseY = L * 0.5, tailY = -L * 0.5;
+  const tris = [];
+  const quad = (p, q, r, s, col) => { tris.push({ p: [p, q, r], col }); tris.push({ p: [p, r, s], col }); };
+  const FUS = "#dfe4e8", FUS_D = "#aeb8bf", WING = "#c8d0d6", ENG = "#79838a", TAIL = "#2f6ea8";
+
+  const ring = (y, sc) => {
+    const pts = [];
+    for (let i = 0; i < 10; i++) {
+      const t = i / 10 * Math.PI * 2;
+      pts.push([Math.cos(t) * Wf * sc, y, Math.sin(t) * Hf * sc]);
+    }
+    return pts;
+  };
+  const stations = [[noseY, .10], [noseY - L * .07, .62], [noseY - L * .20, 1],
+                    [tailY + L * .24, 1], [tailY + L * .06, .40], [tailY, .10]];
+  for (let i = 0; i < stations.length - 1; i++) {
+    const r0 = ring(stations[i][0], stations[i][1]);
+    const r1 = ring(stations[i + 1][0], stations[i + 1][1]);
+    for (let k = 0; k < 10; k++) {
+      const n = (k + 1) % 10;
+      quad(r0[k], r0[n], r1[n], r1[k], k < 4 ? FUS : FUS_D);
+    }
+  }
+
+  const sweepBack = Math.tan(rad(a.sweep)) * B;
+  const rootLE = -L * 0.02, rootTE = rootLE - L * 0.20;
+  const tipLE = rootLE - sweepBack, tipTE = tipLE - L * 0.055;
+  const dih = B * 0.10;
+  for (const sgn of [1, -1]) {
+    const root0 = [Wf * 0.85 * sgn, rootLE, -Hf * .30], root1 = [Wf * 0.85 * sgn, rootTE, -Hf * .30];
+    const tip0 = [B * sgn, tipLE, dih * .55], tip1 = [B * sgn, tipTE, dih * .55];
+    quad(root0, tip0, tip1, root1, WING);
+    quad(root1, tip1, tip0, root0, WING);              // underside
+    /* Sharklet or wingtip fence, angled up from the tip. */
+    quad(tip0, [B * sgn, tipLE + L * .01, dih * .55 + B * .075],
+         [B * sgn, tipTE, dih * .55 + B * .06], tip1, WING);
+  }
+
+  const tpB = B * 0.36, tpY = tailY + L * 0.11;
+  for (const sgn of [1, -1]) {
+    const a0 = [Wf * .5 * sgn, tpY, Hf * .25], a1 = [tpB * sgn, tpY - L * .055, Hf * .55];
+    const a2 = [tpB * sgn, tpY - L * .105, Hf * .55], a3 = [Wf * .5 * sgn, tpY - L * .115, Hf * .25];
+    quad(a0, a1, a2, a3, WING); quad(a3, a2, a1, a0, WING);
+  }
+  const finTop = a.height - a.fusH * 0.55;
+  const f0 = [0, tpY + L * .03, Hf * .85], f1 = [0, tpY - L * .085, finTop];
+  const f2 = [0, tpY - L * .155, finTop], f3 = [0, tpY - L * .145, Hf * .85];
+  quad(f0, f1, f2, f3, TAIL); quad(f3, f2, f1, f0, TAIL);
+
+  const widest = Math.max(...a.arms.map(Math.abs));
+  for (const arm of a.arms) {
+    const outboard = Math.abs(arm) / widest;
+    const ey = rootLE - sweepBack * outboard * 0.55 + L * 0.05;
+    const er = a.fusW * 0.30, ez = -Hf * .55 - dih * outboard * .45;
+    const n0 = [], n1 = [];
+    for (let i = 0; i < 10; i++) {
+      const t = i / 10 * Math.PI * 2;
+      n0.push([arm + Math.cos(t) * er, ey, ez + Math.sin(t) * er]);
+      n1.push([arm + Math.cos(t) * er * .90, ey - L * .10, ez + Math.sin(t) * er * .90]);
+    }
+    for (let k = 0; k < 10; k++) { const n = (k + 1) % 10; quad(n0[k], n0[n], n1[n], n1[k], ENG); }
+  }
+  return tris;
+}
+const modelCache = {};
+const modelFor = a => modelCache[a.key] || (modelCache[a.key] = buildModel(a));
+
+/* ---------- resize ---------- */
+function resize() {
+  const wrap = document.getElementById("screen-wrap");
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const cw = wrap.clientWidth, chh = wrap.clientHeight;
+  VW = Math.max(320, Math.floor(cw * dpr));
+  VH = Math.max(240, Math.floor(chh * dpr));
+  for (const c of [glc, hudc]) {
+    c.width = VW; c.height = VH;
+    c.style.width = cw + "px"; c.style.height = chh + "px";
+  }
+}
+window.addEventListener("resize", resize);
+
+/* ---------- the frame ---------- */
+/* The sun tracks the hour: up in the east at dawn, round to the west by dusk,
+   and below the horizon at night. Everything else -- sky colour, how much
+   ambient there is, whether the stars are out -- follows from its elevation,
+   so there is one number driving the whole look rather than four presets. */
+let timeOfDay = 10.0;                     // hours, local
+function sunVector() {
+  const hourAngle = (timeOfDay - 12) / 12 * Math.PI;          // noon = 0
+  const elev = Math.asin(Math.cos(hourAngle) * 0.92);         // peaks near 67 deg
+  const bearing = rad(180) + hourAngle * 1.35;                // east -> south -> west
+  return [Math.sin(bearing) * Math.cos(elev), Math.cos(bearing) * Math.cos(elev), Math.sin(elev)];
+}
+/* 1 in full day, 0 once the sun is well down. Drives ambient light, the sky
+   ramp and the stars together, so dusk is one continuous thing. */
+function daylight() {
+  const e = sunVector()[2];
+  return clamp((e + 0.26) / 0.46, 0, 1);
+}
+/* Warm and dim at the horizon, white overhead -- which is what makes a dawn
+   departure look different from a midday one without any special-casing. */
+function sunTint() {
+  const e = sunVector()[2];
+  const low = clamp(1 - e / 0.36, 0, 1);
+  return [1.0, 1.0 - low * 0.34, 1.0 - low * 0.62];
+}
+
+function render() {
+  const s = S, a = craft;
+
+  /* Camera. In the cockpit it is the aircraft; in chase it sits behind and
+     above with the horizon held level, so the aircraft's own roll is what you
+     see rather than the world's. */
+  let camE, camN, camU, camB;
+  if (view === "cockpit") {
+    /* Eye height: the flight deck sits well above the wheels, and on the
+       runway that is the difference between seeing the ground and looking
+       along it edge-on. Scaled from each type's published height, so an A380
+       pilot really is twice as high up as an A319's. */
+    const eyeM = a.height * 0.42;
+    camE = s.x * 1852; camN = s.y * 1852; camU = s.alt * M_PER_FT + eyeM;
+    camB = basis(s.hdg, s.pitch, s.bank);
+  } else {
+    const backM = a.length * 3.8, upM = a.length * 0.62;
+    camE = (s.x - Math.sin(rad(s.hdg)) * backM / 1852) * 1852;
+    camN = (s.y - Math.cos(rad(s.hdg)) * backM / 1852) * 1852;
+    camU = s.alt * M_PER_FT + upM;
+    camB = basis(s.hdg, -deg(Math.atan2(upM, backM)) + s.gamma * 0.45, 0);
+  }
+  const cam = [camE, camN, camU];
+
+  packFields();
+  regenHeight(camE / 1852, camN / 1852, isNaN(htOriginNm[0]));
+
+  const aspect = VW / VH;
+  mat4Perspective(PROJ, FOV_V, aspect, NEAR_M, FAR_M);
+  mat4View(VIEW, cam, camB.R, camB.U, camB.F);
+  mat4Mul(VP, PROJ, VIEW);
+
+  const day = daylight(), tint = sunTint();
+  /* Haze takes the sun's colour and the night's darkness with it, so the
+     terrain, the sky and the fog all agree about what time it is. */
+  const haze = hex(weather.tint).map((v, i) => v / 255 * (0.10 + 0.90 * day) * tint[i]);
+  const zen = hex(weather.sky).map(v => v / 255);
+  const sun = sunVector();
+  let fogDist = Math.max(700, weather.visNm * 1852 * 0.62);
+  /* Inside the cloud layer visibility collapses, which is what makes flying
+     into a deck feel like flying into something rather than past a picture. */
+  const inCloud = Math.abs(S.alt - (cloudDatumFt + weather.cloudBase)) < 900
+                  && weather.cloudBase < 30000;
+  if (inCloud) fogDist = Math.min(fogDist, 260);
+
+  gl.viewport(0, 0, VW, VH);
+  gl.clearColor(haze[0], haze[1], haze[2], 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  /* Sky first, with depth writes off so the terrain always wins. */
+  gl.depthMask(false);
+  gl.useProgram(progSky);
+  gl.bindVertexArray(quadVao);
+  const tanY = Math.tan(FOV_V / 2);
+  gl.uniform3fv(progSky.u.uF, camB.F);
+  gl.uniform3fv(progSky.u.uR, camB.R);
+  gl.uniform3fv(progSky.u.uU, camB.U);
+  gl.uniform2f(progSky.u.uTanHalf, tanY * aspect, tanY);
+  gl.uniform3fv(progSky.u.uSun, sun);
+  gl.uniform3fv(progSky.u.uHaze, haze);
+  gl.uniform3fv(progSky.u.uZenith, zen);
+  gl.uniform1f(progSky.u.uSunVisible,
+               weather.key === "stormy" || weather.key === "foggy" ? 0.08 : 1.0);
+  gl.uniform1f(progSky.u.uDay, day);
+  gl.uniform3fv(progSky.u.uSunTint, tint);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.depthMask(true);
+
+  /* Terrain. Each level is snapped to *its own* spacing, not to the camera's
+     exact position -- that is what stops the vertices sliding through the
+     landscape and making the silhouette shimmer as you fly. */
+  gl.useProgram(progTerrain);
+  gl.bindVertexArray(terrainVao);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, heightTex);
+  gl.uniform1i(progTerrain.u.uHeight, 0);
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, heightTexFine);
+  gl.uniform1i(progTerrain.u.uHeightFine, 1);
+  gl.uniform2f(progTerrain.u.uTexOriginM, htOriginNm[0] * 1852, htOriginNm[1] * 1852);
+  gl.uniform1f(progTerrain.u.uTexSpanM, HT_SPAN_NM * 1852);
+  gl.uniform2f(progTerrain.u.uFineOriginM, htFineOriginNm[0] * 1852, htFineOriginNm[1] * 1852);
+  gl.uniform1f(progTerrain.u.uFineSpanM, HT_FINE_SPAN_NM * 1852);
+  gl.uniformMatrix4fv(progTerrain.u.uVP, false, VP);
+  gl.uniform3fv(progTerrain.u.uCam, cam);
+  gl.uniform3fv(progTerrain.u.uSun, sun);
+  gl.uniform3fv(progTerrain.u.uHaze, haze);
+  gl.uniform1f(progTerrain.u.uFogDist, fogDist);
+  gl.uniform1f(progTerrain.u.uDay, day);
+  gl.uniform1f(progTerrain.u.uTime, S.t);
+  gl.uniform3fv(progTerrain.u.uSunTint, tint);
+  gl.uniform1i(progTerrain.u.uFieldCount, fieldUniforms.count);
+  gl.uniform4fv(progTerrain.u.uField, fieldUniforms.xy);
+  gl.uniform4fv(progTerrain.u.uFieldGeom, fieldUniforms.geom);
+
+  for (let k = 0; k < CLIP_LEVELS; k++) {
+    const spanM = clipExtentNm(k) * 1852, cellM = clipCellM(k);
+    const originE = Math.floor(camE / cellM) * cellM - spanM / 2;
+    const originN = Math.floor(camN / cellM) * cellM - spanM / 2;
+    gl.uniform2f(progTerrain.u.uGridOriginM, originE, originN);
+    gl.uniform1f(progTerrain.u.uGridSpanM, spanM);
+    gl.uniform1f(progTerrain.u.uIsRing, k === 0 ? 0 : 1);
+    /* The lip only has to cover the sag of one coarse cell, so it scales with
+       the level rather than being a constant that is huge up close. */
+    gl.uniform1f(progTerrain.u.uSkirtFt, cellM * FT_PER_M * 0.55);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, k === 0 ? solidIbo : ringIbo);
+    gl.drawElements(gl.TRIANGLES, k === 0 ? solidCount : ringCount, gl.UNSIGNED_INT, 0);
+  }
+
+  /* Cloud deck, after the terrain so the gaps show ground through them. */
+  const baseFt = cloudDatumFt + weather.cloudBase;
+  if (weather.cloudBase < 30000) {
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    gl.useProgram(progCloud);
+    gl.bindVertexArray(terrainVao);
+    const cSpan = 80 * 1852, cCell = cSpan / (CLIP_N - 1);
+    gl.uniform2f(progCloud.u.uOriginM,
+                 Math.floor(camE / cCell) * cCell - cSpan / 2,
+                 Math.floor(camN / cCell) * cCell - cSpan / 2);
+    gl.uniform1f(progCloud.u.uSpanM, cSpan);
+    gl.uniform1f(progCloud.u.uBaseM, baseFt * M_PER_FT);
+    gl.uniformMatrix4fv(progCloud.u.uVP, false, VP);
+    gl.uniform3fv(progCloud.u.uCam, cam);
+    gl.uniform3fv(progCloud.u.uHaze, haze);
+    gl.uniform3fv(progCloud.u.uSunTint, tint);
+    gl.uniform1f(progCloud.u.uCover, weather.cover);
+    gl.uniform1f(progCloud.u.uDay, day);
+    gl.uniform1f(progCloud.u.uFogDist, fogDist);
+    gl.uniform1f(progCloud.u.uDrift, S.t * 0.0016);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, solidIbo);
+    gl.drawElements(gl.TRIANGLES, solidCount, gl.UNSIGNED_INT, 0);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+  }
+
+  /* The aeroplane, in chase view only. */
+  if (view === "chase") {
+    const ab = basis(s.hdg, s.pitch, s.bank);
+    MODELM[0] = ab.R[0]; MODELM[1] = ab.R[1]; MODELM[2]  = ab.R[2];  MODELM[3]  = 0;
+    MODELM[4] = ab.F[0]; MODELM[5] = ab.F[1]; MODELM[6]  = ab.F[2];  MODELM[7]  = 0;
+    MODELM[8] = ab.U[0]; MODELM[9] = ab.U[1]; MODELM[10] = ab.U[2];  MODELM[11] = 0;
+    MODELM[12] = s.x * 1852; MODELM[13] = s.y * 1852; MODELM[14] = s.alt * M_PER_FT; MODELM[15] = 1;
+    /* The basis is orthonormal, so the normal matrix is the same rotation. */
+    NORMALM.set([MODELM[0], MODELM[1], MODELM[2], MODELM[4], MODELM[5], MODELM[6],
+                 MODELM[8], MODELM[9], MODELM[10]]);
+    const m = modelBuffers(a);
+    gl.useProgram(progModel);
+    gl.bindVertexArray(m.vao);
+    gl.uniformMatrix4fv(progModel.u.uVP, false, VP);
+    gl.uniformMatrix4fv(progModel.u.uModel, false, MODELM);
+    gl.uniformMatrix3fv(progModel.u.uNormalM, false, NORMALM);
+    gl.uniform3fv(progModel.u.uCam, cam);
+    gl.uniform3fv(progModel.u.uSun, sun);
+    gl.uniform3fv(progModel.u.uHaze, haze);
+    gl.uniform1f(progModel.u.uFogDist, fogDist);
+    gl.uniform1f(progModel.u.uDay, day);
+    gl.uniform3fv(progModel.u.uSunTint, tint);
+    gl.drawArrays(gl.TRIANGLES, 0, m.count);
+  }
+
+  hctx.clearRect(0, 0, VW, VH);
+  drawPrecipitation(hctx, VW, VH, s);
+  if (view === "cockpit") drawHud(hctx, VW, VH, s, a);
+}
+
+/* Rain on the windscreen. Streaks are sheared by the airspeed, because at
+   250 knots rain does not fall past you, it goes backwards. */
+const rainDrops = [];
+function drawPrecipitation(c, w, h, s) {
+  const intensity = weather.key === "stormy" ? 1 : (weather.key === "crosswind" ? 0.22 : 0);
+  if (intensity <= 0 || s.onGround && s.tas < 1) { rainDrops.length = 0; return; }
+  const want = Math.round(190 * intensity);
+  while (rainDrops.length < want) {
+    rainDrops.push({ x: Math.random() * w, y: Math.random() * h,
+                     len: 14 + Math.random() * 40, v: 0.9 + Math.random() * 1.4 });
+  }
+  rainDrops.length = want;
+
+  const ias = tasToIas(s.tas, s.alt) * KT_PER_MS;
+  const shear = clamp(ias / 260, 0, 1.6);
+  c.save();
+  c.strokeStyle = `rgba(198,220,236,${0.16 + 0.20 * intensity})`;
+  c.lineWidth = Math.max(1, h / 900);
+  c.beginPath();
+  for (const d of rainDrops) {
+    const len = d.len * (0.5 + shear);
+    c.moveTo(d.x, d.y);
+    c.lineTo(d.x - len * shear * 0.55, d.y + len);
+    d.y += d.v * len * 0.55;
+    d.x -= d.v * len * shear * 0.3;
+    if (d.y > h) { d.y = -20; d.x = Math.random() * w; }
+    if (d.x < -60) d.x = w + 20;
+  }
+  c.stroke();
+  c.restore();
+}
+
+/* ---------- head-up symbology, on the overlay canvas ---------- */
+function drawHud(c, w, h, s, a) {
+  const focal = (h / 2) / Math.tan(FOV_V / 2);
+  const cx = w / 2, cyc = h / 2;
+  const green = "#31e07a";
+  c.save();
+  c.lineWidth = Math.max(1.4, h / 560);
+  c.font = `600 ${Math.round(h / 46)}px "Chakra Petch", sans-serif`;
+  c.textAlign = "center"; c.textBaseline = "middle";
+  c.shadowColor = "rgba(0,0,0,.55)"; c.shadowBlur = 4;
+
+  c.save();
+  c.translate(cx, cyc);
+  c.rotate(-rad(s.bank));
+  c.strokeStyle = green; c.fillStyle = green; c.globalAlpha = .9;
+  for (let p = -30; p <= 30; p += 5) {
+    if (p === 0) continue;
+    const y = -(p - s.pitch) * focal * Math.PI / 180;
+    if (Math.abs(y) > h * 0.44) continue;
+    const halfw = p % 10 === 0 ? w * 0.070 : w * 0.036;
+    c.beginPath();
+    if (p > 0) { c.moveTo(-halfw, y); c.lineTo(halfw, y); }
+    else {
+      for (let i = 0; i < 5; i++) {
+        const x0 = -halfw + (halfw * 2) * i / 5;
+        c.moveTo(x0, y); c.lineTo(x0 + halfw * 2 / 10, y);
+      }
+    }
+    c.stroke();
+    if (p % 10 === 0) {
+      c.fillText(String(Math.abs(p)), -halfw - w * 0.024, y);
+      c.fillText(String(Math.abs(p)), halfw + w * 0.024, y);
+    }
+  }
+  const yh = s.pitch * focal * Math.PI / 180;
+  c.globalAlpha = 1;
+  c.beginPath();
+  c.moveTo(-w * 0.32, yh); c.lineTo(-w * 0.05, yh);
+  c.moveTo(w * 0.05, yh); c.lineTo(w * 0.32, yh);
+  c.stroke();
+  c.restore();
+
+  c.strokeStyle = "#ffd24a"; c.lineWidth = Math.max(2, h / 340);
+  c.beginPath();
+  c.moveTo(cx - w * 0.052, cyc); c.lineTo(cx - w * 0.017, cyc);
+  c.lineTo(cx - w * 0.009, cyc + h * 0.019);
+  c.moveTo(cx + w * 0.052, cyc); c.lineTo(cx + w * 0.017, cyc);
+  c.lineTo(cx + w * 0.009, cyc + h * 0.019);
+  c.stroke();
+
+  c.strokeStyle = green; c.lineWidth = Math.max(1.3, h / 560); c.globalAlpha = .9;
+  const R = h * 0.33;
+  for (const ang of [-45, -30, -20, -10, 0, 10, 20, 30, 45]) {
+    const t = rad(ang - 90);
+    const len = ang % 30 === 0 || ang === 0 ? h * 0.021 : h * 0.012;
+    c.beginPath();
+    c.moveTo(cx + Math.cos(t) * R, cyc + Math.sin(t) * R);
+    c.lineTo(cx + Math.cos(t) * (R + len), cyc + Math.sin(t) * (R + len));
+    c.stroke();
+  }
+  const bt = rad(-s.bank - 90);
+  c.fillStyle = "#ffd24a"; c.globalAlpha = 1;
+  c.beginPath();
+  c.moveTo(cx + Math.cos(bt) * (R - h * .006), cyc + Math.sin(bt) * (R - h * .006));
+  c.lineTo(cx + Math.cos(bt - .028) * (R - h * .029), cyc + Math.sin(bt - .028) * (R - h * .029));
+  c.lineTo(cx + Math.cos(bt + .028) * (R - h * .029), cyc + Math.sin(bt + .029) * (R - h * .029));
+  c.closePath(); c.fill();
+
+  c.fillStyle = "rgba(8,13,16,.5)";
+  c.shadowBlur = 0;
+  c.fillRect(cx - w * 0.28, h * 0.030, w * 0.56, h * 0.046);
+  c.shadowBlur = 4;
+  c.strokeStyle = green; c.fillStyle = green;
+  c.font = `600 ${Math.round(h / 52)}px "Chakra Petch", sans-serif`;
+  for (let d = -60; d <= 60; d += 10) {
+    const hdg = wrap360(Math.round(s.hdg / 10) * 10 + d);
+    const dx = wrap180(hdg - s.hdg) / 60 * (w * 0.28);
+    if (Math.abs(dx) > w * 0.28) continue;
+    c.beginPath();
+    c.moveTo(cx + dx, h * 0.030); c.lineTo(cx + dx, h * 0.030 + h * 0.011);
+    c.stroke();
+    c.fillText(String((hdg / 10) | 0).padStart(2, "0"), cx + dx, h * 0.030 + h * 0.029);
+  }
+  c.fillStyle = "#ffd24a";
+  c.beginPath();
+  c.moveTo(cx, h * 0.030 + h * 0.048);
+  c.lineTo(cx - w * 0.006, h * 0.030 + h * 0.060);
+  c.lineTo(cx + w * 0.006, h * 0.030 + h * 0.060);
+  c.closePath(); c.fill();
+
+  /* Nearest field, and the bearing to it -- the only navigation aid there is. */
+  const near = nearestAirfield(s.x, s.y, 90);
+  if (near) {
+    const brg = near.bearingFrom(s.x, s.y);
+    const distNm = near.distanceNm(s.x, s.y);
+    const rel = wrap180(brg - s.hdg);
+    if (Math.abs(rel) < 60) {
+      const dx = rel / 60 * (w * 0.28);
+      c.fillStyle = "#4fd8ff";
+      c.beginPath();
+      c.moveTo(cx + dx, h * 0.030 - h * 0.004);
+      c.lineTo(cx + dx - w * 0.007, h * 0.030 - h * 0.019);
+      c.lineTo(cx + dx + w * 0.007, h * 0.030 - h * 0.019);
+      c.closePath(); c.fill();
+    }
+    c.fillStyle = "#4fd8ff"; c.textAlign = "left";
+    c.font = `600 ${Math.round(h / 54)}px "Chakra Petch", sans-serif`;
+    c.fillText(`${near.ident}  ${near.ils ? "ILS" : "VIS"}  ` +
+               `${brg.toFixed(0).padStart(3, "0")}°  ${distNm.toFixed(1)} nm  ` +
+               `${near.lengthFt.toLocaleString()} ft`,
+               cx - w * 0.27, h * 0.100);
+  }
+
+  /* On the ground before rotation: the speeds that matter, called as they
+     pass, in place of an approach nobody is flying yet. */
+  if (s.onGround && !s.touchdown) {
+    const { v1, vr, v2 } = vSpeeds(a, s);
+    const ias = tasToIas(s.tas, s.alt) * KT_PER_MS;
+    const f = fieldByIdent(s.landingField);
+    const remaining = f ? Math.max(0, f.lengthFt - f.frameFor(s.x, s.y, s.rollDirection).along) : 0;
+    c.textAlign = "center";
+    c.font = `700 ${Math.round(h / 26)}px "Chakra Petch", sans-serif`;
+    let call = "", colour = "#31e07a";
+    if (s.brakes >= 1) { call = "BRAKES SET"; colour = "#ffb020"; }
+    else if (ias >= vr) { call = "ROTATE"; colour = "#31e07a"; }
+    else if (ias >= v1) { call = "V1"; colour = "#eef5f8"; }
+    else if (ias >= 80) { call = "EIGHTY KNOTS"; colour = "#7c929d"; }
+    if (call) { c.fillStyle = colour; c.fillText(call, cx, cyc + h * 0.20); }
+
+    c.font = `600 ${Math.round(h / 50)}px "Chakra Petch", sans-serif`;
+    c.fillStyle = "#4fd8ff";
+    c.fillText(`V1 ${Math.round(v1)}    VR ${Math.round(vr)}    V2 ${Math.round(v2)}`,
+               cx, cyc + h * 0.27);
+    c.fillStyle = remaining < 3000 ? "#ffb020" : "#7c929d";
+    c.fillText(`${Math.round(remaining).toLocaleString()} ft of runway remaining`,
+               cx, cyc + h * 0.31);
+  }
+
+  /* Glideslope and localiser, shown only when positioned to land on this
+     runway -- not merely somewhere near it. */
+  const app = s.approach;
+  if (app && app.onApproach && !s.onGround) {
+    const barLen = h * 0.30, gx = cx + w * 0.30, gy = cyc;
+    const dev = clamp(app.gsDevFt / 400, -1, 1);
+    const loc = clamp(app.across / 1200, -1, 1);
+    c.textAlign = "center";
+    c.strokeStyle = "rgba(49,224,122,.5)"; c.lineWidth = Math.max(1.2, h / 620);
+
+    c.beginPath(); c.moveTo(gx, gy - barLen / 2); c.lineTo(gx, gy + barLen / 2); c.stroke();
+    for (const t of [-1, -0.5, 0, 0.5, 1]) {
+      c.beginPath();
+      c.arc(gx, gy + t * barLen / 2, h * 0.005, 0, 7);
+      t === 0 ? c.stroke() : c.stroke();
+    }
+    c.fillStyle = "#ff6be0";
+    c.beginPath();                                   // the diamond you fly toward
+    const dy2 = gy + dev * barLen / 2;
+    c.moveTo(gx - h * .013, dy2); c.lineTo(gx, dy2 - h * .011);
+    c.lineTo(gx + h * .013, dy2); c.lineTo(gx, dy2 + h * .011);
+    c.closePath(); c.fill();
+
+    const ly = cyc + h * 0.30, lxc = cx;
+    c.strokeStyle = "rgba(49,224,122,.5)";
+    c.beginPath(); c.moveTo(lxc - barLen / 2, ly); c.lineTo(lxc + barLen / 2, ly); c.stroke();
+    for (const t of [-1, -0.5, 0, 0.5, 1]) {
+      c.beginPath(); c.arc(lxc + t * barLen / 2, ly, h * 0.005, 0, 7); c.stroke();
+    }
+    c.fillStyle = "#ff6be0";
+    const dx2 = lxc + loc * barLen / 2;
+    c.beginPath();
+    c.moveTo(dx2, ly - h * .013); c.lineTo(dx2 - h * .011, ly);
+    c.lineTo(dx2, ly + h * .013); c.lineTo(dx2 + h * .011, ly);
+    c.closePath(); c.fill();
+
+    c.fillStyle = "#31e07a"; c.textAlign = "right";
+    c.font = `600 ${Math.round(h / 50)}px "Chakra Petch", sans-serif`;
+    c.fillText(`${app.field.ident} RWY ${(app.direction / 10).toFixed(0).padStart(2, "0")}`,
+               gx - h * 0.02, gy - barLen / 2 - h * 0.028);
+    c.fillText(`${app.distanceNm.toFixed(1)} nm   Vref ${Math.round(vrefKt(a, s))}`,
+               gx - h * 0.02, gy - barLen / 2 - h * 0.006);
+  }
+  c.restore();
+}
+
+/* ---------- panel ---------- */
+const el = id => document.getElementById(id);
+function setVal(id, text, cls) {
+  const n = el(id);
+  n.textContent = text;
+  n.className = "val" + (cls ? " " + cls : "") + (n.dataset.small === "1" ? " small" : "");
+}
+["g-mach","g-agl","g-vs","g-att","g-aoa","g-thr","g-fuel","g-ff","g-cfg"]
+  .forEach(id => el(id).dataset.small = "1");
+
+function updatePanel() {
+  const s = S, a = craft;
+  const aero = aeroState(a, s);
+  const ias = tasToIas(Math.max(s.tas, 0), s.alt) * KT_PER_MS;
+  const agl = s.alt - elevation(s.x, s.y);
+  const vs = s.tas * Math.sin(rad(s.gamma)) * FPM_PER_MS;
+  const nMan = 1 / Math.max(Math.cos(rad(s.bank)), 0.05);
+  const stallKt = stallIasKt(a, s.mass, nMan, s.flaps);
+  const load = aero.lift / (s.mass * G0);
+
+  setVal("g-ias", Math.round(ias).toString(),
+    ias > a.vmo ? "red" : (ias < stallKt * 1.1 ? "amber" : ""));
+  setVal("g-mach", aero.mach.toFixed(3), aero.mach > a.mmo ? "red" : "");
+  setVal("g-alt", Math.round(s.alt).toLocaleString());
+  setVal("g-agl", Math.round(Math.max(agl, 0)).toLocaleString(),
+    agl < 500 ? "red" : (agl < 1000 ? "amber" : ""));
+  setVal("g-vs", (vs >= 0 ? "+" : "") + Math.round(vs).toLocaleString());
+  setVal("g-hdg", Math.round(wrap360(s.hdg)).toString().padStart(3, "0"));
+  setVal("g-att", `${s.pitch >= 0 ? "+" : ""}${s.pitch.toFixed(1)}° / ${s.bank >= 0 ? "+" : ""}${s.bank.toFixed(0)}°`);
+  setVal("g-aoa", `${aero.alpha.toFixed(1)}° / ${load.toFixed(2)}g`,
+    aero.alpha > a.alphaCrit - 3 ? "amber" : "");
+  setVal("g-thr", Math.round(s.throttle) + "%");
+  el("m-thr").style.width = clamp(s.throttle, 0, 100) + "%";
+
+  const fuelPct = 100 * s.fuel / a.fuelCap;
+  setVal("g-fuel", Math.round(s.fuel).toLocaleString(), fuelPct < 5 ? "amber" : "");
+  el("m-fuel").style.width = clamp(fuelPct, 0, 100) + "%";
+  el("m-fuel").className = fuelPct < 10 ? "amber" : "";
+  setVal("g-ff", Math.round(a.tsfc * aero.thrust * 3600).toLocaleString());
+  setVal("g-cfg", `${FLAP_NAME[s.flaps]} · ${s.gear ? "DN" : "UP"}${s.spoilers ? " · SPD" : ""}`, "white");
+  setVal("g-law", LAW_NAME[s.law] + (s.prot.length ? " · " + s.prot.join(" · ") : ""),
+    "law " + (s.law === "normal" ? "cyan" : "amber"));
+
+  const strip = el("warnstrip");
+  const ws = computeWarnings(a, s, aero, ias, agl, stallKt);
+  strip.innerHTML = ws.map(w => `<span class="warn${w.red ? " red" : ""}">${w.t}</span>`).join("");
+
+  /* Handed to the audio engine so it is not recomputing what the panel just
+     worked out -- aeroState is the most expensive call in the frame. */
+  return { ias, agl, vs, mach: aero.mach, alpha: aero.alpha, stalled: aero.stalled };
+}
+
+/* ---------- ending ---------- */
+const ENDINGS = {
+  landed: { cls: "good", title: "Down and stopped" },
+  hardlanding: { cls: "bad", title: "Arrival, not a landing" },
+  terrain: { cls: "bad", title: "Controlled flight into terrain" },
+  structural: { cls: "bad", title: "Structural failure" },
+  overrun: { cls: "bad", title: "Off the end" },
+  runwayoverrun: { cls: "bad", title: "Ran out of runway" }
+};
+function showEnding(a, s, kind) {
+  const e = ENDINGS[kind] || { cls: "bad", title: kind };
+  const grade = s.touchdown ? s.touchdown.grade.toUpperCase() : null;
+  el("end-title").textContent = grade && kind === "landed" ? `${e.title} — ${grade}` : e.title;
+  el("end-title").className = e.cls;
+
+  let text;
+  if (kind === "landed") {
+    text = `${a.name} on the ground at ${s.touchdown.name}, ` +
+           `${Math.round(s.touchdown.remaining).toLocaleString()} ft of runway to spare.`;
+  } else if (kind === "hardlanding") {
+    text = `The gear went through the wing box. ${Math.round(s.touchdown.sink).toLocaleString()} feet per minute is not a landing.`;
+  } else if (kind === "terrain") {
+    text = `${a.name} met rising ground at ${Math.round(s.impactIas)} knots and ${Math.round(Math.abs(s.impactVs)).toLocaleString()} feet per minute of descent.`;
+  } else if (kind === "structural") {
+    text = `The airframe came apart. ${s.maxG.toFixed(2)} g against a 3.8 g ultimate limit, at ${Math.round(s.maxIas)} knots.`;
+  } else if (kind === "runwayoverrun") {
+    const f = fieldByIdent(s.landingField);
+    text = `Off the end of ${s.landingField} without ever getting airborne.` +
+           (f ? ` ${f.lengthFt.toLocaleString()} feet was not enough at this weight — ` +
+                `try flaps 2, and do not rotate before Vr.` : "");
+  } else {
+    const f = fieldByIdent(s.landingField);
+    text = `Off the far end of ${s.landingField} still rolling.` +
+           (f ? ` The runway was ${f.lengthFt.toLocaleString()} feet long.` : "");
+  }
+  el("end-text").textContent = text;
+
+  const rows = [
+    ["Time airborne", `${Math.floor(s.t / 60)} min ${String(Math.round(s.t % 60)).padStart(2, "0")} s`],
+    ["Distance flown", `${s.distance.toFixed(1)} nm`],
+    ["Fuel burned", `${Math.round(s.initialFuel - s.fuel).toLocaleString()} kg`],
+    ["Maximum altitude", `${Math.round(s.maxAlt).toLocaleString()} ft`],
+    ["Highest speed", `${Math.round(s.maxIas)} kt`],
+    ["Closest to the ground", `${Math.round(Math.max(0, s.minAgl)).toLocaleString()} ft`],
+    ["Highest load factor", `${s.maxG.toFixed(2)} g`]
+  ];
+  if (s.touchdown && s.touchdown.onRunway) {
+    rows.push(["Touchdown sink rate", `${Math.round(s.touchdown.sink).toLocaleString()} fpm`]);
+    rows.push(["Touchdown speed", `${Math.round(s.touchdown.ias)} kt (Vref ${Math.round(s.touchdown.vref)})`]);
+    rows.push(["Off the centreline", `${Math.round(Math.abs(s.touchdown.across))} ft`]);
+  }
+  el("end-stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  el("ending").classList.add("show");
+}
+
+/* ---------- input ---------- */
+const keys = Object.create(null);
+window.addEventListener("keydown", ev => {
+  const k = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key;
+  if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(ev.key)) ev.preventDefault();
+  if (keys[k]) return;
+  keys[k] = true;
+
+  const s = S;
+  if (k === "c") setView(view === "cockpit" ? "chase" : "cockpit");
+  else if (k === "p") paused = !paused;
+  else if (k === "g") { s.gear = !s.gear; soundGear(s.gear); }
+  else if (k === "s") s.spoilers = !s.spoilers;
+  else if (k === "x") s.rudder = 0;
+  else if (k === "[") { if (s.flaps > 0) { s.flaps--; soundFlaps(); } }
+  else if (k === "]") { if (s.flaps < 4) { s.flaps++; soundFlaps(); } }
+  else if (k === "l") {
+    s.law = LAWS[(LAWS.indexOf(s.law) + 1) % LAWS.length];
+    s.prot = []; s.alphaFloorLatched = false;
+  }
+});
+window.addEventListener("keyup", ev => {
+  const k = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key;
+  keys[k] = false;
+});
+window.addEventListener("blur", () => { for (const k in keys) keys[k] = false; });
+
+function readControls(dt) {
+  const s = S, a = craft;
+  /* The sidestick commands an attitude and holds it when released, which is
+     what an Airbus does — not a spring-centred yoke. */
+  const pitchRate = a.pitchRate * 1.9;
+  const rollRate = a.rollRate * 1.15;
+  if (keys.ArrowUp)    s.cmdPitch += pitchRate * dt;
+  if (keys.ArrowDown)  s.cmdPitch -= pitchRate * dt;
+  if (keys.ArrowLeft)  s.cmdBank  -= rollRate * dt;
+  if (keys.ArrowRight) s.cmdBank  += rollRate * dt;
+  s.cmdPitch = clamp(s.cmdPitch, -30, 30);
+  s.cmdBank = clamp(s.cmdBank, -BANK_LIMIT_DIRECT, BANK_LIMIT_DIRECT);
+
+  if (keys.a) s.throttle = clamp(s.throttle + 34 * dt, 0, 100);
+  if (keys.z) s.throttle = clamp(s.throttle - 34 * dt, 0, 100);
+  if (keys.q) s.rudder = clamp(s.rudder - 22 * dt, -a.maxRudder, a.maxRudder);
+  if (keys.e) s.rudder = clamp(s.rudder + 22 * dt, -a.maxRudder, a.maxRudder);
+  /* Parking brake logic: set at a runway start and released the moment the
+     pilot asks for it, then available again on the rollout. */
+  if (s.onGround) {
+    if (keys.b) s.brakes = 1;
+    else if (s.brakes === 1 && (keys.a || keys.ArrowUp)) s.brakes = 0;
+    else if (!keys.b && s.touchdown) s.brakes = 0;
+  } else s.brakes = 0;
+  s.reverse = s.onGround && !!s.touchdown && keys.z;
+}
+
+function setView(v) {
+  view = v;
+  document.getElementById("deck").dataset.view = v;
+  const btn = el("btn-view");
+  btn.textContent = v === "cockpit" ? "Chase" : "Cockpit";
+  btn.classList.toggle("on", v === "chase");
+}
+
+/* ---------- selectors ---------- */
+const selType = el("sel-type"), selWx = el("sel-wx");
+FLEET.forEach(a => {
+  const o = document.createElement("option");
+  o.value = a.key; o.textContent = `${a.name} · ${a.icao}`;
+  selType.appendChild(o);
+});
+WEATHER.forEach(w => {
+  const o = document.createElement("option");
+  o.value = w.key; o.textContent = w.name;
+  selWx.appendChild(o);
+});
+const selTime = el("sel-time");
+selTime.addEventListener("change", () => { timeOfDay = parseFloat(selTime.value); });
+const selStart = el("sel-start");
+selStart.addEventListener("change", () => { startMode = selStart.value; newFlight(true); });
+selType.value = "a350"; selWx.value = "clear"; selStart.value = "runway";
+selType.addEventListener("change", () => { craft = FLEET_BY_KEY[selType.value]; newFlight(true); });
+selWx.addEventListener("change", () => { weather = WEATHER_BY_KEY[selWx.value]; });
+el("btn-view").addEventListener("click", () => setView(view === "cockpit" ? "chase" : "cockpit"));
+el("btn-reset").addEventListener("click", () => newFlight(true));
+el("end-again").addEventListener("click", () => newFlight(true));
+
+/* ---------- main loop ---------- */
+let last = performance.now();
+function frame(now) {
+  let dt = Math.min((now - last) / 1000, 0.1);
+  last = now;
+
+  if (!paused && (S.status === "flying" || S.status === "rollout")) {
+    readControls(dt);
+    const steps = Math.max(1, Math.ceil(dt / 0.02));
+    const h = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      substep(craft, S, weather, h);
+      if (S.status !== "flying" && S.status !== "rollout") break;
+    }
+    /* Once a frame, not once a substep: the guidance is read by the warnings
+       and the HUD, and searching the airfield grid a hundred times a frame
+       would cost more than the whole integrator. */
+    S.approach = approachGuidance(craft, S);
+    if (!activeFields.length ||
+        activeFields[0].distanceNm(S.x, S.y) > 26) refreshActiveFields(S.x, S.y);
+  }
+
+  render();
+  /* The instruments brighten as the light goes, which is the one thing a real
+     cockpit does that is impossible to miss at dusk. */
+  const dl = daylight();
+  document.getElementById("deck").style.setProperty("--night", (1 - dl).toFixed(3));
+  const readout = updatePanel();
+  if (!paused) updateAudio(craft, S, readout, dt);
+  requestAnimationFrame(frame);
+}
+
+if (!gl) {
+  el("end-title").textContent = "WebGL 2 not available";
+  el("end-title").className = "bad";
+  el("end-text").textContent =
+    "This build renders the world on the GPU and needs WebGL 2, which this " +
+    "browser has not made available. Chrome, Edge, Firefox and Safari 15+ all " +
+    "support it; if you are on a remote desktop or have hardware acceleration " +
+    "switched off, that is the usual cause.";
+  el("end-stats").innerHTML = "";
+  el("end-again").style.display = "none";
+  el("ending").classList.add("show");
+} else {
+  initGL();
+  resize();
+  newFlight(false);
+  requestAnimationFrame(frame);
+}
+</script>
