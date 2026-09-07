@@ -227,6 +227,51 @@
   @media (prefers-reduced-motion: reduce) {
     #vignette { transition: none; }
   }
+  /* ---- the FCU: the Airbus mode control panel ----
+     Pull a knob to select a value and fly it; push it to give the aeroplane
+     back to its own guidance. That distinction is the whole grammar of an
+     Airbus autopilot, so the buttons say which state they are in rather than
+     just being on or off. */
+  #fcu {
+    border-top: 1px solid var(--edge);
+    background: var(--panel);
+    filter: brightness(calc(1 + var(--night, 0) * 0.34));
+    display: flex; flex-wrap: wrap; align-items: stretch; gap: 0;
+    padding: 0 6px;
+  }
+  .fcu-win {
+    display: grid; gap: 0; padding: 5px 12px 6px;
+    border-left: 1px solid var(--edge-soft);
+    cursor: ns-resize; user-select: none; min-width: 78px;
+  }
+  .fcu-win:first-child { border-left: 0; }
+  .fcu-win .lbl {
+    font-family: var(--font-inst); font-size: 9px; font-weight: 600;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--ink-faint);
+  }
+  .fcu-win .win {
+    font-family: var(--font-inst); font-size: 17px; font-weight: 600;
+    font-variant-numeric: tabular-nums; color: var(--efis-green);
+    line-height: 1.15;
+  }
+  /* A managed window shows dashes and a lit dot, exactly as the aeroplane
+     does -- the value is still there, the aircraft is simply not flying it. */
+  .fcu-win.managed .win { color: var(--ink-faint); }
+  .fcu-win .dot {
+    font-size: 11px; color: var(--efis-cyan); visibility: hidden;
+  }
+  .fcu-win.managed .dot { visibility: visible; }
+  .fcu-btns { display: flex; align-items: center; gap: 5px; padding: 5px 10px;
+              border-left: 1px solid var(--edge-soft); flex-wrap: wrap; }
+  .fcu-btn {
+    font-family: var(--font-inst); font-size: 10px; font-weight: 700;
+    letter-spacing: .08em; padding: 5px 9px; cursor: pointer;
+    border: 1px solid var(--edge); border-radius: 3px;
+    background: transparent; color: var(--ink-faint);
+  }
+  .fcu-btn.on { color: #0d1418; background: var(--efis-green);
+                border-color: var(--efis-green); }
+  .fcu-btn.armed { color: var(--efis-cyan); border-color: var(--efis-cyan); }
 </style>
 
 <div id="deck" data-view="cockpit">
@@ -263,6 +308,10 @@
           <option value="airborne">Airborne — 5,000 ft</option>
         </select>
       </label>
+      <label class="field">
+        <span>Destination</span>
+        <select id="sel-dest"></select>
+      </label>
       <div class="btn-row">
         <button id="btn-view" type="button">Chase</button>
         <button id="btn-reset" type="button">Reset</button>
@@ -297,6 +346,22 @@
         <dl id="end-stats"></dl>
         <div class="btn-row"><button id="end-again" type="button">Fly again</button></div>
       </div>
+    </div>
+  </div>
+
+  <div id="fcu">
+    <div class="fcu-win" data-ch="spd"><span class="lbl">SPD <span class="dot">•</span></span><span class="win" id="fcu-spd">---</span></div>
+    <div class="fcu-win" data-ch="hdg"><span class="lbl">HDG <span class="dot">•</span></span><span class="win" id="fcu-hdg">---</span></div>
+    <div class="fcu-win" data-ch="alt"><span class="lbl">ALT <span class="dot">•</span></span><span class="win" id="fcu-alt">---</span></div>
+    <div class="fcu-win" data-ch="vs"><span class="lbl">V/S <span class="dot">•</span></span><span class="win" id="fcu-vs">-----</span></div>
+    <div class="fcu-btns">
+      <button class="fcu-btn" id="fcu-ap">AP1</button>
+      <button class="fcu-btn" id="fcu-athr">A/THR</button>
+      <button class="fcu-btn" id="fcu-nav">NAV</button>
+      <button class="fcu-btn" id="fcu-appr">APPR</button>
+    </div>
+    <div class="fcu-win" data-ch="dest" style="cursor:default">
+      <span class="lbl">DEST</span><span class="win" id="fcu-dest">---</span>
     </div>
   </div>
 
@@ -699,9 +764,13 @@ const GLIDESLOPE_DEG = 3.0, APPROACH_RANGE_NM = 20.0;
    Aiming at the threshold makes the guidance run out exactly where the aircraft
    still has fifty feet to descend, and it floats the length of the runway. */
 const AIM_POINT_FT = 1000.0, MAX_LOCALISER_DEG = 12.0, MAX_APPROACH_CRAB_DEG = 45.0;
-const VREF_FACTOR = 1.3;
 
-const vrefKt = (a, s) => stallIasKt(a, s.mass, 1, s.flaps) * VREF_FACTOR;
+/* Vref lives with the rest of the speed tape in characteristicSpeeds, below,
+   and this defers to it -- exactly as landing.vref_kt defers to
+   fbw.characteristic_speeds in the Python. Two definitions of "how fast should
+   this approach be" is how a PFD comes to disagree with the report card at the
+   end of the flight. */
+const vrefKt = (a, s) => characteristicSpeeds(a, s).vref;
 
 function approachGuidance(a, s) {
   const field = nearestAirfield(s.x, s.y, APPROACH_RANGE_NM);
@@ -1230,6 +1299,9 @@ function newFlight(keepView) {
     enginesRunning: true, enginesFailed: [],
     law: "normal", prot: [], alphaFloorLatched: false,
     turb: [0, 0, 0],
+    /* Commanded heading is the autopilot's, not the pilot's: hand-flying
+       commands a bank directly and leaves this null. */
+    cmdHdg: null, ap: freshAutopilot(), dest: null, fmaChanged: {},
     onGround, status: onGround ? "rollout" : "flying", touchdown: null,
     landingField: home.ident, rollDirection: hdg, approach: null,
     t: 0, distance: 0, maxG: 1, maxIas: 0, maxAlt: alt, minAgl: 1e9,
@@ -1243,6 +1315,8 @@ function newFlight(keepView) {
   htOriginNm = [NaN, NaN];      // the fields moved; re-bake both height textures
   htFineOriginNm = [NaN, NaN];
   if (!keepView) setView("cockpit");
+  refreshDestinations();
+  updateFcu();
   document.getElementById("ending").classList.remove("show");
 }
 
@@ -1281,6 +1355,312 @@ function computeWarnings(a, s, aero, iasKt, aglFt, stallKt) {
   if (s.flaps > 0 && iasKt > FLAP_VFE[s.flaps]) w.push({ t: "FLAP OVERSPEED", red: true });
   if (s.gear && iasKt > 280) w.push({ t: "GEAR OVERSPEED", red: false });
   return w;
+}
+
+/* ==========================================================================
+   CHARACTERISTIC SPEEDS  (fbw.characteristic_speeds)
+
+   Every speed the tape marks, at the current weight and configuration. This is
+   a port, not a second opinion: change a factor here and the Python's
+   tests/test_fbw.py stops agreeing with the panel.
+
+   The one thing to keep straight is that VLS and Vref are quoted against
+   different conventions on purpose -- 1.23 x Vs1g is the modern certification
+   number, 1.3 x Vs1g is the older one the touchdown grader has always used --
+   so Vref sits a little above VLS. That is the right way round: VLS is a floor
+   and Vref is a target.
+   ========================================================================== */
+const VLS_FACTOR = 1.23, VREF_FACTOR = 1.3;
+
+function iasForCl(a, mass, cl) {
+  /* Sea-level density, because the answer is an *indicated* speed -- the same
+     reason a stall speed reads the same on the ASI at every altitude. */
+  const ms = Math.sqrt(2 * mass * G0 / (RHO0 * a.wingArea * Math.max(cl, 1e-3)));
+  return ms * KT_PER_MS;
+}
+
+function iasForAlpha(a, mass, flaps, alphaDeg) {
+  /* Capped at CL_max because past it the wing makes no more lift. This is not
+     the mistake alphaForLoadFactor warns about: that one clamps a *demand*,
+     and clamping a demand invents a protection. This asks what the wing does. */
+  const cl = cl0Flaps(a, flaps) + clAlpha(a) * rad(alphaDeg);
+  return iasForCl(a, mass, Math.min(cl, clMaxFlaps(a, flaps)));
+}
+
+function characteristicSpeeds(a, s) {
+  const th = alphaThresholds(a);
+  const stall = stallIasKt(a, s.mass, 1, s.flaps);
+  /* Best lift-to-drag is where induced drag equals profile drag, so
+     CL = sqrt(CD_0 / k). Taken from the type's own polar rather than from a
+     rule of thumb on weight, so it is right for all nine. */
+  const greenCl = Math.sqrt(a.cd0 / inducedK(a));
+  const machLimitKt = tasToIas(a.mmo * soundMs(s.alt), s.alt) * KT_PER_MS;
+  return {
+    stall,
+    alphaMax:  iasForAlpha(a, s.mass, s.flaps, th.max),
+    alphaProt: iasForAlpha(a, s.mass, s.flaps, th.prot),
+    vls:       stall * VLS_FACTOR,
+    greenDot:  iasForCl(a, s.mass, greenCl),
+    vref:      stall * VREF_FACTOR,
+    /* Whichever limit bites first: the airframe, the Mach limit as the ASI
+       would be reading it here, or the flap placard. */
+    vmax: Math.min(a.vmo, machLimitKt, FLAP_VFE[s.flaps])
+  };
+}
+
+/* ==========================================================================
+   THE AUTOPILOT  (autopilot.py)
+
+   A port of the Python, channel for channel and gain for gain. These are
+   controllers, not a bypass: each writes the same commanded pitch, bank and
+   throttle a pilot would, so the control law, the rate limits and the stall
+   behaviour downstream are unchanged. An autopilot that wrote straight to the
+   state would fly an aeroplane the pilot cannot.
+   ========================================================================== */
+
+/* S.ap maps to the ap_* fields on the Python's FlightState:
+   engaged/altFt/vsFpm/hdgDeg/spdKt/appr/nav. */
+const AP_ALT = "ALT", AP_VS = "V/S", AP_HDG = "HDG", AP_SPD = "SPD",
+      AP_APPR = "APPR", AP_NAV = "NAV";
+
+const MAX_AP_VS_FPM = 2000, MAX_AP_BANK_DEG = 25, MAX_AP_PITCH_TRIM_DEG = 3;
+const ALTITUDE_TO_VS = 2.4, VS_TO_PITCH = 1 / 600, HEADING_TO_BANK = 1.5;
+const SPEED_TO_THROTTLE = 1.6, GLIDESLOPE_TO_VS = 1.9;
+const LOCALISER_TO_HEADING = 0.045, MAX_LOC_INTERCEPT_DEG = 25;
+const AP_HANDOVER_AGL_FT = 55, AP_RETARD_AGL_FT = 28, AP_HANDOVER_RANGE_FT = 1500;
+const FMA_BOX_S = 10, ALT_HOLD_FT = 120, ALT_CAPTURE_FT = 900;
+
+function freshAutopilot() {
+  return { engaged: false, altFt: null, vsFpm: null, hdgDeg: null,
+           spdKt: null, appr: false, nav: false };
+}
+
+function apChannels(s) {
+  if (!s.ap.engaged) return [];
+  const out = [];
+  if (s.ap.appr) out.push(AP_APPR);
+  else {
+    if (s.ap.altFt !== null) out.push(AP_ALT);
+    else if (s.ap.vsFpm !== null) out.push(AP_VS);
+    /* Managed lateral wins over selected, which is what pushing the heading
+       knob in means: hand the aeroplane back to the route. */
+    if (s.ap.nav) out.push(AP_NAV);
+    else if (s.ap.hdgDeg !== null) out.push(AP_HDG);
+  }
+  if (s.ap.spdKt !== null) out.push(AP_SPD);
+  return out;
+}
+
+/* The pilot taking a control wins, immediately and without argument. */
+function apDisengageFor(s, kind) {
+  if (kind === "pitch") { s.ap.altFt = null; s.ap.vsFpm = null; s.ap.appr = false; }
+  else if (kind === "roll") { s.ap.hdgDeg = null; s.ap.nav = false; s.ap.appr = false; }
+  else if (kind === "throttle") s.ap.spdKt = null;
+}
+
+/* Guidance to the destination, if one is selected. The browser has no route
+   planner, so this is a one-waypoint direct-to -- which is exactly what the
+   Python's `direct to KEBR` builds, and what navigation.leg_for reads. */
+function legFor(s, readout) {
+  if (!s.dest) return null;
+  const distanceNm = s.dest.distanceNm(s.x, s.y);
+  const gs = Math.max(readout ? readout.gsKt : 1, 1);
+  return {
+    field: s.dest,
+    distanceNm,
+    bearingDeg: s.dest.bearingFrom(s.x, s.y),
+    etaS: distanceNm / gs * 3600
+  };
+}
+
+function apHoldAltitude(a, s) {
+  const error = s.ap.altFt - s.alt;
+  apHoldVerticalSpeed(a, s, clamp(error * ALTITUDE_TO_VS, -MAX_AP_VS_FPM, MAX_AP_VS_FPM));
+}
+
+function apHoldVerticalSpeed(a, s) {
+  const target = arguments.length > 2 ? arguments[2] : s.ap.vsFpm;
+  const current = s.tas * Math.sin(rad(s.gamma)) * FPM_PER_MS;
+  const trim = clamp((target - current) * VS_TO_PITCH,
+                     -MAX_AP_PITCH_TRIM_DEG, MAX_AP_PITCH_TRIM_DEG);
+  s.cmdPitch = clamp(s.pitch + trim, -15, 25);
+}
+
+/* Throttle that holds a steady flight path angle, not merely level flight.
+   Thrust must beat drag by the component of weight along the path, so a climb
+   needs more and a descent less. This is the primitive an approach actually
+   needs: with full flaps and the gear down, holding three degrees takes *more*
+   thrust than intuition suggests, because the idle glide is far steeper than
+   three degrees. (physics.throttle_for_flight_path) */
+function throttleForFlightPath(a, s, gammaDeg) {
+  const aero = aeroState(a, s);
+  const needed = aero.drag + s.mass * G0 * Math.sin(rad(gammaDeg));
+  return clamp(100 * needed / Math.max(thrustAvailable(a, s), 1), 0, 100);
+}
+
+function apHoldSpeed(a, s) {
+  const ias = tasToIas(Math.max(s.tas, 1), s.alt) * KT_PER_MS;
+  const baseline = throttleForFlightPath(a, s, s.gamma);
+  s.throttle = clamp(baseline - (ias - s.ap.spdKt) * SPEED_TO_THROTTLE, 0, 100);
+}
+
+/* LNAV. The one term that makes it different from holding a heading: it aims
+   the *track* at the waypoint rather than the nose, so a crosswind stops
+   pushing the aircraft off to one side over a long leg. */
+function apFlyLeg(a, s, readout) {
+  const leg = legFor(s, readout);
+  if (!leg) return;
+  s.cmdHdg = wrap360(leg.bearingDeg - readout.driftDeg);
+}
+
+function apFlyApproach(a, s, readout) {
+  const app = s.approach;
+  /* Handover is decided on height above the *runway*, not above whatever is
+     underneath: terrain in the approach corridor can rise to within fifty feet
+     of the glidepath miles out, and handing over there abandons an approach
+     with the runway still ahead. */
+  const heightFt = app ? s.alt - app.field.elev : s.alt - elevation(s.x, s.y);
+  const vs = s.tas * Math.sin(rad(s.gamma)) * FPM_PER_MS;
+  const committed = app && app.along > -AP_HANDOVER_RANGE_FT && vs < 0;
+
+  if (committed && heightFt < AP_HANDOVER_AGL_FT) {
+    s.ap.appr = false;
+    if (heightFt < AP_RETARD_AGL_FT) {
+      s.ap.spdKt = null; s.ap.engaged = false; s.throttle = 0;
+    }
+    return;
+  }
+  if (!app || !app.onApproach) {
+    /* Lost it while still high. Give the aircraft back rather than hold a
+       frozen attitude and hope. */
+    s.ap.appr = false;
+    s.ap.altFt = s.alt;
+    return;
+  }
+
+  const gsMs = Math.max(readout.gsKt * MS_PER_KT, 20);
+  const nominalFpm = -(gsMs * Math.tan(rad(GLIDESLOPE_DEG)) * FPM_PER_MS);
+  apHoldVerticalSpeed(a, s, nominalFpm - app.gsDevFt * GLIDESLOPE_TO_VS);
+
+  const intercept = clamp(-app.across * LOCALISER_TO_HEADING,
+                          -MAX_LOC_INTERCEPT_DEG, MAX_LOC_INTERCEPT_DEG);
+  s.cmdHdg = wrap360(app.direction + intercept);
+}
+
+function apUpdate(a, s, readout, dt) {
+  if (!s.ap.engaged || s.onGround) return;
+  if (s.ap.appr) {
+    apFlyApproach(a, s, readout);
+  } else {
+    if (s.ap.altFt !== null) apHoldAltitude(a, s);
+    else if (s.ap.vsFpm !== null) apHoldVerticalSpeed(a, s);
+    /* Managed lateral first, so a selected heading left behind does not
+       quietly fight the route. */
+    if (s.ap.nav) apFlyLeg(a, s, readout);
+    else if (s.ap.hdgDeg !== null) s.cmdHdg = s.ap.hdgDeg;
+  }
+  if (s.ap.spdKt !== null) apHoldSpeed(a, s);
+
+  /* The heading channel flies a bank, and it is gentler than the pilot: a
+     passenger-carrying autopilot does not use sixty degrees of it. */
+  if (s.cmdHdg !== null && s.cmdHdg !== undefined) {
+    const error = wrap180(s.cmdHdg - s.hdg);
+    s.cmdBank = clamp(error * HEADING_TO_BANK, -MAX_AP_BANK_DEG, MAX_AP_BANK_DEG);
+  }
+}
+
+/* ==========================================================================
+   THE FLIGHT MODE ANNUNCIATOR  (autopilot.fma)
+
+   Five columns of what is flying this thing. The words are a port of the
+   Python's, because two front ends drawing the same aeroplane must say the
+   same thing about it -- and the box round a column that has just changed is
+   how a pilot notices a mode changed at all.
+   ========================================================================== */
+const FMA_COLUMNS = ["thrust", "vertical", "lateral", "capability", "engagement"];
+const FMA_GREEN = "#31e07a", FMA_BLUE = "#4ea9ff",
+      FMA_AMBER = "#ffb454", FMA_WHITE = "#e8eef2";
+
+function fmaColumns(a, s) {
+  const on = s.ap.engaged;
+  const captured = !!(s.ap.appr && s.approach && s.approach.onApproach);
+
+  let thrust;
+  if (s.alphaFloorLatched) thrust = ["A.FLOOR", FMA_AMBER];
+  else if (s.ap.spdKt !== null) thrust = ["SPEED", FMA_GREEN];
+  else if (s.onGround && s.throttle > 80) thrust = ["MAN TOGA", FMA_WHITE];
+  else thrust = ["MAN THR", FMA_WHITE];
+
+  /* An approach armed but not captured leaves the aircraft in whatever
+     vertical mode it was in, with G/S armed underneath. So the armed value is
+     decided first and held: letting the altitude channel write "ALT armed"
+     over the top would announce a level-off when what is coming is the
+     glideslope. */
+  let vertical = null, verticalArmed = null;
+  if (captured) vertical = ["G/S", FMA_GREEN];
+  else if (s.ap.appr) verticalArmed = ["G/S", FMA_BLUE];
+  if (!vertical && on) {
+    if (s.ap.altFt !== null) {
+      const errorFt = s.ap.altFt - s.alt;
+      if (Math.abs(errorFt) < ALT_HOLD_FT) vertical = ["ALT", FMA_GREEN];
+      else if (Math.abs(errorFt) < ALT_CAPTURE_FT) vertical = ["ALT*", FMA_GREEN];
+      else {
+        vertical = [errorFt > 0 ? "OP CLB" : "OP DES", FMA_GREEN];
+        if (!verticalArmed) verticalArmed = ["ALT", FMA_BLUE];
+      }
+    } else if (s.ap.vsFpm !== null) {
+      vertical = ["V/S " + (s.ap.vsFpm >= 0 ? "+" : "") +
+                  Math.round(s.ap.vsFpm).toLocaleString(), FMA_GREEN];
+    }
+  }
+
+  let lateral = null, lateralArmed = null;
+  if (captured) lateral = ["LOC", FMA_GREEN];
+  else if (s.ap.appr) lateralArmed = ["LOC", FMA_BLUE];
+  if (!lateral && on) {
+    if (s.ap.nav) lateral = ["NAV", FMA_GREEN];
+    else if (s.ap.hdgDeg !== null) lateral = ["HDG", FMA_GREEN];
+  }
+
+  /* One ILS quality is modelled, so CAT 1 is the only honest claim, and only
+     once the beams are actually being tracked. */
+  const capability = captured ? ["CAT 1", FMA_WHITE] : null;
+
+  const engaged = [];
+  if (on) engaged.push("AP1");
+  if (s.ap.spdKt !== null) engaged.push("A/THR");
+
+  return {
+    thrust:     [thrust, null],
+    vertical:   [vertical, verticalArmed],
+    lateral:    [lateral, lateralArmed],
+    capability: [capability, null],
+    engagement: [engaged.length ? [engaged.join(" "), FMA_WHITE] : null, null]
+  };
+}
+
+const fmaSignature = (eng, arm) => (eng ? eng[0] : "") + "|" + (arm ? arm[0] : "");
+
+function fma(a, s) {
+  const cols = fmaColumns(a, s);
+  if (!s.fmaChanged) s.fmaChanged = {};
+  const out = {};
+  for (const name of FMA_COLUMNS) {
+    const [engaged, armed] = cols[name];
+    const sig = fmaSignature(engaged, armed);
+    const key = name + ":text";
+    if (s.fmaChanged[key] !== sig) {
+      const seenBefore = key in s.fmaChanged;
+      s.fmaChanged[key] = sig;
+      /* Not on the first look, or every flight would begin with all five boxed
+         for having come into existence. */
+      if (seenBefore) s.fmaChanged[name] = s.t;
+    }
+    const since = s.fmaChanged[name];
+    out[name] = { engaged, armed,
+                  boxed: since !== undefined && (s.t - since) < FMA_BOX_S };
+  }
+  return out;
 }
 
 /* ==========================================================================
@@ -2950,9 +3330,25 @@ function updatePanel() {
   const ws = computeWarnings(a, s, aero, ias, agl, stallKt);
   strip.innerHTML = ws.map(w => `<span class="warn${w.red ? " red" : ""}">${w.t}</span>`).join("");
 
-  /* Handed to the audio engine so it is not recomputing what the panel just
-     worked out -- aeroState is the most expensive call in the frame. */
-  return { ias, agl, vs, mach: aero.mach, alpha: aero.alpha, stalled: aero.stalled };
+  /* Ground speed, track and drift, the same way the integrator does it: the
+     aircraft travels along its flight path rather than its nose, and then the
+     air it is in is moving too. The autopilot's NAV channel needs the drift
+     angle -- that one term is the whole difference between aiming the nose at
+     a waypoint and arriving at it. */
+  const horiz = s.tas * Math.cos(rad(s.gamma));
+  const trackRad = rad(s.hdg - s.beta);
+  const windMs = weather.windKt * MS_PER_KT, windTo = rad(weather.windDir + 180);
+  const vx = horiz * Math.sin(trackRad) + windMs * Math.sin(windTo);
+  const vy = horiz * Math.cos(trackRad) + windMs * Math.cos(windTo);
+  const trackDeg = wrap360(deg(Math.atan2(vx, vy)));
+
+  /* Handed to the audio engine and to the autopilot so neither recomputes what
+     the panel just worked out -- aeroState is the most expensive call in the
+     frame. */
+  return { ias, agl, vs, mach: aero.mach, alpha: aero.alpha, stalled: aero.stalled,
+           gsKt: Math.hypot(vx, vy) * KT_PER_MS, trackDeg,
+           driftDeg: wrap180(trackDeg - s.hdg),
+           speeds: characteristicSpeeds(a, s), stallKt, load };
 }
 
 /* ---------- ending ---------- */
@@ -3012,6 +3408,150 @@ function showEnding(a, s, kind) {
 
 /* ---------- input ---------- */
 const keys = Object.create(null);
+
+/* ==========================================================================
+   THE FCU — the mode control panel
+
+   The grammar of an Airbus autopilot is pull and push. *Pull* a knob and the
+   aeroplane flies the number in the window; *push* it and the aeroplane flies
+   its own guidance and the window goes to dashes with a lit dot. Modelling
+   that rather than a row of on/off switches is most of what makes the FMA
+   above it mean anything -- SPEED against MAN THR, NAV against HDG.
+
+   Scroll a window to change its value, click it to pull, shift-click (or click
+   the dot) to push. The mouse rather than the keyboard, because the key map is
+   nearly full and because a real FCU is knobs.
+   ========================================================================== */
+const FCU_STEP = { spd: 1, hdg: 1, alt: 100, vs: 100 };
+const FCU_BIG  = { spd: 10, hdg: 10, alt: 1000, vs: 500 };
+
+/* The value each window shows while it is managed, so that pulling it hands
+   the aeroplane something sensible instead of a stale number from ten minutes
+   ago. This is what the real one does when you pull an unset knob. */
+function fcuDefault(ch) {
+  const r = lastReadout;
+  if (ch === "spd") return Math.round(clamp(r.ias || 250, 100, 400));
+  if (ch === "hdg") return Math.round(wrap360(S.hdg));
+  if (ch === "alt") return Math.round(S.alt / 100) * 100;
+  return 0;
+}
+
+const fcuSelected = { spd: null, hdg: null, alt: null, vs: null };
+
+function fcuValue(ch) {
+  const v = { spd: S.ap.spdKt, hdg: S.ap.hdgDeg, alt: S.ap.altFt, vs: S.ap.vsFpm }[ch];
+  return v !== null && v !== undefined ? v
+       : (fcuSelected[ch] !== null ? fcuSelected[ch] : fcuDefault(ch));
+}
+
+function fcuPull(ch, value) {
+  const s = S;
+  s.ap.engaged = true;
+  fcuSelected[ch] = value;
+  if (ch === "spd") s.ap.spdKt = clamp(value, 100, 400);
+  else if (ch === "hdg") {
+    s.ap.hdgDeg = wrap360(value);
+    s.ap.nav = false;          // selecting a heading *is* asking not to follow
+    s.ap.appr = false;
+  } else if (ch === "alt") {
+    s.ap.altFt = clamp(value, 0, 45000);
+    s.ap.vsFpm = null;
+    s.ap.appr = false;
+  } else if (ch === "vs") {
+    s.ap.vsFpm = clamp(value, -6000, 6000);
+    s.ap.altFt = null;
+    s.ap.appr = false;
+  }
+}
+
+function fcuPush(ch) {
+  const s = S;
+  if (ch === "spd") s.ap.spdKt = null;
+  else if (ch === "hdg") {
+    /* Pushing the heading knob is how you ask for managed lateral. With no
+       destination there is nothing to manage, so it simply lets go. */
+    s.ap.hdgDeg = null;
+    if (s.dest) { s.ap.nav = true; s.ap.engaged = true; }
+  } else if (ch === "alt") s.ap.altFt = null;
+  else if (ch === "vs") s.ap.vsFpm = null;
+}
+
+function fcuText(ch) {
+  const v = { spd: S.ap.spdKt, hdg: S.ap.hdgDeg, alt: S.ap.altFt, vs: S.ap.vsFpm }[ch];
+  if (v === null || v === undefined) return ch === "vs" ? "-----" : "---";
+  if (ch === "hdg") return String(Math.round(v)).padStart(3, "0");
+  if (ch === "alt") return Math.round(v).toLocaleString();
+  if (ch === "vs") return (v >= 0 ? "+" : "") + Math.round(v).toLocaleString();
+  return String(Math.round(v));
+}
+
+function updateFcu() {
+  for (const ch of ["spd", "hdg", "alt", "vs"]) {
+    const box = document.querySelector(`.fcu-win[data-ch="${ch}"]`);
+    const value = { spd: S.ap.spdKt, hdg: S.ap.hdgDeg,
+                    alt: S.ap.altFt, vs: S.ap.vsFpm }[ch];
+    box.classList.toggle("managed", value === null || value === undefined);
+    el("fcu-" + ch).textContent = fcuText(ch);
+  }
+  const set = (id, on, armed) => {
+    const b = el(id);
+    b.classList.toggle("on", !!on);
+    b.classList.toggle("armed", !on && !!armed);
+  };
+  const captured = S.ap.appr && S.approach && S.approach.onApproach;
+  set("fcu-ap", S.ap.engaged);
+  set("fcu-athr", S.ap.spdKt !== null);
+  set("fcu-nav", S.ap.nav, !!S.dest);
+  set("fcu-appr", captured, S.ap.appr);
+  el("fcu-dest").textContent = S.dest ? S.dest.ident : "---";
+}
+
+for (const box of document.querySelectorAll('.fcu-win[data-ch]')) {
+  const ch = box.dataset.ch;
+  if (!FCU_STEP[ch]) continue;
+  box.addEventListener("wheel", ev => {
+    ev.preventDefault();
+    const step = (ev.shiftKey ? FCU_BIG : FCU_STEP)[ch];
+    fcuPull(ch, fcuValue(ch) - Math.sign(ev.deltaY) * step);
+    updateFcu();
+  }, { passive: false });
+  box.addEventListener("click", ev => {
+    if (ev.shiftKey) fcuPush(ch); else fcuPull(ch, fcuValue(ch));
+    updateFcu();
+  });
+}
+
+el("fcu-ap").addEventListener("click", () => {
+  const s = S;
+  s.ap.engaged = !s.ap.engaged;
+  if (s.ap.engaged) {
+    /* Engaging holds what the aeroplane is doing now, which is the only safe
+       thing for it to do -- anything else is a manoeuvre nobody asked for. */
+    if (s.ap.altFt === null && s.ap.vsFpm === null) s.ap.altFt = s.alt;
+    if (s.ap.hdgDeg === null && !s.ap.nav) s.ap.hdgDeg = wrap360(s.hdg);
+  } else {
+    s.ap.altFt = s.ap.vsFpm = s.ap.hdgDeg = s.ap.spdKt = null;
+    s.ap.appr = s.ap.nav = false;
+  }
+  updateFcu();
+});
+el("fcu-athr").addEventListener("click", () => {
+  if (S.ap.spdKt !== null) S.ap.spdKt = null;
+  else fcuPull("spd", fcuValue("spd"));
+  updateFcu();
+});
+el("fcu-nav").addEventListener("click", () => {
+  if (S.ap.nav) { S.ap.nav = false; S.ap.hdgDeg = wrap360(S.hdg); }
+  else if (S.dest) { S.ap.nav = true; S.ap.hdgDeg = null; S.ap.engaged = true;
+                     if (S.ap.altFt === null && S.ap.vsFpm === null) S.ap.altFt = S.alt; }
+  updateFcu();
+});
+el("fcu-appr").addEventListener("click", () => {
+  S.ap.appr = !S.ap.appr;
+  if (S.ap.appr) S.ap.engaged = true;
+  updateFcu();
+});
+
 window.addEventListener("keydown", ev => {
   const k = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key;
   if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(ev.key)) ev.preventDefault();
@@ -3043,6 +3583,12 @@ function readControls(dt) {
      what an Airbus does — not a spring-centred yoke. */
   const pitchRate = a.pitchRate * 1.9;
   const rollRate = a.rollRate * 1.15;
+  /* Touching a control takes that channel back from the autopilot. An
+     autopilot quietly fighting the pilot for the elevator is worse than none.
+     (autopilot.disengage_for) */
+  if (keys.ArrowUp || keys.ArrowDown) apDisengageFor(s, "pitch");
+  if (keys.ArrowLeft || keys.ArrowRight) { apDisengageFor(s, "roll"); s.cmdHdg = null; }
+  if (keys.a || keys.z) apDisengageFor(s, "throttle");
   if (keys.ArrowUp)    s.cmdPitch += pitchRate * dt;
   if (keys.ArrowDown)  s.cmdPitch -= pitchRate * dt;
   if (keys.ArrowLeft)  s.cmdBank  -= rollRate * dt;
@@ -3088,6 +3634,33 @@ const selTime = el("sel-time");
 selTime.addEventListener("change", () => { timeOfDay = parseFloat(selTime.value); });
 const selStart = el("sel-start");
 selStart.addEventListener("change", () => { startMode = selStart.value; newFlight(true); });
+
+/* Somewhere to go. One waypoint is not a flight plan, but it is what
+   `direct to KEBR` builds in the Python and it is enough for NAV to fly and
+   for the ND to draw -- which is the difference between a cockpit and a
+   flight. Refilled whenever the aircraft moves to a new part of the world,
+   because the airfields near it are not the ones it started among. */
+const selDest = el("sel-dest");
+function refreshDestinations() {
+  const near = airfieldsNear(S.x, S.y, 90).slice(0, 12);
+  const chosen = S.dest ? S.dest.ident : "";
+  selDest.innerHTML = '<option value="">— none —</option>' + near.map(f =>
+    `<option value="${f.ident}">${f.ident} · ${Math.round(f.distanceNm(S.x, S.y))} nm` +
+    `${f.ils ? " · ILS" : ""}</option>`).join("");
+  selDest.value = chosen;
+  if (S.dest && selDest.value !== chosen) {
+    /* The destination has dropped off the near list. Keep flying to it. */
+    selDest.insertAdjacentHTML("beforeend",
+      `<option value="${S.dest.ident}">${S.dest.ident} · far</option>`);
+    selDest.value = chosen;
+  }
+}
+selDest.addEventListener("change", () => {
+  S.dest = airfieldsNear(S.x, S.y, 400).find(f => f.ident === selDest.value) || null;
+  /* Losing the destination cannot leave NAV engaged with nothing to fly to. */
+  if (!S.dest && S.ap.nav) { S.ap.nav = false; S.ap.hdgDeg = wrap360(S.hdg); }
+  updateFcu();
+});
 selType.value = "a350"; selWx.value = "clear"; selStart.value = "runway";
 selType.addEventListener("change", () => { craft = FLEET_BY_KEY[selType.value]; newFlight(true); });
 selWx.addEventListener("change", () => { weather = WEATHER_BY_KEY[selWx.value]; });
@@ -3097,6 +3670,14 @@ el("end-again").addEventListener("click", () => newFlight(true));
 
 /* ---------- main loop ---------- */
 let last = performance.now();
+/* The previous frame's instrument values. The autopilot runs before the panel
+   is redrawn and needs a readout to steer by; one frame old at sixty hertz is
+   sixteen milliseconds of stale wind, which is nothing next to the half second
+   the Python's box deliberately holds its guidance for. */
+let lastReadout = { ias: 0, agl: 0, vs: 0, mach: 0, alpha: 0, stalled: false,
+                    gsKt: 0, trackDeg: 0, driftDeg: 0, speeds: null,
+                    stallKt: 0, load: 1 };
+
 function frame(now) {
   let dt = Math.min((now - last) / 1000, 0.1);
   last = now;
@@ -3115,6 +3696,10 @@ function frame(now) {
     S.approach = approachGuidance(craft, S);
     if (!activeFields.length ||
         activeFields[0].distanceNm(S.x, S.y) > 26) refreshActiveFields(S.x, S.y);
+    /* Once a frame, on the same schedule and for the same reason as the
+       guidance above: the approach channel and NAV both read a readout, and
+       the wind does not change in a hundredth of a second. */
+    apUpdate(craft, S, lastReadout, dt);
   }
 
   render();
@@ -3123,6 +3708,8 @@ function frame(now) {
   const dl = daylight();
   document.getElementById("deck").style.setProperty("--night", (1 - dl).toFixed(3));
   const readout = updatePanel();
+  lastReadout = readout;
+  updateFcu();
   if (!paused) updateAudio(craft, S, readout, dt);
   requestAnimationFrame(frame);
 }
