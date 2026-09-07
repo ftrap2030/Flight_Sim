@@ -49,9 +49,21 @@
     width: 100vw;
     height: 100vh;
     display: grid;
-    grid-template-rows: 1fr auto;
+    /* World, glass, mode control panel, gauges. The world keeps the whole top
+       rather than having instruments floated over it, which is what a cockpit
+       actually looks like -- and it means the PFD does not have to be
+       translucent to avoid hiding the ground. */
+    grid-template-rows: 1fr auto auto auto;
     background: var(--ground);
   }
+  #efis-wrap {
+    height: min(42vh, 430px);
+    background: #04070a;
+    border-top: 1px solid var(--edge);
+    display: block;
+  }
+  #deck[data-panel="off"] #efis-wrap { display: none; }
+  #efis { display: block; width: 100%; height: 100%; }
 
   /* ---- the windscreen ---- */
   #screen-wrap {
@@ -274,7 +286,7 @@
   .fcu-btn.armed { color: var(--efis-cyan); border-color: var(--efis-cyan); }
 </style>
 
-<div id="deck" data-view="cockpit">
+<div id="deck" data-view="cockpit" data-panel="on">
   <div id="screen-wrap">
     <canvas id="gl"></canvas>
     <canvas id="hud"></canvas>
@@ -332,6 +344,9 @@
         <dt>S</dt><dd>Speedbrake</dd>
         <dt>B</dt><dd>Brakes — hold to set, A to release</dd>
         <dt>C</dt><dd>Cockpit / chase view</dd>
+        <dt>V</dt><dd>Show / hide the glass</dd>
+        <dt>N / M</dt><dd>ND range down / up</dd>
+        <dt>T</dt><dd>Terrain on the ND</dd>
         <dt>L</dt><dd>Cycle control law</dd>
         <dt>P</dt><dd>Pause</dd>
       </dl>
@@ -348,6 +363,8 @@
       </div>
     </div>
   </div>
+
+  <div id="efis-wrap"><canvas id="efis"></canvas></div>
 
   <div id="fcu">
     <div class="fcu-win" data-ch="spd"><span class="lbl">SPD <span class="dot">•</span></span><span class="win" id="fcu-spd">---</span></div>
@@ -2871,6 +2888,7 @@ function resize() {
     c.width = VW; c.height = VH;
     c.style.width = cw + "px"; c.style.height = chh + "px";
   }
+  efisResize();
 }
 window.addEventListener("resize", resize);
 
@@ -3410,6 +3428,743 @@ function showEnding(a, s, kind) {
 const keys = Object.create(null);
 
 /* ==========================================================================
+   THE GLASS COCKPIT — PFD and ND
+
+   Two instruments on one canvas below the windscreen. Everything on them is
+   read from the model: the speed marks come from characteristicSpeeds and the
+   mode names from fma, both of which are ports of flight_sim/ held to it by
+   web/tools/parity_check. Nothing here works out where a mark goes.
+
+   The Airbus colour grammar, which is not decoration -- it is how the panel is
+   read at a glance:
+     green    what the aircraft is doing now
+     cyan     what you have selected, and what is armed to happen next
+     magenta  the flight plan
+     amber    look at this
+     red      a limit
+   ========================================================================== */
+
+/* The bank an Airbus holds hands-off. Past it the index goes amber, so the
+   pilot can see where the aeroplane stops helping. (fbw.BANK_NEUTRAL_DEG) */
+const BANK_NEUTRAL_DEG = 33;
+
+/* Where the speed will be in ten seconds if the acceleration holds. This is the
+   one mark on the tape that says what is about to happen rather than what is
+   happening, and on an approach it is the difference between noticing a decay
+   and noticing a stall. */
+const SPEED_TREND_S = 10;
+function speedTrendKt(a, s) {
+  const aero = aeroState(a, s);
+  const accel = (aero.thrust - aero.drag - s.mass * G0 * Math.sin(rad(s.gamma))) / s.mass;
+  const tas2 = Math.max(s.tas + accel * SPEED_TREND_S, 0);
+  return (tasToIas(tas2, s.alt) - tasToIas(Math.max(s.tas, 0), s.alt)) * KT_PER_MS;
+}
+
+const efisc = document.getElementById("efis");
+const ectx = efisc.getContext("2d");
+let EW = 0, EH = 0;
+
+const C_GREEN = "#31e07a", C_CYAN = "#4fd8ff", C_AMBER = "#ffb020",
+      C_RED = "#ff4433", C_WHITE = "#eef5f8", C_MAGENTA = "#ff6be0",
+      C_SKY = "#2e6da8", C_GROUND = "#8c6a38", C_BOX = "#0a1218";
+
+function efisResize() {
+  const wrap = document.getElementById("efis-wrap");
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const cw = wrap.clientWidth, ch = wrap.clientHeight;
+  if (!cw || !ch) return;
+  EW = Math.max(320, Math.floor(cw * dpr));
+  EH = Math.max(180, Math.floor(ch * dpr));
+  efisc.width = EW; efisc.height = EH;
+  efisc.style.width = cw + "px"; efisc.style.height = ch + "px";
+}
+
+/* Small helpers. `u` is the instrument's unit: every dimension below is a
+   fraction of the display's height, so the whole panel scales with the window
+   and nothing has to be re-tuned for a different screen. */
+function txt(c, s, x, y, size, colour, align = "center", weight = 600) {
+  c.font = `${weight} ${size.toFixed(1)}px "Chakra Petch", system-ui, sans-serif`;
+  c.fillStyle = colour; c.textAlign = align; c.textBaseline = "middle";
+  c.fillText(s, x, y);
+}
+/* The same, but shrunk to fit a width. Mode names are not all the same length
+   -- "V/S +1,800" is three times "ALT" -- and a column that overflows into its
+   neighbour is worse than one drawn small. */
+function txtFit(c, s, x, y, size, colour, maxW, align = "center") {
+  c.font = `600 ${size.toFixed(1)}px "Chakra Petch", system-ui, sans-serif`;
+  const w = c.measureText(s).width;
+  txt(c, s, x, y, w > maxW ? size * maxW / w : size, colour, align);
+}
+function line(c, x1, y1, x2, y2, colour, w) {
+  c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2);
+  c.strokeStyle = colour; c.lineWidth = w; c.stroke();
+}
+function box(c, x, y, w, h, fill) {
+  c.fillStyle = fill; c.fillRect(x, y, w, h);
+}
+/* The amber-and-black barber pole that marks a speed you must not go below,
+   and the red-and-black one at the top of the envelope. Drawn rather than
+   filled flat because the hatching is what makes it read as a limit. */
+function barberPole(c, x, y, w, h, colour, pitch) {
+  c.save();
+  c.beginPath(); c.rect(x, y, w, h); c.clip();
+  box(c, x, y, w, h, "#0a0a0a");
+  c.fillStyle = colour;
+  for (let o = -h; o < w + h; o += pitch * 2) {
+    c.beginPath();
+    c.moveTo(x + o, y + h); c.lineTo(x + o + pitch, y + h);
+    c.lineTo(x + o + pitch + h, y); c.lineTo(x + o + h, y);
+    c.closePath(); c.fill();
+  }
+  c.restore();
+}
+
+/* ---------- the Flight Mode Annunciator ----------
+   Five columns across the top. The box round a column that has just changed is
+   the single most important thing on the panel: an Airbus announces a mode
+   change by drawing it for ten seconds, and a pilot's scan is built around
+   noticing it. Whether a column is boxed is decided in `fma`, from state, so
+   the text simulator boxes the same column at the same moment. */
+function drawFma(c, x, y, w, h, a, s) {
+  const cols = fma(a, s);
+  box(c, x, y, w, h, "#060c10");
+  const cw = w / 5;
+  const size = h * 0.34;
+  FMA_COLUMNS.forEach((name, i) => {
+    const col = cols[name];
+    const cx = x + cw * (i + 0.5);
+    const maxW = cw * 0.86;
+    if (name === "engagement" && col.engaged) {
+      const parts = col.engaged[0].split(" ");
+      parts.forEach((part, k) => txtFit(c, part, cx,
+        y + h * (parts.length > 1 ? 0.30 + k * 0.40 : 0.50),
+        size * 0.92, col.engaged[1], maxW));
+    } else {
+      if (col.engaged) txtFit(c, col.engaged[0], cx, y + h * 0.30, size, col.engaged[1], maxW);
+      if (col.armed) txtFit(c, col.armed[0], cx, y + h * 0.72, size * 0.92, col.armed[1], maxW);
+    }
+    if (col.boxed) {
+      c.strokeStyle = C_WHITE; c.lineWidth = Math.max(1, h * 0.035);
+      c.strokeRect(x + cw * i + cw * 0.06, y + h * 0.08,
+                   cw * 0.88, h * 0.84);
+    }
+    if (i) line(c, x + cw * i, y + h * 0.15, x + cw * i, y + h * 0.85, "#1b2b34", 1);
+  });
+}
+
+/* ---------- the attitude ball ---------- */
+function drawAttitude(c, cx, cy, r, s, readout, a) {
+  c.save();
+  c.beginPath(); c.arc(cx, cy, r, 0, Math.PI * 2); c.clip();
+
+  /* Degrees of pitch to pixels. The real instrument is about a tenth of the
+     ball's radius per five degrees; more than that and the ladder runs off the
+     display in a steep climb, less and a two-degree correction is invisible. */
+  const pxPerDeg = r / 26;
+  c.translate(cx, cy);
+  c.rotate(-rad(s.bank));
+  const horizonY = s.pitch * pxPerDeg;
+
+  box(c, -r * 2, horizonY - r * 3, r * 4, r * 3, C_SKY);
+  box(c, -r * 2, horizonY, r * 4, r * 3, C_GROUND);
+  line(c, -r * 2, horizonY, r * 2, horizonY, C_WHITE, r * 0.018);
+
+  /* Pitch ladder: a line every five degrees, labelled every ten. */
+  c.lineWidth = r * 0.014;
+  for (let p = -30; p <= 30; p += 5) {
+    if (p === 0) continue;
+    const y = horizonY - p * pxPerDeg;
+    if (Math.abs(y) > r * 1.1) continue;
+    const half = (p % 10 === 0 ? r * 0.30 : r * 0.15);
+    line(c, -half, y, half, y, C_WHITE, r * 0.014);
+    if (p % 10 === 0) {
+      const size = r * 0.11;
+      txt(c, String(Math.abs(p)), -half - r * 0.09, y, size, C_WHITE);
+      txt(c, String(Math.abs(p)), half + r * 0.09, y, size, C_WHITE);
+    }
+  }
+  c.restore();
+
+  /* Bank scale: fixed marks round the top of the ball, and a pointer that
+     rolls with the aircraft. The amber wedge at the top is the index. */
+  c.save();
+  c.translate(cx, cy);
+  for (const angle of [-60, -45, -30, -20, -10, 0, 10, 20, 30, 45, 60]) {
+    const long = angle % 30 === 0 || angle === 45 || angle === 60;
+    const a0 = rad(angle - 90);
+    const r0 = r * (long ? 0.86 : 0.91), r1 = r * 0.97;
+    line(c, Math.cos(a0) * r0, Math.sin(a0) * r0,
+            Math.cos(a0) * r1, Math.sin(a0) * r1, C_WHITE, r * 0.016);
+  }
+  /* Amber past the neutral bank an Airbus holds hands-off, so the pilot can
+     see where the aeroplane stops helping. */
+  const over = Math.abs(s.bank) > BANK_NEUTRAL_DEG;
+  c.rotate(-rad(s.bank));
+  c.beginPath();
+  c.moveTo(0, -r * 0.84);
+  c.lineTo(-r * 0.055, -r * 0.74);
+  c.lineTo(r * 0.055, -r * 0.74);
+  c.closePath();
+  c.fillStyle = over ? C_AMBER : C_GREEN; c.fill();
+  c.restore();
+
+  /* The fixed aircraft reference: two wings and a centre square, in the
+     unmistakable yellow that means "this is you". */
+  const wing = r * 0.34, inner = r * 0.10, th = r * 0.045;
+  c.fillStyle = "#ffd429";
+  c.fillRect(cx - wing, cy - th / 2, wing - inner, th);
+  c.fillRect(cx + inner, cy - th / 2, wing - inner, th);
+  c.fillRect(cx - th / 2, cy - th / 2, th, th);
+
+  /* Flight director: where the autopilot wants the attitude. Only shown when
+     something is actually flying, because a director bar with nothing behind
+     it is an instruction from nobody. */
+  if (s.ap.engaged) {
+    const dp = clamp((s.cmdPitch - s.pitch) * pxPerDeg * 2.2, -r * 0.55, r * 0.55);
+    const db = clamp((s.lawBank - s.bank) * r * 0.012, -r * 0.55, r * 0.55);
+    line(c, cx - r * 0.42, cy - dp, cx + r * 0.42, cy - dp, C_MAGENTA, r * 0.022);
+    line(c, cx + db, cy - r * 0.42, cx + db, cy + r * 0.42, C_MAGENTA, r * 0.022);
+  }
+
+  c.beginPath(); c.arc(cx, cy, r, 0, Math.PI * 2);
+  c.strokeStyle = "#1b2b34"; c.lineWidth = r * 0.02; c.stroke();
+
+  /* Radio altitude, in large digits under the ball, from 2,500 ft down --
+     which is where it starts mattering and where the real one appears. */
+  if (readout.agl < 2500) {
+    const colour = readout.agl < 200 ? C_AMBER : C_GREEN;
+    txt(c, Math.round(Math.max(readout.agl, 0)).toString(),
+        cx, cy + r * 1.12, r * 0.26, colour);
+  }
+}
+
+/* ---------- the speed tape ----------
+   Every mark comes from `readout.speeds`. The tape does not know what VLS
+   means; it knows where the model says it is. */
+function drawSpeedTape(c, x, y, w, h, s, readout) {
+  const sp = readout.speeds;
+  const ias = readout.ias;
+  const pxPerKt = h / 90;                       // 90 knots top to bottom
+  const yFor = kt => y + h / 2 - (kt - ias) * pxPerKt;
+
+  box(c, x, y, w, h, "rgba(6,12,16,.78)");
+  c.save();
+  c.beginPath(); c.rect(x, y, w, h); c.clip();
+
+  /* Ticks every ten knots, labelled every twenty. */
+  const first = Math.floor((ias - 50) / 10) * 10;
+  for (let v = first; v <= ias + 50; v += 10) {
+    if (v < 30) continue;
+    const ty = yFor(v);
+    const long = v % 20 === 0;
+    line(c, x + w - (long ? w * 0.30 : w * 0.18), ty, x + w, ty, C_WHITE, h * 0.004);
+    if (long) txt(c, String(v), x + w * 0.62, ty, h * 0.055, C_WHITE, "right");
+  }
+
+  /* The limits, from the model. Drawn on the right-hand edge of the tape, in
+     the order that puts the most serious one on top. */
+  const stripW = w * 0.16, stripX = x + w - stripW;
+  const top = yFor(sp.vmax + 60), bottom = yFor(sp.alphaMax - 60);
+  barberPole(c, stripX, top, stripW, yFor(sp.vmax) - top, C_RED, h * 0.02);
+  barberPole(c, stripX, yFor(sp.alphaProt), stripW,
+             yFor(sp.alphaMax) - yFor(sp.alphaProt), C_AMBER, h * 0.02);
+  box(c, stripX, yFor(sp.alphaMax), stripW, bottom - yFor(sp.alphaMax), C_RED);
+
+  /* VLS: the lowest speed the autopilot may be asked to fly. */
+  line(c, stripX - w * 0.06, yFor(sp.vls), x + w, yFor(sp.vls), C_AMBER, h * 0.008);
+  /* Green dot: best lift-to-drag, and only meaningful with the wing clean. */
+  if (s.flaps === 0) {
+    c.beginPath();
+    c.arc(x + w - stripW * 1.9, yFor(sp.greenDot), h * 0.016, 0, Math.PI * 2);
+    c.strokeStyle = C_GREEN; c.lineWidth = h * 0.007; c.stroke();
+  }
+  /* On the ground, the takeoff speeds. */
+  if (s.onGround) {
+    const v = vSpeeds(craft, s);
+    for (const [kt, label] of [[v.v1, "1"], [v.vr, "R"], [v.v2, "2"]]) {
+      line(c, x + w * 0.80, yFor(kt), x + w, yFor(kt), C_WHITE, h * 0.006);
+      txt(c, label, x + w * 0.90, yFor(kt) - h * 0.035, h * 0.05, C_WHITE);
+    }
+  }
+  /* The selected speed. */
+  if (s.ap.spdKt !== null) {
+    const by = clamp(yFor(s.ap.spdKt), y, y + h);
+    c.beginPath();
+    c.moveTo(x + w, by); c.lineTo(x + w - w * 0.22, by - h * 0.028);
+    c.lineTo(x + w - w * 0.22, by + h * 0.028); c.closePath();
+    c.fillStyle = C_CYAN; c.fill();
+  }
+
+  /* The speed trend arrow: where the aircraft will be in ten seconds if the
+     acceleration holds. This is the one thing on the tape that tells a pilot
+     what is about to happen rather than what is happening. */
+  const trendKt = clamp(speedTrendKt(craft, s), -40, 40);
+  if (Math.abs(trendKt) > 1) {
+    const ty = yFor(ias + trendKt), my = y + h / 2;
+    const tx = x + w * 0.86;
+    line(c, tx, my, tx, ty, C_AMBER, h * 0.007);
+    const dir = Math.sign(ty - my);
+    c.beginPath();
+    c.moveTo(tx, ty); c.lineTo(tx - h * 0.016, ty - dir * h * 0.028);
+    c.lineTo(tx + h * 0.016, ty - dir * h * 0.028); c.closePath();
+    c.fillStyle = C_AMBER; c.fill();
+  }
+  c.restore();
+
+  /* The reading itself, in a window over the middle of the tape. */
+  box(c, x - w * 0.05, y + h / 2 - h * 0.045, w * 1.05, h * 0.09, C_BOX);
+  c.strokeStyle = C_WHITE; c.lineWidth = h * 0.004;
+  c.strokeRect(x - w * 0.05, y + h / 2 - h * 0.045, w * 1.05, h * 0.09);
+  txt(c, Math.round(ias).toString(), x + w * 0.60, y + h / 2, h * 0.082, C_GREEN, "right");
+  txt(c, "SPD", x + w / 2, y - h * 0.035, h * 0.05, C_WHITE);
+}
+
+/* ---------- the altitude tape and the vertical speed indicator ---------- */
+function drawAltTape(c, x, y, w, h, s, readout) {
+  const alt = s.alt;
+  const pxPerFt = h / 2200;
+  const yFor = ft => y + h / 2 - (ft - alt) * pxPerFt;
+
+  box(c, x, y, w, h, "rgba(6,12,16,.78)");
+  c.save();
+  c.beginPath(); c.rect(x, y, w, h); c.clip();
+
+  const first = Math.floor((alt - 1200) / 100) * 100;
+  for (let v = first; v <= alt + 1200; v += 100) {
+    const ty = yFor(v);
+    const long = v % 500 === 0;
+    line(c, x, ty, x + (long ? w * 0.22 : w * 0.12), ty, C_WHITE, h * 0.004);
+    if (long) txtFit(c, v.toLocaleString(), x + w * 0.28, ty, h * 0.048,
+                     C_WHITE, w * 0.70, "left");
+  }
+
+  /* The ground, hatched, rising out of the bottom of the tape as the aircraft
+     descends toward it. This is the mark that turns an altimeter into a
+     terrain instrument. */
+  const groundFt = s.alt - readout.agl;
+  const gy = yFor(groundFt);
+  if (gy < y + h) {
+    barberPole(c, x, Math.max(gy, y), w, y + h - Math.max(gy, y), C_AMBER, h * 0.014);
+    line(c, x, gy, x + w, gy, C_AMBER, h * 0.008);
+  }
+
+  /* The selected altitude. */
+  if (s.ap.altFt !== null) {
+    const by = clamp(yFor(s.ap.altFt), y, y + h);
+    c.strokeStyle = C_CYAN; c.lineWidth = h * 0.008;
+    c.strokeRect(x, by - h * 0.022, w * 0.9, h * 0.044);
+  }
+  c.restore();
+
+  box(c, x, y + h / 2 - h * 0.042, w * 1.06, h * 0.084, C_BOX);
+  c.strokeStyle = C_WHITE; c.lineWidth = h * 0.004;
+  c.strokeRect(x, y + h / 2 - h * 0.042, w * 1.06, h * 0.084);
+  txtFit(c, Math.round(alt).toLocaleString(), x + w * 1.02, y + h / 2,
+         h * 0.070, C_GREEN, w * 0.98, "right");
+  txt(c, "ALT", x + w / 2, y - h * 0.035, h * 0.048, C_WHITE);
+}
+
+function drawVsi(c, x, y, w, h, readout) {
+  const vs = readout.vs;
+  /* The Airbus scale is linear to a thousand feet a minute and compressed
+     above it, because the first thousand is where the flying happens and six
+     thousand only needs to be legible. */
+  const place = v => {
+    const m = Math.min(Math.abs(v), 6000);
+    const f = m <= 1000 ? m / 1000 * 0.58 : 0.58 + (m - 1000) / 5000 * 0.42;
+    return y + h / 2 - Math.sign(v) * f * h * 0.46;
+  };
+  box(c, x, y, w, h, "rgba(6,12,16,.62)");
+  for (const v of [500, 1000, 2000, 6000]) {
+    for (const sign of [1, -1]) {
+      const ty = place(v * sign);
+      const long = v === 1000 || v === 2000;
+      line(c, x, ty, x + w * (long ? 0.40 : 0.24), ty, C_WHITE, h * 0.004);
+      if (v === 1000 || v === 2000) {
+        txt(c, String(v / 1000), x + w * 0.72, ty, h * 0.040, C_WHITE);
+      }
+    }
+  }
+  line(c, x, y + h / 2, x + w * 0.42, y + h / 2, C_WHITE, h * 0.004);
+  const ny = place(vs);
+  line(c, x, y + h / 2, x + w * 0.86, ny, Math.abs(vs) > 6000 ? C_AMBER : C_GREEN,
+       h * 0.011);
+  txt(c, "V/S", x + w / 2, y - h * 0.035, h * 0.05, C_WHITE);
+}
+
+/* ---------- the heading and track tape ---------- */
+function drawHeadingTape(c, x, y, w, h, s, readout) {
+  const hdg = wrap360(s.hdg);
+  const pxPerDeg = w / 60;
+  const xFor = d => x + w / 2 + wrap180(d - hdg) * pxPerDeg;
+
+  box(c, x, y, w, h, "rgba(6,12,16,.78)");
+  c.save();
+  c.beginPath(); c.rect(x, y, w, h); c.clip();
+  for (let d = Math.floor((hdg - 40) / 5) * 5; d <= hdg + 40; d += 5) {
+    const tx = xFor(d);
+    const long = ((d % 10) + 10) % 10 === 0;
+    line(c, tx, y, tx, y + h * (long ? 0.34 : 0.20), C_WHITE, h * 0.05);
+    if (long) {
+      txt(c, String(((d % 360) + 360) % 360 / 10 | 0).padStart(2, "0"),
+          tx, y + h * 0.62, h * 0.34, C_WHITE);
+    }
+  }
+  /* The selected heading, and the track the aircraft is actually making good.
+     In a crosswind those differ, and seeing the gap is the whole reason the
+     track diamond exists. */
+  if (s.ap.hdgDeg !== null) {
+    const bx = clamp(xFor(s.ap.hdgDeg), x, x + w);
+    c.beginPath();
+    c.moveTo(bx, y); c.lineTo(bx - h * 0.16, y - h * 0.30);
+    c.lineTo(bx + h * 0.16, y - h * 0.30); c.closePath();
+    c.fillStyle = C_CYAN; c.fill();
+  }
+  const tx = clamp(xFor(readout.trackDeg), x, x + w);
+  c.beginPath();
+  c.moveTo(tx, y + h * 0.10); c.lineTo(tx - h * 0.16, y + h * 0.36);
+  c.lineTo(tx, y + h * 0.62); c.lineTo(tx + h * 0.16, y + h * 0.36);
+  c.closePath();
+  c.strokeStyle = C_GREEN; c.lineWidth = h * 0.06; c.stroke();
+  c.restore();
+
+  /* The reading, in a window above the tape. */
+  box(c, x + w / 2 - w * 0.055, y - h * 0.62, w * 0.11, h * 0.60, C_BOX);
+  c.strokeStyle = C_WHITE; c.lineWidth = h * 0.04;
+  c.strokeRect(x + w / 2 - w * 0.055, y - h * 0.62, w * 0.11, h * 0.60);
+  txt(c, String(Math.round(hdg) % 360).padStart(3, "0"),
+      x + w / 2, y - h * 0.32, h * 0.42, C_GREEN);
+}
+
+/* The PFD is a portrait rectangle rather than a square, which is what a real
+   one is: the tapes need length far more than the ball needs width, and a
+   square wastes the height on either side of it. */
+const PFD_ASPECT = 0.86;                     // width as a fraction of height
+
+function drawPfd(c, x, y, w, h, a, s, readout) {
+  box(c, x, y, w, h, "#04070a");
+  drawFma(c, x, y, w, h * 0.115, a, s);
+
+  const tapeY = y + h * 0.175, tapeH = h * 0.585;
+  const spdW = w * 0.150, altW = w * 0.175;
+
+  /* The ball takes what is left between the two tapes. */
+  const ballR = Math.min(tapeH * 0.46, (w * 0.52) * 0.5);
+  drawAttitude(c, x + w * 0.455, tapeY + tapeH * 0.47, ballR, s, readout, a);
+  drawSpeedTape(c, x + w * 0.030, tapeY, spdW, tapeH, s, readout);
+  drawAltTape(c, x + w * 0.700, tapeY, altW, tapeH, s, readout);
+  drawVsi(c, x + w * 0.890, tapeY, w * 0.095, tapeH, readout);
+  drawHeadingTape(c, x + w * 0.150, y + h * 0.870, w * 0.620, h * 0.070, s, readout);
+}
+
+/* ==========================================================================
+   THE NAVIGATION DISPLAY — ARC mode
+
+   Track-up, the aircraft at the bottom, ninety degrees of compass across the
+   top. Range rings, the airfields around you, the destination and the leg to
+   it, and the terrain underneath in the green-amber-red banding that says how
+   much of it is above you.
+
+   TERR ON ND is the reason this is worth having, and it is nearly free: the
+   height texture is already on the GPU for the world outside, so the terrain
+   picture is one small render into an offscreen target rather than tens of
+   thousands of height lookups on the CPU every frame.
+   ========================================================================== */
+
+const ND_RANGES = [10, 20, 40, 80, 160];
+let ndRangeIdx = 2;
+let ndTerrainOn = true;
+
+/* The ND's terrain is drawn by the GPU into a small texture and then blitted
+   in, because the alternative -- reading heights back to the CPU -- stalls the
+   pipeline every frame for a picture that changes slowly. */
+const ND_TERR_N = 256;
+const ND_TERR_FS = `#version 300 es
+precision highp float;
+precision highp int;
+in vec2 vNdc;
+out vec4 fragColor;
+uniform vec2 uCentreNm;      // aircraft position
+uniform float uHalfNm;       // half the span this texture covers
+uniform float uAircraftFt;
+uniform float uOn;
+${GLSL_NOISE}
+
+/* The banding a real terrain display uses, all of it relative to where the
+   aircraft is rather than to sea level -- which is the whole point. Ground
+   more than two thousand feet below you is not worth colouring; ground above
+   you is red whatever its altitude. */
+vec3 terrainColour(float groundFt, float acFt) {
+  float rel = groundFt - acFt;
+  if (rel > -500.0)  return vec3(0.62, 0.10, 0.07);   // at or above: red
+  if (rel > -1700.0) return vec3(0.62, 0.44, 0.05);   // close below: amber
+  if (rel > -3500.0) return vec3(0.10, 0.36, 0.16);   // comfortably below
+  return vec3(0.03, 0.07, 0.09);                      // far below: nearly nothing
+}
+
+void main() {
+  if (uOn < 0.5) { fragColor = vec4(0.0); return; }
+  vec2 nm = uCentreNm + vNdc * uHalfNm;
+  float h = naturalNm(nm);
+  /* Water reads as water here too, so a lake is not mistaken for low ground
+     you could put an aeroplane on. */
+  float t = vnoise(nm / 26.0, SEED + 3313u);
+  float waterFt = 150.0 + reliefNm(nm) * (0.10 + 0.26 * t * t);
+  vec3 col = h < waterFt ? vec3(0.05, 0.14, 0.24) : terrainColour(h, uAircraftFt);
+
+  /* Dotted, as the real display is: a solid wash hides the map drawn over it,
+     and the density of the dots is itself a cue. */
+  vec2 cell = fract(gl_FragCoord.xy / 3.0);
+  float dot = (cell.x < 0.34 && cell.y < 0.34) ? 1.0 : 0.34;
+  fragColor = vec4(col * dot, 1.0);
+}`;
+
+let ndTerrTex = null, ndTerrFbo = null, progNdTerr = null;
+let ndTerrCanvas = null, ndTerrCtx = null, ndTerrPixels = null;
+
+function initNdTerrain() {
+  progNdTerr = makeProgram(QUAD_VS, ND_TERR_FS);
+  ndTerrTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, ndTerrTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, ND_TERR_N, ND_TERR_N, 0,
+                gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  ndTerrFbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, ndTerrFbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
+                          gl.TEXTURE_2D, ndTerrTex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+  ndTerrCanvas = document.createElement("canvas");
+  ndTerrCanvas.width = ndTerrCanvas.height = ND_TERR_N;
+  ndTerrCtx = ndTerrCanvas.getContext("2d");
+  ndTerrPixels = new Uint8Array(ND_TERR_N * ND_TERR_N * 4);
+}
+
+/* Re-baked when the aircraft has moved a tenth of the display's range, or the
+   range or altitude has changed enough to matter. At cruise that is once every
+   few seconds; the picture is of geology, and geology is patient. */
+let ndTerrState = { x: NaN, y: NaN, range: 0, alt: 0 };
+function refreshNdTerrain(s, halfNm) {
+  const moved = Math.hypot(s.x - ndTerrState.x, s.y - ndTerrState.y);
+  if (moved < halfNm * 0.08 && ndTerrState.range === halfNm
+      && Math.abs(s.alt - ndTerrState.alt) < 400) return;
+  ndTerrState = { x: s.x, y: s.y, range: halfNm, alt: s.alt };
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, ndTerrFbo);
+  gl.viewport(0, 0, ND_TERR_N, ND_TERR_N);
+  gl.disable(gl.DEPTH_TEST);
+  gl.useProgram(progNdTerr);
+  gl.bindVertexArray(quadVao);
+  gl.uniform2f(progNdTerr.u.uCentreNm, s.x, s.y);
+  gl.uniform1f(progNdTerr.u.uHalfNm, halfNm);
+  gl.uniform1f(progNdTerr.u.uAircraftFt, s.alt);
+  gl.uniform1f(progNdTerr.u.uOn, ndTerrainOn ? 1 : 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.readPixels(0, 0, ND_TERR_N, ND_TERR_N, gl.RGBA, gl.UNSIGNED_BYTE, ndTerrPixels);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.enable(gl.DEPTH_TEST);
+
+  /* Into a 2D canvas so it can be drawn under the map. The row order flips
+     because GL counts from the bottom and canvases from the top. */
+  const img = ndTerrCtx.createImageData(ND_TERR_N, ND_TERR_N);
+  for (let row = 0; row < ND_TERR_N; row++) {
+    const src = (ND_TERR_N - 1 - row) * ND_TERR_N * 4;
+    img.data.set(ndTerrPixels.subarray(src, src + ND_TERR_N * 4), row * ND_TERR_N * 4);
+  }
+  ndTerrCtx.putImageData(img, 0, 0);
+}
+
+function drawNd(c, x, y, d, a, s, readout) {
+  box(c, x, y, d, d, "#04070a");
+  const range = ND_RANGES[ndRangeIdx];
+  /* The aircraft sits low on the display, because what is ahead matters and
+     what is behind does not. */
+  const ox = x + d * 0.5, oy = y + d * 0.86;
+  const pxPerNm = d * 0.70 / range;
+  const track = readout.trackDeg;
+
+  /* Track-up: everything is rotated so the aircraft's track points at the top
+     of the display. A heading-up display in a crosswind puts the destination
+     somewhere the aeroplane is not going. */
+  const project = (nx, ny) => {
+    const dx = (nx - s.x) * pxPerNm, dy = (ny - s.y) * pxPerNm;
+    const t = rad(track);
+    return [ox + dx * Math.cos(t) - dy * Math.sin(t),
+            oy - (dx * Math.sin(t) + dy * Math.cos(t))];
+  };
+
+  const arcR = d * 0.74;
+
+  c.save();
+  /* Two clips, not one path: sub-paths in a single clip are unioned, so the
+     circle below would have reached a quarter of a display either side of the
+     box. The box first, then the arc inside it. */
+  c.beginPath(); c.rect(x, y, d, d); c.clip();
+  c.beginPath();
+  c.arc(ox, oy, arcR, 0, Math.PI * 2);
+  c.rect(x, oy, d, y + d - oy);          // and the strip below the aircraft
+  c.clip();
+
+  if (ndTerrainOn) {
+    refreshNdTerrain(s, range * 1.6);
+    c.save();
+    c.globalAlpha = 0.85;
+    c.translate(ox, oy); c.rotate(rad(track));
+    const halfPx = range * 1.6 * pxPerNm;
+    c.imageSmoothingEnabled = true;
+    c.drawImage(ndTerrCanvas, -halfPx, -halfPx, halfPx * 2, halfPx * 2);
+    c.restore();
+    c.globalAlpha = 1;
+  }
+
+  /* Range rings at a half and a full range, labelled as the real one is. */
+  c.strokeStyle = "#2b4652"; c.lineWidth = d * 0.003;
+  for (const f of [0.5, 1.0]) {
+    c.beginPath(); c.arc(ox, oy, range * f * pxPerNm, 0, Math.PI * 2); c.stroke();
+  }
+  txt(c, String(range / 2), ox + range * 0.5 * pxPerNm * 0.72,
+      oy - range * 0.5 * pxPerNm * 0.72, d * 0.030, "#6f8b98");
+
+  /* The airfields around you, and the leg to the one you are going to. */
+  for (const f of airfieldsNear(s.x, s.y, range * 1.3).slice(0, 14)) {
+    const [fx, fy] = project(f.x, f.y);
+    const isDest = s.dest && f.ident === s.dest.ident;
+    const colour = isDest ? C_MAGENTA : (f.ils ? C_CYAN : "#8fa6b2");
+    const r = d * (isDest ? 0.017 : 0.011);
+    c.beginPath();
+    c.moveTo(fx, fy - r); c.lineTo(fx + r, fy);
+    c.lineTo(fx, fy + r); c.lineTo(fx - r, fy);
+    c.closePath();
+    c.strokeStyle = colour; c.lineWidth = d * 0.005; c.stroke();
+    if (isDest || range <= 40) {
+      txt(c, f.ident, fx + r * 1.6, fy - r * 1.2, d * 0.028, colour, "left");
+    }
+    /* The runway itself, once it is big enough to mean anything. */
+    if (range <= 20) {
+      const half = f.lengthNm / 2, rr = rad(f.heading);
+      const [ax, ay] = project(f.x - Math.sin(rr) * half, f.y - Math.cos(rr) * half);
+      const [bx, by] = project(f.x + Math.sin(rr) * half, f.y + Math.cos(rr) * half);
+      line(c, ax, ay, bx, by, colour, d * 0.008);
+    }
+  }
+  if (s.dest) {
+    const [dx, dy] = project(s.dest.x, s.dest.y);
+    c.save();
+    c.setLineDash([d * 0.02, d * 0.014]);
+    line(c, ox, oy, dx, dy, C_MAGENTA, d * 0.006);
+    c.restore();
+  }
+  c.restore();
+
+  /* The compass arc: ninety degrees of it, ticked every ten. */
+  c.beginPath();
+  c.arc(ox, oy, arcR, rad(-135), rad(-45));
+  c.strokeStyle = C_WHITE; c.lineWidth = d * 0.004; c.stroke();
+  for (let h = 0; h < 360; h += 5) {
+    const rel = wrap180(h - track);
+    if (Math.abs(rel) > 43) continue;
+    const ang = rad(rel - 90);
+    const long = h % 10 === 0;
+    const r0 = arcR, r1 = arcR + d * (long ? 0.030 : 0.017);
+    line(c, ox + Math.cos(ang) * r0, oy + Math.sin(ang) * r0,
+            ox + Math.cos(ang) * r1, oy + Math.sin(ang) * r1, C_WHITE, d * 0.004);
+    if (h % 30 === 0 && Math.abs(rel) < 40) {
+      txt(c, String(h / 10).padStart(2, "0"),
+          ox + Math.cos(ang) * (arcR + d * 0.055),
+          oy + Math.sin(ang) * (arcR + d * 0.055), d * 0.034, C_WHITE);
+    }
+  }
+  /* The selected heading, as a cyan bug on the arc. */
+  if (s.ap.hdgDeg !== null) {
+    const rel = wrap180(s.ap.hdgDeg - track);
+    if (Math.abs(rel) < 43) {
+      const ang = rad(rel - 90);
+      c.beginPath();
+      c.moveTo(ox + Math.cos(ang) * arcR, oy + Math.sin(ang) * arcR);
+      c.lineTo(ox + Math.cos(ang - 0.022) * (arcR + d * 0.036),
+               oy + Math.sin(ang - 0.022) * (arcR + d * 0.036));
+      c.lineTo(ox + Math.cos(ang + 0.022) * (arcR + d * 0.036),
+               oy + Math.sin(ang + 0.022) * (arcR + d * 0.036));
+      c.closePath(); c.strokeStyle = C_CYAN; c.lineWidth = d * 0.006; c.stroke();
+    }
+  }
+
+  /* The aircraft, at the origin, pointing at its *heading* -- which in a
+     crosswind is not straight up the display, and seeing that is the point of
+     a track-up picture. */
+  c.save();
+  c.translate(ox, oy);
+  c.rotate(rad(wrap180(s.hdg - track)));
+  const k = d * 0.030;
+  c.strokeStyle = "#ffd429"; c.lineWidth = d * 0.006;
+  c.beginPath();
+  c.moveTo(0, -k * 1.3); c.lineTo(0, k * 1.1);
+  c.moveTo(-k, 0); c.lineTo(k, 0);
+  c.moveTo(-k * 0.45, k * 0.85); c.lineTo(k * 0.45, k * 0.85);
+  c.stroke();
+  c.restore();
+
+  /* The corners: what the aircraft is doing over the ground on the left, where
+     it is going on the right. */
+  txt(c, "GS", x + d * 0.025, y + d * 0.045, d * 0.032, C_WHITE, "left");
+  txt(c, Math.round(readout.gsKt).toString(), x + d * 0.095, y + d * 0.045,
+      d * 0.042, C_GREEN, "left");
+  txt(c, "TAS", x + d * 0.235, y + d * 0.045, d * 0.032, C_WHITE, "left");
+  txt(c, Math.round(s.tas * KT_PER_MS).toString(),
+      x + d * 0.335, y + d * 0.045, d * 0.042, C_GREEN, "left");
+
+  /* The wind, as a number and as an arrow that points where it is blowing. */
+  const wind = weather;
+  txt(c, `${String(Math.round(wind.windDir)).padStart(3, "0")}° / ${Math.round(wind.windKt)}`,
+      x + d * 0.03, y + d * 0.105, d * 0.036, C_GREEN, "left");
+  c.save();
+  c.translate(x + d * 0.30, y + d * 0.105);
+  c.rotate(rad(wind.windDir + 180 - track));
+  c.strokeStyle = C_GREEN; c.lineWidth = d * 0.005;
+  c.beginPath();
+  c.moveTo(0, -d * 0.030); c.lineTo(0, d * 0.030);
+  c.moveTo(-d * 0.014, d * 0.014); c.lineTo(0, d * 0.030);
+  c.lineTo(d * 0.014, d * 0.014);
+  c.stroke();
+  c.restore();
+
+  /* Top right: where you are going, how far, and when you get there. */
+  const leg = legFor(s, readout);
+  if (leg) {
+    txt(c, leg.field.ident, x + d * 0.975, y + d * 0.045, d * 0.040, C_MAGENTA, "right");
+    txt(c, `${leg.distanceNm.toFixed(1)} NM`, x + d * 0.975, y + d * 0.092,
+        d * 0.034, C_GREEN, "right");
+    const m = Math.round(leg.etaS / 60);
+    txt(c, m < 600 ? `${m} MIN` : "—", x + d * 0.975, y + d * 0.135,
+        d * 0.032, C_GREEN, "right");
+  }
+  txt(c, ndTerrainOn ? "TERR" : "", x + d * 0.97, y + d * 0.93, d * 0.034,
+      C_AMBER, "right");
+  txt(c, `${range} NM`, x + d * 0.03, y + d * 0.93, d * 0.034, C_WHITE, "left");
+}
+
+/* ---------- the two of them, side by side ---------- */
+function drawEfis(readout) {
+  if (!EW || !EH || document.getElementById("deck").dataset.panel === "off") return;
+  const c = ectx;
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  box(c, 0, 0, EW, EH, "#04070a");
+  /* As tall as the panel allows, and only as wide as that makes them. On a
+     wide window they sit in the middle with air either side rather than
+     stretching, because a stretched instrument is a misread one. */
+  const h = Math.min(EH * 0.97, EW / (PFD_ASPECT + 1.0 + 0.10));
+  const pw = h * PFD_ASPECT, nw = h;
+  const gap = (EW - pw - nw) / 3;
+  const top = (EH - h) / 2;
+  drawPfd(c, gap, top, pw, h, craft, S, readout);
+  drawNd(c, gap * 2 + pw, top, nw, craft, S, readout);
+}
+
+/* ==========================================================================
    THE FCU — the mode control panel
 
    The grammar of an Airbus autopilot is pull and push. *Pull* a knob and the
@@ -3560,6 +4315,14 @@ window.addEventListener("keydown", ev => {
 
   const s = S;
   if (k === "c") setView(view === "cockpit" ? "chase" : "cockpit");
+  else if (k === "v") {
+    const deck = document.getElementById("deck");
+    deck.dataset.panel = deck.dataset.panel === "off" ? "on" : "off";
+    resize();
+  }
+  else if (k === "n") ndRangeIdx = Math.max(0, ndRangeIdx - 1);
+  else if (k === "m") ndRangeIdx = Math.min(ND_RANGES.length - 1, ndRangeIdx + 1);
+  else if (k === "t") ndTerrainOn = !ndTerrainOn;
   else if (k === "p") paused = !paused;
   else if (k === "g") { s.gear = !s.gear; soundGear(s.gear); }
   else if (k === "s") s.spoilers = !s.spoilers;
@@ -3710,6 +4473,7 @@ function frame(now) {
   const readout = updatePanel();
   lastReadout = readout;
   updateFcu();
+  drawEfis(readout);
   if (!paused) updateAudio(craft, S, readout, dt);
   requestAnimationFrame(frame);
 }
@@ -3727,6 +4491,7 @@ if (!gl) {
   el("ending").classList.add("show");
 } else {
   initGL();
+  initNdTerrain();
   resize();
   newFlight(false);
   requestAnimationFrame(frame);
