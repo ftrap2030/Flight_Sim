@@ -14,6 +14,7 @@ import math
 from dataclasses import dataclass
 
 from . import atmosphere as atm
+from . import failures
 from . import fbw
 from .airfield import FT_PER_NM
 
@@ -263,7 +264,8 @@ def ground_forces(sim):
     """
     state = sim.state
     aero = sim._aero_state()
-    mu = ROLLING_FRICTION + (BRAKING_FRICTION - ROLLING_FRICTION) * state.brakes
+    braking = BRAKING_FRICTION * failures.braking_factor(state)
+    mu = ROLLING_FRICTION + (braking - ROLLING_FRICTION) * state.brakes
     on_wheels = max(0.0, state.mass_kg * atm.G0 - aero.lift)
 
     thrust = aero.thrust

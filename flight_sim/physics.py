@@ -18,6 +18,7 @@ from . import aircraft as fleet
 from . import atmosphere as atm
 from . import autopilot
 from . import engines
+from . import failures
 from . import fbw
 from . import landing
 from . import navigation
@@ -161,6 +162,14 @@ class FlightState:
     # engines at the wrong speed.
     engine_n1_pct: list = field(default_factory=list)
     engines_on_fire: list = field(default_factory=list)
+
+    # Failures. `failures` holds the non-engine ones by key; a jam remembers
+    # what it jammed *at*, or a later lever command would move a surface that is
+    # supposed to be stuck. `armed_failure` is one waiting for V1.
+    failures: list = field(default_factory=list)
+    jammed_flaps: int = None
+    jammed_gear_down: bool = None
+    armed_failure: list = None
 
     # Autopilot. Each channel is independent and None when disengaged.
     ap_engaged: bool = False
@@ -810,6 +819,10 @@ class Simulator:
         # The fan chases the levers before anything reads the thrust, so a
         # command given this substep is felt over the next several.
         engines.spool(s, craft, dt)
+        # Failures write the numbers the model already reads -- a tank emptying
+        # faster than the burn explains, a flap lever that will not move -- so
+        # nothing below this line knows one happened.
+        failures.apply(self, dt)
 
         # The autopilot writes the same commanded pitch, bank and throttle a
         # pilot would, so everything below is unchanged by its presence.
@@ -857,10 +870,11 @@ class Simulator:
         # stability demand, and in direct law the command itself.
         bank_target = self.law_bank_target + craft.dihedral_effect * s.sideslip_deg
 
-        roll_step = craft.roll_rate_deg_s * dt * authority
+        surfaces = failures.control_rate_factor(s)
+        roll_step = craft.roll_rate_deg_s * dt * authority * surfaces
         s.bank_deg += clamp(bank_target - s.bank_deg, -roll_step, roll_step)
 
-        pitch_step = craft.pitch_rate_deg_s * dt * authority
+        pitch_step = craft.pitch_rate_deg_s * dt * authority * surfaces
         s.pitch_deg += clamp(
             self.law_pitch_target - s.pitch_deg, -pitch_step, pitch_step
         )
@@ -1001,6 +1015,7 @@ class Simulator:
         # The fan spools on the runway too. Without this a takeoff roll begins
         # with the engines at idle and leaves them there.
         engines.spool(s, craft, dt)
+        failures.apply(self, dt)
         field = self.airfields.by_ident(
             s.landing_field_ident, s.x_nm, s.y_nm, radius_nm=15.0
         )
@@ -1214,6 +1229,7 @@ class Simulator:
         # in. Timing the mode change here rather than in a display keeps the two
         # front ends boxing the same column at the same moment.
         autopilot.note_mode_changes(self, readout)
+        failures.check_armed(self, readout)
         return readout
 
     def _warnings(self, r):

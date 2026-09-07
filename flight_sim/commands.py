@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from . import aircraft as fleet
 from . import autopilot
+from . import failures
 from . import fbw
 from .physics import clamp, wrap360
 
@@ -275,6 +276,20 @@ def _match_engines(text, raw):
     if m:
         return Command("engine_fail", float(m.group(1)) - 1, raw)
 
+    # Registered before the bare `engine failure` pattern so that
+    # `fail engine 2` still names an engine rather than matching `fail <system>`.
+    m = re.match(r"^(?:arm\s+)?fail\s+(.{2,24})$", text)
+    # `fail engine 2` names an engine and belongs to the matcher below; bare
+    # `fail engine` is the generic failure, so only a *digit* defers.
+    if m and not re.match(r"^engine\s*\d$", m.group(1).strip()):
+        failure = failures.resolve(m.group(1))
+        if failure is not None:
+            return Command(
+                "arm_failure" if text.startswith("arm ") else "failure",
+                text=raw, advances_time=False, target=failure.key,
+            )
+    if text in ("failures", "fail what", "what can go wrong"):
+        return Command("show_failures", text=raw, advances_time=False)
     if re.match(r"^engine\s*(?:failure|out|fire)$", text):
         # No engine named: fail the leftmost, the classic asymmetric case.
         return Command("engine_fail", 0.0, raw)
@@ -465,6 +480,10 @@ def apply(sim, command):
         s.cmd_heading_deg = wrap360(s.heading_deg + command.value)
     elif kind == "rudder_set":
         s.rudder_deg = clamp(command.value, -60.0, 60.0)
+    elif kind == "failure":
+        failures.trigger(sim, command.target, engine_index=0)
+    elif kind == "arm_failure":
+        failures.arm(sim, command.target, engine_index=0)
     elif kind == "engine_fail":
         index = int(clamp(command.value, 0, sim.aircraft.engine_count - 1))
         if index not in s.engines_failed:
@@ -489,7 +508,7 @@ def apply(sim, command):
             s.alpha_floor_latched = False
     elif kind in ("hold", "status", "map", "airfields", "help", "quit",
                   "direct_to", "show_plan", "clear_route", "debrief",
-                  "spec", "fleet", "show_law"):
+                  "spec", "fleet", "show_law", "show_failures"):
         pass
     elif kind == "time_of_day":
         s.time_of_day_h = command.value % 24.0
@@ -550,6 +569,7 @@ HELP_TEXT = """\
 | **On the ground** | `brakes`, `max brakes`, `release brakes`, `reverse thrust`, `stow reversers` |
 | **Configuration** | `flaps 1`, `flaps full`, `flaps up`, `gear down`, `gear up`, `speedbrakes out`, `speedbrakes in` |
 | **Time** | `hold` (advance 10 s unchanged), `wait 60 seconds`, `wait 2 minutes` |
+| **Failures** | `failures`, `fail engine 1`, `fail fuel leak`, `arm fail engine` |
 | **Autopilot** | `autopilot on/off`, `set altitude 12000`, `set speed 280`, `vertical speed 1500`, `nav`, `approach mode` |
 | **Time of day** | `time 0530`, `dawn`, `midday`, `dusk`, `night` |
 | **Navigation** | `direct to KEBR`, `show plan`, `clear route`, `airfields`, `debrief` |

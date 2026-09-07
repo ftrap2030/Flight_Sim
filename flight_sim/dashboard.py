@@ -8,6 +8,7 @@ displays are laid out (PFD on the left, systems on the right).
 from . import aircraft as fleet
 from . import autopilot
 from . import atmosphere as atm
+from . import failures
 from . import fbw
 
 HORIZON_WIDTH = 33
@@ -160,6 +161,17 @@ def render(sim, readout, title=None):
     # `autopilot.fma`, so the two front ends cannot disagree about them.
     lines.append("`FMA  {}`".format(autopilot.fma_text(sim, r)))
     lines.append("")
+
+    # The ECAM, under the annunciator exactly as it sits on the aeroplane. The
+    # words come from `failures.ecam`, so the text panel and the glass one
+    # cannot disagree about what is wrong.
+    ecam = failures.ecam(sim)
+    if ecam:
+        lines.append("```")
+        for entry in ecam:
+            lines.append(("    " if entry.indent else "") + entry.text)
+        lines.append("```")
+        lines.append("")
 
     law_line = fbw.status_text(s)
     if s.ap_engaged:
