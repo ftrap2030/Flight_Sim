@@ -1004,11 +1004,92 @@ function thrustAvailable(a, s) {
   if (above > 0) lapse *= Math.max(0, 1 - above / 2000);
   return a.thrust * lapse;
 }
+/* ==========================================================================
+   ENGINE STATE  (engines.py)
+
+   N1 is state, not a readout. The levers ask for a fan speed, the fan chases it
+   -- slower up than down -- and thrust follows the fan rather than the lever.
+   That one lag is most of why a jet feels heavy to fly, and why a go-around is
+   a commitment rather than a keystroke.
+
+   At equilibrium the fan has caught up, so steady-state thrust is exactly what
+   it always was and the nine calibrated cruise figures are untouched.
+
+   N1 flies the aeroplane. N2 and EGT are derived and shown because a real E/WD
+   shows them; EGT in particular is not published data for any of these types
+   and must never feed a force.
+   ========================================================================== */
+const SPOOL_UP_S = 3.2, SPOOL_DOWN_S = 1.6;
+const N1_IDLE_PCT = 21, N1_MAX_PCT = 100, N1_THRUST_EXPONENT = 2;
+const N2_IDLE_PCT = 58;
+const EGT_RISE_C = 835, EGT_EXPONENT = 0.815;
+const EGT_CAUTION_C = 875, EGT_LIMIT_C = 950;
+
+const thrustFractionForN1 = n1 =>
+  Math.pow(Math.max(0, n1 - N1_IDLE_PCT) / (N1_MAX_PCT - N1_IDLE_PCT),
+           N1_THRUST_EXPONENT);
+const n1ForThrustFraction = f =>
+  N1_IDLE_PCT + (N1_MAX_PCT - N1_IDLE_PCT) * Math.pow(Math.max(0, f),
+                                                      1 / N1_THRUST_EXPONENT);
+const commandedN1 = (a, throttle) =>
+  n1ForThrustFraction(Math.max(a.idleFrac, throttle / 100));
+
+/* Put the fan where the levers are without waiting for it. Anywhere the
+   throttle is assigned from outside the integrator, this belongs after it --
+   a state that is placed rather than flown into has no seconds to spend. */
+function settleEngines(a, s) {
+  s.n1 = new Array(a.arms.length).fill(commandedN1(a, s.throttle));
+}
+
+function spoolEngines(a, s, dt) {
+  if (!s.n1 || s.n1.length !== a.arms.length) settleEngines(a, s);
+  const starved = !s.enginesRunning || s.fuel <= 0;
+  const target = commandedN1(a, s.throttle);
+  for (let i = 0; i < a.arms.length; i++) {
+    const stopped = starved || s.enginesFailed.includes(i);
+    const want = stopped ? 0 : target;
+    /* A windmilling engine runs down on the fast constant: nothing is driving
+       it, so it is the same case as closing the throttle. */
+    const tau = want > s.n1[i] ? SPOOL_UP_S : SPOOL_DOWN_S;
+    s.n1[i] += (want - s.n1[i]) * Math.min(1, dt / tau);
+  }
+}
+
+const egtC = (n1, altFt) =>
+  (temperatureK(altFt) - 273.15) + EGT_RISE_C * Math.pow(Math.max(0, n1) / N1_MAX_PCT,
+                                                         EGT_EXPONENT);
+
+/* One entry per engine, as the E/WD shows it. Both front ends read this, so
+   neither works out what N1 is. */
+function engineReadouts(a, s) {
+  const available = thrustAvailable(a, s);
+  return a.arms.map((_arm, i) => {
+    const n1 = s.n1 ? s.n1[i] : 0;
+    const thrust = available * thrustFractionForN1(n1) / a.arms.length;
+    return {
+      index: i, n1,
+      n2: n1 > 0.5 ? N2_IDLE_PCT + (100 - N2_IDLE_PCT) * n1 / N1_MAX_PCT : 0,
+      egt: egtC(n1, s.alt),
+      flow: a.tsfc * thrust * 3600,
+      thrust,
+      failed: s.enginesFailed.includes(i),
+      fire: (s.enginesOnFire || []).includes(i)
+    };
+  });
+}
+
 function thrustN(a, s) {
   if (!s.enginesRunning || s.fuel <= 0) return 0;
-  const frac = Math.max(a.idleFrac, s.throttle / 100);
-  const running = a.arms.length - s.enginesFailed.length;
-  return thrustAvailable(a, s) * frac * running / a.arms.length;
+  /* Follows N1 rather than the levers, so moving them does not rewrite the
+     thrust in the same substep. Averaged over the *running* engines, so a
+     failed one is absent because its fan stopped rather than by subtraction. */
+  const live = [];
+  for (let i = 0; i < a.arms.length; i++) {
+    if (!s.enginesFailed.includes(i)) live.push(s.n1 ? s.n1[i] : commandedN1(a, s.throttle));
+  }
+  if (!live.length) return 0;
+  const mean = live.reduce((t, n1) => t + thrustFractionForN1(n1), 0) / live.length;
+  return thrustAvailable(a, s) * mean * live.length / a.arms.length;
 }
 function maxRudderDeg(a, s) {
   const ias = Math.max(tasToIas(Math.max(s.tas, 1), s.alt) * KT_PER_MS, 1);
@@ -1067,6 +1148,10 @@ function updateSideslip(a, s, dt) {
 
 function substep(a, s, wx, dt) {
   if (s.status !== "flying" && s.status !== "rollout") return;
+
+  /* The fan chases the levers before anything reads the thrust, so a command
+     given this substep is felt over the next several. On the ground too. */
+  spoolEngines(a, s, dt);
 
   if (s.onGround) { groundSubstep(a, s, dt); return; }
 
@@ -1323,7 +1408,7 @@ function newFlight(keepView) {
     flaps, gear, spoilers: false, brakes: onGround ? 1 : 0, reverse: false,
     fuel: craft.startFuel, mass: craft.oew + craft.payload + craft.startFuel,
     initialFuel: craft.startFuel,
-    enginesRunning: true, enginesFailed: [],
+    enginesRunning: true, enginesFailed: [], enginesOnFire: [], n1: [],
     law: "normal", prot: [], alphaFloorLatched: false,
     turb: [0, 0, 0],
     /* Commanded heading is the autopilot's, not the pilot's: hand-flying
@@ -1334,9 +1419,11 @@ function newFlight(keepView) {
     t: 0, distance: 0, maxG: 1, maxIas: 0, maxAlt: alt, minAgl: 1e9,
     warnings: []
   };
+  settleEngines(craft, S);
   if (!onGround) {
     S.pitch = S.cmdPitch = S.lawPitch = levelFlightPitch(craft, S);
     S.throttle = trimThrottle(craft, S);
+    settleEngines(craft, S);      // trim moved the levers
   }
   S.approach = approachGuidance(craft, S);
   htOriginNm = [NaN, NaN];      // the fields moved; re-bake both height textures
@@ -1705,7 +1792,7 @@ function fma(a, s) {
 
 const audio = {
   ctx: null, ready: false, master: null,
-  n1: 0.22,                     // spooled fan speed, lags the thrust levers
+  n1: 0.22,                     // read from the model each frame, not filtered here
   nodes: {}, lastCallout: 0, calloutsDone: new Set()
 };
 
@@ -1847,13 +1934,15 @@ function updateAudio(a, s, readout, dt) {
   const n = audio.nodes, ctx = audio.ctx, t = ctx.currentTime;
   const glide = 0.08;
 
-  /* N1 chases the thrust levers with a real spool time, so the levers never
-     produce an instant change in anything -- which is most of why a jet feels
-     heavy to fly. */
+  /* N1 used to be filtered here, which was the right idea in the wrong place:
+     the engine's fan speed is not a property of the sound. It is state now, in
+     the model, and thrust follows it -- so the noise and the acceleration come
+     from one number instead of two that happened to look alike. */
   const running = s.enginesRunning && s.fuel > 0;
-  const demand = running ? Math.max(a.idleFrac + 0.14, s.throttle / 100) : 0.0;
-  const spool = demand > audio.n1 ? 0.42 : 0.85;      // spools up slower than down
-  audio.n1 += (demand - audio.n1) * Math.min(1, dt / spool);
+  const live = (s.n1 || []).filter((_v, i) => !s.enginesFailed.includes(i));
+  audio.n1 = live.length
+    ? live.reduce((t, v) => t + v, 0) / live.length / 100
+    : 0;
 
   /* Fan tone rises with N1; the whole engine quietens with altitude because
      there is less air to carry the sound. */

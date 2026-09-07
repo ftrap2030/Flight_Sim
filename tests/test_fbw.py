@@ -16,9 +16,12 @@ from flight_sim import physics
 from flight_sim.game import Session
 
 
-def fly(law, commands, ticks=14, key="a320neo", weather="clear"):
+def fly(law, commands, ticks=14, key="a320neo", weather="clear", altitude_ft=None):
     """Run a scenario in one control law and report what the flight did."""
     session = Session.new(key, weather, seed=42)
+    if altitude_ft is not None:
+        session.sim.state.altitude_ft = altitude_ft
+        session.sim.state.max_altitude_ft = altitude_ft
     session.sim.state.control_law = law
     for command in commands:
         session.execute(command)
@@ -167,7 +170,10 @@ class TestDirectLaw(unittest.TestCase):
         self.assertEqual(result["status"], physics.STRUCTURAL_FAILURE)
 
     def test_the_aircraft_can_be_dived_past_vmo_until_it_breaks(self):
-        result = fly(fbw.DIRECT, OVERSPEED_ATTEMPT, ticks=20)
+        # From height, because the aeroplane has to survive long enough to
+        # break: a twenty-five degree dive from five thousand feet meets the
+        # ground before the load factor has finished building.
+        result = fly(fbw.DIRECT, OVERSPEED_ATTEMPT, ticks=20, altitude_ft=30000.0)
         self.assertGreater(result["ias"], 400.0)
         self.assertEqual(result["status"], physics.STRUCTURAL_FAILURE)
 

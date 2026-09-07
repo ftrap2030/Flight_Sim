@@ -40,6 +40,9 @@ def trimmed_at_cruise(key):
     state.tas_ms = atm.mach_to_tas(craft.cruise_mach, altitude)
     state.pitch_deg = state.cmd_pitch_deg = session.sim.level_flight_pitch_deg()
     state.throttle_pct = session.sim.throttle_for_level_flight()
+    # Steady state means the fan has caught up with the levers. Without this the
+    # aircraft is trimmed against a thrust its engines are not yet making.
+    session.sim.settle_engines()
     return session.sim
 
 

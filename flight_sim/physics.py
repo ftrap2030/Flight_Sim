@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, asdict
 from . import aircraft as fleet
 from . import atmosphere as atm
 from . import autopilot
+from . import engines
 from . import fbw
 from . import landing
 from . import navigation
@@ -154,6 +155,13 @@ class FlightState:
     # keeps its gust correlation instead of snapping back to still air.
     turb: list = field(default_factory=lambda: [0.0, 0.0, 0.0])
 
+    # Fan speed per engine, in percent. State rather than a readout, because
+    # thrust is derived from it -- and persisted for the same reason as the
+    # turbulence filter: a flight resumed from disk must not restart with its
+    # engines at the wrong speed.
+    engine_n1_pct: list = field(default_factory=list)
+    engines_on_fire: list = field(default_factory=list)
+
     # Autopilot. Each channel is independent and None when disengaged.
     ap_engaged: bool = False
     ap_altitude_ft: float = None
@@ -247,6 +255,8 @@ class Readout:
     # V1, VR and V2. Meaningful on the ground, and computed there rather than
     # in a display so that both front ends bug the same speeds.
     takeoff: object = None
+    # One entry per engine: N1, N2, EGT, fuel flow, thrust, failed, fire.
+    engines: list = field(default_factory=list)
     leg: object = None
     wind_speed_kt: float = 0.0
     wind_dir_deg: float = 0.0
@@ -365,6 +375,7 @@ class Simulator:
         state.initial_fuel_kg = craft.start_fuel_kg
         state.max_altitude_ft = altitude_ft
         sim = cls(state)
+        sim.settle_engines()
         if start == RUNWAY_START:
             sim._place_on_runway()
             return sim
@@ -374,7 +385,24 @@ class Simulator:
         state.pitch_deg = trim_pitch
         state.cmd_pitch_deg = trim_pitch
         state.throttle_pct = sim.throttle_for_level_flight()
+        sim.settle_engines()
         return sim
+
+    def settle_engines(self):
+        """Put the fan where the thrust levers are, without waiting for it.
+
+        Thrust follows N1, and N1 takes seconds to chase the levers -- which is
+        the point of it. But a state that is *placed* rather than flown into has
+        no seconds to spend: an aeroplane set up trimmed at cruise has engines
+        that reached that setting long ago, and starting it with the fan at some
+        earlier speed would trim it against a thrust it is not making.
+
+        So: anywhere `throttle_pct` is assigned from outside the integrator,
+        this belongs immediately after it.
+        """
+        self.state.engine_n1_pct = [
+            engines.settled_n1(self.aircraft, self.state.throttle_pct)
+        ] * self.aircraft.engine_count
 
     def _place_on_runway(self):
         """Line the aircraft up on the threshold, brakes on, ready to go.
@@ -398,6 +426,7 @@ class Simulator:
         s.bank_deg = s.cmd_bank_deg = 0.0
         s.gamma_deg = 0.0
         s.throttle_pct = 0.0
+        self.settle_engines()
         s.on_ground = True
         s.status = ROLLOUT
         s.touchdown = None
@@ -516,13 +545,24 @@ class Simulator:
         return [i for i in range(self.aircraft.engine_count) if i not in failed]
 
     def _thrust_per_engine_n(self):
-        """Thrust from one running engine."""
+        """Thrust from one running engine, at its present fan speed.
+
+        Follows N1 rather than the thrust levers, so moving them does not
+        rewrite the thrust in the same substep. At equilibrium the fan has
+        caught up and this is exactly what it always was, which is why the
+        calibrated cruise figures did not move.
+        """
         if not self.state.engines_running or self.state.fuel_kg <= 0.0:
             return 0.0
-        fraction = max(
-            self.aircraft.idle_thrust_fraction, self.state.throttle_pct / 100.0
+        running = self._running_engines()
+        if not running:
+            return 0.0
+        n1 = [self.state.engine_n1_pct[i] for i in running] if self.state.engine_n1_pct \
+            else [engines.settled_n1(self.aircraft, self.state.throttle_pct)] * len(running)
+        mean_fraction = sum(engines.thrust_fraction_for_n1(v) for v in n1) / len(n1)
+        return (
+            self._thrust_available_n() * mean_fraction / self.aircraft.engine_count
         )
-        return self._thrust_available_n() * fraction / self.aircraft.engine_count
 
     def _asymmetric_yaw_moment(self):
         """Yawing moment from thrust, in newton-metres.
@@ -767,6 +807,9 @@ class Simulator:
         s = self.state
         craft = self.aircraft
         self._update_turbulence(dt)
+        # The fan chases the levers before anything reads the thrust, so a
+        # command given this substep is felt over the next several.
+        engines.spool(s, craft, dt)
 
         # The autopilot writes the same commanded pitch, bank and throttle a
         # pilot would, so everything below is unchanged by its presence.
@@ -955,6 +998,9 @@ class Simulator:
         """
         s = self.state
         craft = self.aircraft
+        # The fan spools on the runway too. Without this a takeoff roll begins
+        # with the engines at idle and leaves them there.
+        engines.spool(s, craft, dt)
         field = self.airfields.by_ident(
             s.landing_field_ident, s.x_nm, s.y_nm, radius_nm=15.0
         )
@@ -1160,6 +1206,7 @@ class Simulator:
         readout.speeds = fbw.characteristic_speeds(self)
         readout.vref_kt = readout.speeds.vref
         readout.takeoff = fbw.takeoff_speeds(self)
+        readout.engines = engines.readouts(self)
         readout.leg = navigation.leg_for(self, readout)
         readout.warnings = self._warnings(readout)
         # Once the approach is known, so is whether the localiser is captured,

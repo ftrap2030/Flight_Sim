@@ -51,6 +51,9 @@ const TOLERANCE = 0.05;
       s.tas = a.cruiseMach * soundMs(alt);
       s.pitch = levelFlightPitch(a, s);       // trim
       s.throttle = trimThrottle(a, s);
+      // Steady state means the fan has caught up with the levers; without this
+      // the aircraft is trimmed against a thrust its engines are not making.
+      settleEngines(a, s);
       const aero = aeroState(a, s);
       return { key, alt, mach: a.cruiseMach, mass, target,
                flow: Math.round(a.tsfc * aero.thrust * 3600),

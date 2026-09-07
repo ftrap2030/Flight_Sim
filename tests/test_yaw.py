@@ -24,6 +24,11 @@ def at_speed(key, ias_kt, altitude_ft=8000.0, **state_kwargs):
     state.tas_ms = atm.ias_to_tas(ias_kt * atm.MS_PER_KT, altitude_ft)
     for name, value in state_kwargs.items():
         setattr(state, name, value)
+    # These are steady-state questions -- how much rudder does this asymmetry
+    # need -- so the fan has to have caught up with the levers the test just
+    # set. Otherwise the live engine is still at idle and the asymmetry it is
+    # being asked about does not exist yet.
+    session.sim.settle_engines()
     return session.sim
 
 
@@ -200,13 +205,24 @@ class TestEngineFailure(unittest.TestCase):
         self.assertGreater(needed_slow, available_slow)
 
     def test_vmc_warning_fires_when_control_is_lost(self):
+        """Vmc is a speed, so the test has to stay at it.
+
+        Full thrust on one engine at 95 knots does not stay at 95 knots -- it
+        accelerates hard, and half a minute later the aircraft is doing 250 and
+        is perfectly controllable. Holding the speed is what makes this a
+        question about Vmc rather than about how long the aeroplane was left.
+        """
         session = Session.new("a320neo", "clear", seed=42)
         state = session.sim.state
         state.altitude_ft = 6000.0
-        state.tas_ms = atm.ias_to_tas(95.0 * atm.MS_PER_KT, 6000.0)
+        target_tas = atm.ias_to_tas(95.0 * atm.MS_PER_KT, 6000.0)
+        state.tas_ms = target_tas
         state.throttle_pct = 100.0
         state.engines_failed = [0]
-        settled(session.sim, seconds=30.0)
+        session.sim.settle_engines()
+        for _ in range(60):
+            session.sim._substep(0.1)
+            state.tas_ms = target_tas
         warnings = session.sim.readout().warnings
         self.assertTrue(any("VMC" in w for w in warnings), warnings)
 

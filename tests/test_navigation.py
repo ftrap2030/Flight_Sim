@@ -109,9 +109,14 @@ class TestLegGuidance(unittest.TestCase):
 
     def test_fuel_on_arrival_falls_as_the_burn_rises(self):
         session = session_with_route("ANFL")
+        # Settled either side, because the question is what each *setting*
+        # costs. Read straight after moving the levers, both would report the
+        # burn of the fan speed the engines still happen to be at.
         session.sim.state.throttle_pct = 30.0
+        session.sim.settle_engines()
         economical = session.sim.readout().leg.fuel_on_arrival_kg
         session.sim.state.throttle_pct = 100.0
+        session.sim.settle_engines()
         thirsty = session.sim.readout().leg.fuel_on_arrival_kg
         self.assertLess(thirsty, economical)
 

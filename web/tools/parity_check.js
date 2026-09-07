@@ -83,12 +83,14 @@ const TYPES = ['a320neo', 'a350', 'a380', 'a330neo'];
           ap: freshAutopilot(), dest: null, fmaChanged: {}, t: 100
         });
         S.tas = iasToTas(c.ias * MS_PER_KT, c.alt);
+        settleEngines(a, S);        // the levers were just assigned
         Object.assign(S.ap, c.ap);
         if (c.dest) S.dest = airfieldsNear(S.x, S.y, 90)[0] || null;
 
         const sp = characteristicSpeeds(a, S);
         const vs = vSpeeds(a, S);
         const f = fma(a, S);
+        const eng = engineReadouts(a, S);
         out.push({
           key, case: c.name,
           speeds: Object.fromEntries(
@@ -99,7 +101,13 @@ const TYPES = ['a320neo', 'a350', 'a380', 'a330neo'];
             engaged: f[col].engaged ? f[col].engaged[0] : null,
             armed: f[col].armed ? f[col].armed[0] : null
           }])),
-          channels: apChannels(S)
+          channels: apChannels(S),
+          engines: eng.map(e => ({
+            n1: Math.round(e.n1 * 1000) / 1000,
+            n2: Math.round(e.n2 * 1000) / 1000,
+            egt: Math.round(e.egt * 1000) / 1000,
+            flow: Math.round(e.flow * 1000) / 1000
+          }))
         });
       }
     }

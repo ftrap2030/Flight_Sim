@@ -21,6 +21,7 @@ sys.path.insert(0, __file__.rsplit("/web/", 1)[0])
 from flight_sim import aircraft as fleet  # noqa: E402
 from flight_sim import atmosphere as atm  # noqa: E402
 from flight_sim import autopilot  # noqa: E402
+from flight_sim import engines  # noqa: E402
 from flight_sim import fbw  # noqa: E402
 from flight_sim import navigation  # noqa: E402
 from flight_sim import physics  # noqa: E402
@@ -78,11 +79,13 @@ def python_row(key, case):
     # No readout: the browser cases never have an approach captured, and asking
     # for one here would cost a terrain scan per case for an answer both sides
     # already agree is None.
+    sim.settle_engines()
     speeds = fbw.characteristic_speeds(sim)
     takeoff = fbw.takeoff_speeds(sim)
     autopilot.note_mode_changes(sim, None)
     annunciator = autopilot.fma(sim, None)
-    return speeds, takeoff, annunciator, autopilot.channels(state)
+    return (speeds, takeoff, annunciator, autopilot.channels(state),
+            engines.readouts(sim))
 
 
 def main():
@@ -96,7 +99,9 @@ def main():
     for row in data["rows"]:
         case = by_name[row["case"]]
         where = "{} / {}".format(row["key"], row["case"])
-        speeds, takeoff, annunciator, channels = python_row(row["key"], case)
+        speeds, takeoff, annunciator, channels, motors = python_row(
+            row["key"], case
+        )
 
         for field, browser_name in SPEED_FIELDS.items():
             mine = getattr(speeds, field)
@@ -126,6 +131,21 @@ def main():
                         .format(where, column, row_name, text, expected[row_name])
                     )
 
+        # Engine parameters: N1 flies the aeroplane, so a disagreement here is a
+        # disagreement about thrust, not about a gauge.
+        for index, (mine_e, theirs_e) in enumerate(zip(motors, row["engines"])):
+            for field, browser_name, tol in (
+                ("n1_pct", "n1", 0.01), ("n2_pct", "n2", 0.01),
+                ("egt_c", "egt", 0.05), ("fuel_flow_kgh", "flow", 0.5),
+            ):
+                mine = getattr(mine_e, field)
+                theirs = theirs_e[browser_name]
+                if abs(mine - theirs) > tol:
+                    failures.append(
+                        "{}: ENG {} {} is {:.3f} in Python and {:.3f} in the browser"
+                        .format(where, index + 1, field, mine, theirs)
+                    )
+
         if channels != row["channels"]:
             failures.append(
                 "{}: channels are {} in Python and {} in the browser"
@@ -141,7 +161,7 @@ def main():
         if len(failures) > 40:
             print("  ... and {} more".format(len(failures) - 40))
         return 1
-    print("the two builds agree on every speed and every flight mode")
+    print("the two builds agree on every speed, engine parameter and flight mode")
     return 0
 
 
