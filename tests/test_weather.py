@@ -104,6 +104,43 @@ class TestWindShear(unittest.TestCase):
             self.assertAlmostEqual(speed, 45.0, places=6)
             self.assertAlmostEqual(direction, 270.0, places=6)
 
+    def test_a_gust_moves_the_wind_about_its_mean(self):
+        """`gust_kt` is the peak -- "45 gusting 65" -- so 65 is the top of the
+        range, not something added to 45. Reached only at the noise clamp."""
+        calm = self.state.wind_at(6000.0, 0.0)[0]
+        self.assertAlmostEqual(calm, 45.0, places=6)
+        strongest = self.state.wind_at(6000.0, 3.0)[0]
+        weakest = self.state.wind_at(6000.0, -3.0)[0]
+        self.assertAlmostEqual(strongest, 63.0, places=6)
+        self.assertAlmostEqual(weakest, 27.0, places=6)
+        self.assertLessEqual(strongest, self.state.gust_kt)
+
+    def test_a_day_with_no_gust_declared_does_not_gust(self):
+        state = WeatherState(wx.CLEAR, seed=1).hold(wind_speed_kt=8.0)
+        self.assertEqual(
+            {round(state.wind_at(6000.0, k)[0], 9) for k in (-3.0, 0.0, 3.0)},
+            {8.0},
+        )
+
+    def test_the_gust_never_blows_backwards(self):
+        """A gust subtracting more than the mean would reverse the wind."""
+        state = WeatherState(wx.STORMY, seed=1).hold(
+            wind_speed_kt=1.0, gust_kt=400.0
+        )
+        self.assertGreaterEqual(state.wind_at(6000.0, -3.0)[0], 0.0)
+
+    def test_the_gust_is_felt_and_not_merely_printed(self):
+        """It reaches the ground track, which is the whole point of moving it
+        out of the dashboard string it used to live in."""
+        session = Session.new("a320neo", "stormy", seed=SEED)
+        sim = session.sim
+        sim.weather.hold(wind_speed_kt=55.0, wind_dir_deg=210.0, turbulence=0.9)
+        speeds = set()
+        for sample in (-3.0, 0.0, 3.0):
+            sim.state.turb = [sample, 0.0, 0.0]
+            speeds.add(round(sim.readout().ground_speed_kt, 3))
+        self.assertEqual(len(speeds), 3, "the gust never reached the model")
+
     def test_descending_through_the_shear_changes_the_drift(self):
         session = Session.new("a320neo", "crosswind", seed=SEED)
         state = session.sim.state

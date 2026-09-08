@@ -184,6 +184,11 @@ ROTOR_DECAY_FT = 4500.0
 WAVE_SAMPLE_NM = 2.2
 WAVE_DECAY_FT = 8000.0
 
+# How much of the gust a filtered turbulence sample is worth. `gust_kt` on the
+# profile is the *peak* -- "45 gusting 65" -- so the increment over the mean is
+# what the air actually varies by, and the sample is clamped to +/-3.
+GUST_SAMPLE_SCALE = 0.3
+
 
 class WeatherState:
     """The live conditions: a profile, plus what it is doing at this moment.
@@ -259,15 +264,25 @@ class WeatherState:
 
     # -- wind as a function of height ----------------------------------
 
-    def wind_at(self, agl_ft):
+    def wind_at(self, agl_ft, gust_sample=0.0):
         """(speed, direction) at a height above the ground.
 
         Surface friction both slows the wind and backs it; climbing out of the
         friction layer therefore changes drift as well as groundspeed.
+
+        `gust_sample` is the integrator's filtered turbulence noise. It is taken
+        here rather than added by the caller so that the wind has one definition
+        -- a gust that only reached the panel was a gust that existed as a label,
+        which is exactly what the rest of this simulator refuses to do.
         """
         fraction = min(1.0, max(0.0, agl_ft) / FRICTION_LAYER_FT) ** 0.3
         speed = self.wind_speed_kt * (
             SURFACE_WIND_FRACTION + (1.0 - SURFACE_WIND_FRACTION) * fraction
+        )
+        # The increment over the mean, since `gust_kt` is the peak.
+        increment = max(0.0, self.gust_kt - self.wind_speed_kt)
+        speed = max(
+            0.0, speed + increment * gust_sample * GUST_SAMPLE_SCALE
         )
         direction = (
             self.wind_dir_deg - SURFACE_BACKING_DEG * (1.0 - fraction)

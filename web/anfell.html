@@ -490,14 +490,44 @@ function stallIasKt(a, mass, n, flaps) {
   return Math.sqrt(2 * n * mass * G0 / (RHO0 * a.wingArea * clMaxFlaps(a, flaps))) * KT_PER_MS;
 }
 
-/* ---------- weather (weather.py) ---------- */
+/* ---------- weather (weather.py) ----------
+   The immutable profiles, with the Python's field names and the Python's
+   numbers. They had drifted: turbulence differed on all four, `vertical_gust_fpm`
+   was missing entirely and the vertical gust was an invented flat 900 fpm, and
+   the visibility had been relabelled from statute to nautical miles without
+   being converted.
+
+   `gustKt` is the *peak* -- "45 gusting 65" -- as it is in the Python and on a
+   real METAR, not the increment over the mean.
+
+   The last four fields are the renderer's alone and have no counterpart in
+   `flight_sim/`: `deckFt` is the altitude of the cloud surface actually drawn,
+   which for an overcast is its base and for a radiation fog is its top, and is
+   quoted above the home field rather than above sea level. Keeping it separate
+   from `cloudBaseFt` is the point -- a rendering parameter wearing a model
+   field's name is how these two tables came apart in the first place. */
 const WEATHER = [
-  { key:"clear",     name:"Clear Skies",      windKt:8,  windDir:270, gust:0,  turb:0.00, visNm:36, cloudBase:38000, cover:0.10, tint:"#7fa8c4", sky:"#0e4c8f" },
-  { key:"crosswind", name:"Heavy Crosswinds", windKt:45, windDir:290, gust:20, turb:0.42, visNm:25, cloudBase:9000,  cover:0.55,  tint:"#93a6b0", sky:"#2a5478" },
-  { key:"stormy",    name:"Stormy",           windKt:55, windDir:210, gust:25, turb:0.95, visNm:2.0, cloudBase:4200, cover:0.88, tint:"#59636b", sky:"#20303c" },
-  { key:"foggy",     name:"Foggy",            windKt:5,  windDir:180, gust:0,  turb:0.12, visNm:0.3, cloudBase:7200, cover:0.30, tint:"#b9c2c6", sky:"#8d9ba3" }
+  { key:"clear",     name:"Clear Skies",
+    turbulence:0.05, windKt:8,  windDir:270, gustKt:0,  vertGustFpm:60,
+    visSm:40,  cloudBaseFt:12000, cloudTopsFt:14000,
+    deckFt:38000, cover:0.10, tint:"#7fa8c4", sky:"#0e4c8f" },
+  { key:"crosswind", name:"Heavy Crosswinds",
+    turbulence:0.35, windKt:45, windDir:290, gustKt:65, vertGustFpm:350,
+    visSm:25,  cloudBaseFt:6500,  cloudTopsFt:11000,
+    deckFt:9000,  cover:0.55, tint:"#93a6b0", sky:"#2a5478" },
+  { key:"stormy",    name:"Stormy",
+    turbulence:0.85, windKt:55, windDir:210, gustKt:80, vertGustFpm:1800,
+    visSm:2.0, cloudBaseFt:2200,  cloudTopsFt:41000,
+    deckFt:4200,  cover:0.88, tint:"#59636b", sky:"#20303c" },
+  { key:"foggy",     name:"Foggy",
+    turbulence:0.10, windKt:5,  windDir:180, gustKt:0,  vertGustFpm:40,
+    visSm:0.3, cloudBaseFt:200,   cloudTopsFt:7200,
+    deckFt:7200,  cover:0.30, tint:"#b9c2c6", sky:"#8d9ba3" }
 ];
 const WEATHER_BY_KEY = Object.fromEntries(WEATHER.map(w => [w.key, w]));
+
+const M_PER_SM = 1609.34;
+const GUST_SAMPLE_SCALE = 0.3;
 
 /* ---------- terrain (terrain.py) ----------
    Same 32-bit hash, same ridged multifractal, same constants. Math.imul gives
@@ -1165,7 +1195,7 @@ function substep(a, s, wx, dt) {
 
   /* Turbulence: a filtered random walk, so gusts have duration rather than
      flickering every frame. */
-  const intensity = wx.turb;
+  const intensity = wx.turbulence;
   if (intensity > 0) {
     const decay = Math.exp(-dt / 2.5);
     for (let i = 0; i < 3; i++) {
@@ -1212,15 +1242,23 @@ function substep(a, s, wx, dt) {
   s.gamma = clamp(s.gamma + deg(dgamma * dt), -89, 89);
   s.hdg = wrap360(s.hdg + deg(dpsi * dt));
 
+  /* The vertical gust is the profile's own figure -- 60 fpm on a clear day and
+     1,800 in a storm -- not a flat number scaled by turbulence. A storm whose
+     updraughts are the same size as a clear day's is not a storm.
+     (physics.py: gust_fpm = turb[2] * vertical_gust_fpm * 0.33) */
   const vNow = Math.max(s.tas, 20);
   s.alt += vNow * Math.sin(rad(s.gamma)) * FT_PER_M * dt
-         + (s.turb[2] * intensity * 900) / 60 * dt;
+         + (s.turb[2] * wx.vertGustFpm * 0.33) / 60 * dt;
 
   /* Ground track: the aircraft travels along its flight path, not its nose —
      with sideslip those differ by beta — plus the wind. */
   const horiz = vNow * Math.cos(rad(s.gamma));
   const trackRad = rad(s.hdg - s.beta);
-  const windMs = (wx.windKt + wx.gust * s.turb[0] * 0.3) * MS_PER_KT;
+  /* `gustKt` is the peak, so what the air actually varies by is the increment
+     over the mean. (weather.GUST_SAMPLE_SCALE) */
+  const gustIncrement = Math.max(0, wx.gustKt - wx.windKt);
+  const windMs = Math.max(0, wx.windKt + gustIncrement * s.turb[0] * GUST_SAMPLE_SCALE)
+                 * MS_PER_KT;
   const windTo = rad(wx.windDir + 180);
   const vx = horiz * Math.sin(trackRad) + windMs * Math.sin(windTo);
   const vy = horiz * Math.cos(trackRad) + windMs * Math.cos(windTo);
@@ -3188,11 +3226,11 @@ function render() {
   const haze = hex(weather.tint).map((v, i) => v / 255 * (0.10 + 0.90 * day) * tint[i]);
   const zen = hex(weather.sky).map(v => v / 255);
   const sun = sunVector();
-  let fogDist = Math.max(700, weather.visNm * 1852 * 0.62);
+  let fogDist = Math.max(700, weather.visSm * M_PER_SM * 0.62);
   /* Inside the cloud layer visibility collapses, which is what makes flying
      into a deck feel like flying into something rather than past a picture. */
-  const inCloud = Math.abs(S.alt - (cloudDatumFt + weather.cloudBase)) < 900
-                  && weather.cloudBase < 30000;
+  const inCloud = Math.abs(S.alt - (cloudDatumFt + weather.deckFt)) < 900
+                  && weather.deckFt < 30000;
   if (inCloud) fogDist = Math.min(fogDist, 260);
 
   gl.viewport(0, 0, VW, VH);
@@ -3260,8 +3298,8 @@ function render() {
   }
 
   /* Cloud deck, after the terrain so the gaps show ground through them. */
-  const baseFt = cloudDatumFt + weather.cloudBase;
-  if (weather.cloudBase < 30000) {
+  const baseFt = cloudDatumFt + weather.deckFt;
+  if (weather.deckFt < 30000) {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(false);

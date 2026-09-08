@@ -676,9 +676,12 @@ class Simulator:
         horizontal_ms = tas_ms * math.cos(math.radians(s.gamma_deg))
         air_track_rad = math.radians(s.heading_deg - s.sideslip_deg)
         # Wind is a function of height: surface friction slows and backs it, so
-        # a descent changes drift and groundspeed as well as altitude.
+        # a descent changes drift and groundspeed as well as altitude. The
+        # turbulence sample goes in with it, so a gusting wind gusts rather than
+        # merely being printed on the panel as one.
         wind_kt, wind_from_deg = self.weather.wind_at(
-            s.altitude_ft - self.terrain.elevation(s.x_nm, s.y_nm)
+            s.altitude_ft - self.terrain.elevation(s.x_nm, s.y_nm),
+            s.turb[0],
         )
         wind_ms = wind_kt * atm.MS_PER_KT
         wind_to_rad = math.radians(wind_from_deg + 180.0)
@@ -1169,7 +1172,7 @@ class Simulator:
             craft.stall_speed_ias_ms(s.mass_kg, manoeuvring_n, s.flaps) * atm.KT_PER_MS
         )
 
-        local_wind_kt, local_wind_dir = self.weather.wind_at(agl_ft)
+        local_wind_kt, local_wind_dir = self.weather.wind_at(agl_ft, s.turb[0])
 
         ahead_nm, ahead_ft = self.terrain.highest_ahead(
             s.x_nm, s.y_nm, s.heading_deg, max_nm=12.0
