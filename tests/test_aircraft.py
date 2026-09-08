@@ -8,14 +8,18 @@ from flight_sim import atmosphere as atm
 
 class TestFleetData(unittest.TestCase):
     def test_the_fleet_is_what_it_says_it_is(self):
-        self.assertEqual(len(fleet.FLEET), 10)
+        self.assertEqual(len(fleet.FLEET), 11)
         self.assertEqual(
             [a.key for a in fleet.FLEET],
             [
                 "a319neo", "a320", "a320neo", "a321", "a321xlr",
-                "a330-800", "a330neo", "a350", "a350k", "a380",
+                "a330-800", "a330neo", "a350", "a350k", "a380", "belugaxl",
             ],
         )
+        # Ten airliners and one freighter. The fleet stopped being all
+        # airliners with the Beluga, and several of these tests had quietly
+        # assumed it was.
+        self.assertEqual(sum(1 for a in fleet.FLEET if a.carries_passengers), 10)
 
     def test_masses_are_self_consistent(self):
         for craft in fleet.FLEET:
@@ -40,9 +44,20 @@ class TestFleetData(unittest.TestCase):
             self.assertGreater(craft.height_m, 5.0)
             self.assertLess(craft.height_m, craft.length_m)
             self.assertGreater(craft.fuselage_height_m, craft.fuselage_width_m - 0.01)
-            self.assertGreater(craft.seats_max, craft.seats_typical)
             self.assertGreater(craft.range_nm, 1000.0)
             self.assertGreater(craft.entry_service, 1980)
+            # An airliner is published by its seats and a freighter by its hold.
+            # This was `seats_max > seats_typical` for every type, unqualified,
+            # for as long as every type carried passengers.
+            if craft.carries_passengers:
+                self.assertGreater(craft.seats_max, craft.seats_typical)
+                self.assertEqual(craft.hold_volume_m3, 0.0)
+            else:
+                self.assertEqual(craft.seats_typical, 0)
+                self.assertGreater(
+                    craft.hold_volume_m3, 0.0,
+                    "{} carries neither passengers nor freight".format(craft.name),
+                )
 
     def test_fuel_mass_follows_from_tank_volume(self):
         """Capacity is quoted in litres; the kilograms are derived, not typed."""
@@ -108,8 +123,17 @@ class TestFleetData(unittest.TestCase):
         expresses this: the A330-900 rolls better than the A350-1000 while
         sitting earlier in the list. What has to hold is that sorting by weight
         sorts by roll rate.
+
+        **Among airliners.** Weight is a proxy for roll inertia only while every
+        type puts its mass in the same place, and the Beluga does not: its load
+        rides in a lobe well above the roll axis, so it is the one type here
+        that rolls worse than its weight predicts. That is a property of the
+        aeroplane, not a hole in the claim, and it is asserted on its own below.
         """
-        by_weight = sorted(fleet.FLEET, key=lambda a: a.mtow_kg)
+        by_weight = sorted(
+            [a for a in fleet.FLEET if a.carries_passengers],
+            key=lambda a: a.mtow_kg,
+        )
         rates = [a.roll_rate_deg_s for a in by_weight]
         self.assertEqual(
             rates, sorted(rates, reverse=True),
@@ -120,6 +144,27 @@ class TestFleetData(unittest.TestCase):
         # Pitch response follows the same argument.
         pitch = [a.pitch_rate_deg_s for a in by_weight]
         self.assertEqual(pitch, sorted(pitch, reverse=True))
+
+    def test_the_freighter_is_less_nimble_than_its_weight_predicts(self):
+        """The deliberate exception, and the reason for it.
+
+        Fifty-one tonnes in a lobe above the wing is a roll inertia no airliner
+        of the same weight carries, and a side area forward of the fin that no
+        airliner has -- so it both rolls and settles in yaw more slowly than
+        anything its size.
+        """
+        beluga, donor = fleet.BELUGA_XL, fleet.A330_800
+        # Against the aeroplane it is built from, which is the sharp comparison:
+        # same wing area, twenty-four tonnes *heavier*, and it still rolls and
+        # settles better. Nothing about the weight explains that; the lobe does.
+        self.assertGreater(donor.mtow_kg, beluga.mtow_kg)
+        self.assertGreater(donor.roll_rate_deg_s, beluga.roll_rate_deg_s)
+        self.assertGreater(donor.pitch_rate_deg_s, beluga.pitch_rate_deg_s)
+        self.assertLess(donor.yaw_tau_s, beluga.yaw_tau_s)
+        self.assertEqual(donor.wing_area_m2, beluga.wing_area_m2)
+        # And it gave up span to do it: the ceo wing, no sharklets.
+        self.assertLess(beluga.wing_span_m, donor.wing_span_m)
+        self.assertLess(beluga.aspect_ratio, donor.aspect_ratio)
 
     def test_within_a_family_the_stretch_is_the_less_nimble_one(self):
         for shorter, longer in (

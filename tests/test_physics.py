@@ -143,6 +143,71 @@ class TestPublishedPerformance(unittest.TestCase):
                 ),
             )
 
+    def test_the_belugas_drag_polar_answers_to_two_published_figures(self):
+        """The one type here with no published block fuel flow.
+
+        Airbus flies its six itself and sells none, so the anchor every other
+        polar was solved against does not exist. `cd_0` was solved against the
+        published *range* at maximum payload instead -- and this is the check
+        that it also satisfies an anchor the solve never saw, the published
+        service ceiling. Two published figures, one unknown: if the aeroplane
+        could reach its range but not its ceiling, one of them has been misread.
+
+        Note the direction. Asking "what drag makes the thrust margin zero *at*
+        the published ceiling" is circular, because `_thrust_available_n` fades
+        thrust across `ceiling_ft` itself; solved that way it demands a polar
+        half again as draggy and an L/D of 10. The non-circular question is
+        where the margin actually goes to zero.
+        """
+        craft = fleet.BELUGA_XL
+        session = Session.new("belugaxl", "clear", seed=42)
+        sim = session.sim
+        state = sim.state
+        state.mass_kg = craft.oew_kg + craft.payload_kg + 20000.0
+
+        low, high = 20000.0, 45000.0
+        for _ in range(30):
+            middle = (low + high) / 2.0
+            state.altitude_ft = middle
+            state.tas_ms = atm.mach_to_tas(craft.cruise_mach, middle)
+            state.pitch_deg = state.cmd_pitch_deg = sim.level_flight_pitch_deg()
+            state.throttle_pct = sim.throttle_for_level_flight()
+            sim.settle_engines()
+            if sim._thrust_available_n() - sim._aero_state().drag > 0.0:
+                low = middle
+            else:
+                high = middle
+        reached = (low + high) / 2.0
+        self.assertAlmostEqual(
+            reached / craft.ceiling_ft, 1.0, delta=0.04,
+            msg="the polar reaches {:,.0f} ft against a published {:,.0f}"
+                .format(reached, craft.ceiling_ft),
+        )
+
+    def test_the_beluga_pays_for_its_shape(self):
+        """It has to be worse than the aeroplane it is built from, and by a lot.
+
+        If the lobe cost nothing the polar would be wrong, and a Beluga that
+        cruised like an A330 would be a re-skinned A330.
+        """
+        def ld(key, altitude, mass):
+            session = Session.new(key, "clear", seed=42)
+            sim = session.sim
+            state = sim.state
+            state.altitude_ft = altitude
+            state.mass_kg = mass
+            state.tas_ms = atm.mach_to_tas(sim.aircraft.cruise_mach, altitude)
+            state.pitch_deg = state.cmd_pitch_deg = sim.level_flight_pitch_deg()
+            state.throttle_pct = sim.throttle_for_level_flight()
+            sim.settle_engines()
+            aero = sim._aero_state()
+            return aero.cl / aero.cd
+
+        beluga = ld("belugaxl", 33000.0, 211000.0)
+        donor = ld("a330-800", 37000.0, 224000.0)
+        self.assertLess(beluga, donor * 0.8, "the lobe costs too little")
+        self.assertGreater(beluga, 10.0, "and it should still be an aeroplane")
+
     def test_lift_to_drag_ratio_is_realistic(self):
         """A jet airliner cruises at L/D somewhere between 15 and 20."""
         for key in CRUISE_TARGETS:

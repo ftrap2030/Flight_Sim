@@ -73,11 +73,20 @@ class Aircraft:
     # A bulged belly fairing over an extra centre tank. Only the XLR has one,
     # and it is the single external feature that tells it from an A321neo.
     belly_fairing: bool = False
+    # The outsize cargo lobe over a lowered flight deck. Only the Beluga has
+    # one, and unlike the belly fairing it is not a detail -- it is the shape of
+    # the aeroplane, so the drawing has to be told rather than left to infer a
+    # very tall airliner from the cross-section alone.
+    cargo_lobe: bool = False
     mlw_kg: float = 0.0  # maximum landing weight
     mzfw_kg: float = 0.0  # maximum zero-fuel weight
     fuel_capacity_l: float = 0.0
+    # Seats on an airliner; a hold on a freighter. A type has one or the other,
+    # and `carries_passengers` is what the fleet's own tests and the spec card
+    # branch on rather than guessing from a zero.
     seats_typical: int = 0  # manufacturer's two- or three-class layout
     seats_max: int = 0  # exit-limit, single class
+    hold_volume_m3: float = 0.0  # usable cargo volume, for a freighter
     range_nm: float = 0.0
 
     # Aerodynamics
@@ -110,6 +119,16 @@ class Aircraft:
     max_rudder_deg: float = 30.0
 
     handling: str = ""
+
+    @property
+    def carries_passengers(self):
+        """Whether this is an airliner at all.
+
+        The fleet was nine airliners for long enough that several of its tests
+        simply assumed it -- `seats_max > seats_typical` held for every type
+        until a freighter arrived with neither.
+        """
+        return self.seats_max > 0
 
     @property
     def engine_count(self):
@@ -740,6 +759,78 @@ A380 = Aircraft(
 )
 
 
+BELUGA_XL = Aircraft(
+    key="belugaxl",
+    name="BelugaXL",
+    icao_type="A337",
+    engines="2 x Rolls-Royce Trent 772B-60 (316.0 kN each)",
+    entry_service=2020,
+    # An A330-200F underneath, so it is fly-by-wire and the control laws apply
+    # unchanged -- but it wears the *ceo* wing, without sharklets, and that is
+    # 3.7 m less span over the same area than either A330neo. Aspect ratio 10.1
+    # against their 11.3, which it pays for in induced drag every mile.
+    wing_area_m2=361.6,
+    wing_span_m=60.30,
+    length_m=63.10,
+    height_m=18.90,
+    fuselage_width_m=5.64,
+    # The cargo lobe. Not a wider aeroplane -- a far taller one, and this is the
+    # number the drawing takes its shape from.
+    fuselage_height_m=8.80,
+    wing_sweep_deg=30.0,
+    wingtip="none -- the A330ceo wing",
+    cargo_lobe=True,
+    oew_kg=130000.0,
+    mtow_kg=227000.0,
+    mlw_kg=187000.0,
+    mzfw_kg=182000.0,
+    payload_kg=51000.0,
+    hold_volume_m3=2209.0,
+    fuel_capacity_l=84000.0,
+    start_fuel_kg=30000.0,
+    # A freighter. `seats_typical` and `seats_max` stay at zero and the card
+    # quotes the hold instead, which is the number this aeroplane exists for.
+    seats_typical=0,
+    seats_max=0,
+    range_nm=2200.0,
+    thrust_sl_n=632000.0,
+    tsfc=1.5919e-5,  # ~0.562 lb/(lbf*hr): the Trent 700, taken not solved
+    # The one type here whose polar was not solved against a published block
+    # fuel flow, because Airbus flies its six itself and publishes none. Solved
+    # against the published *range* at maximum payload instead, and then checked
+    # against the published ceiling, which the model puts at 35,575 ft against a
+    # published 35,000 -- 1.6% out, on an anchor the solve never saw.
+    cd_0=0.02797,
+    oswald_e=0.78,
+    mach_crit=0.72,
+    vmo_kt=300.0,
+    mmo=0.78,
+    ceiling_ft=35000.0,
+    cruise_mach=0.69,
+    # Heavy in pitch and slow in roll: the mass is a long way from the
+    # centreline and a long way above it.
+    roll_rate_deg_s=8.5,
+    pitch_rate_deg_s=2.0,
+    engine_arms_m=(-10.0, 10.0),
+    rudder_power=0.0024,
+    # All that side area above the wing, well forward of the fin -- so it
+    # weathercocks less willingly than the airliner it is built from and takes
+    # longer to settle.
+    directional_stability=0.0030,
+    dihedral_effect=0.45,
+    yaw_tau_s=3.2,
+    handling=(
+        "The odd one out, and it flies like it. Lift-to-drag of 14.4 where an "
+        "A330 manages 19.3 -- the cargo lobe is most of a wing's worth of "
+        "drag -- so it burns a third more fuel than an A330-900 while weighing "
+        "less, cruises at M0.69 instead of M0.82, and tops out six thousand "
+        "feet lower. It is volume-limited, not weight-limited: fifty-one tonnes "
+        "in 2,209 cubic metres, which is a density no airline freight ever has. "
+        "Expect it to feel reluctant in roll and slow to stop yawing."
+    ),
+)
+
+
 FLEET = [
     A319NEO,
     A320,
@@ -751,6 +842,7 @@ FLEET = [
     A350,
     A350K,
     A380,
+    BELUGA_XL,
 ]
 FLEET_BY_KEY = {a.key: a for a in FLEET}
 

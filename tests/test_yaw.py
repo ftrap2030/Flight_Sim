@@ -59,8 +59,18 @@ class TestSideslip(unittest.TestCase):
         self.assertLess(immediate, eventual * 0.5)
 
     def test_bigger_aircraft_respond_more_slowly(self):
-        taus = [craft.yaw_tau_s for craft in fleet.FLEET]
+        """Among airliners, which are all the same shape.
+
+        The Beluga is not: it carries more side area forward of the fin than
+        anything else here, so it weathercocks less willingly and takes longer
+        to settle than its size suggests. Asserted separately in
+        `test_aircraft.py` rather than smuggled into a sorted list.
+        """
+        taus = [c.yaw_tau_s for c in fleet.FLEET if c.carries_passengers]
         self.assertEqual(taus, sorted(taus))
+        # And the exception, stated rather than excluded: it settles more slowly
+        # than an A350-1000 that outweighs it by ninety tonnes.
+        self.assertGreater(fleet.BELUGA_XL.yaw_tau_s, fleet.A350K.yaw_tau_s)
 
     def test_sideslip_is_bounded(self):
         sim = at_speed("a320neo", 130.0, rudder_deg=200.0)

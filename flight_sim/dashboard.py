@@ -606,9 +606,15 @@ def spec_card(craft, artwork_first=True):
         ("Fuel capacity", "{} L ({} kg)".format(
             _thousands(craft.fuel_capacity_l), _thousands(craft.fuel_capacity_kg)),
          "Max zero-fuel", "{} kg".format(_thousands(craft.mzfw_kg))),
-        ("Seating", "{:d} typical, {:d} max".format(
-            craft.seats_typical, craft.seats_max),
-         "This flight", "{} kg ramp".format(_thousands(craft.start_mass_kg))),
+        # A freighter is published by its hold, not by seats it does not have.
+        # "0 typical, 0 max" is not a fact about an aeroplane, it is a field
+        # that was never filled in.
+        (("Seating", "{:d} typical, {:d} max".format(
+            craft.seats_typical, craft.seats_max))
+         if craft.carries_passengers else
+         ("Cargo hold", "{:,.0f} m3, {} kg payload".format(
+             craft.hold_volume_m3, _thousands(craft.payload_kg)))) +
+        ("This flight", "{} kg ramp".format(_thousands(craft.start_mass_kg))),
     ]
     if craft.engine_options:
         rows.append(("Also offered with", craft.engine_options, "", ""))
@@ -683,7 +689,7 @@ def fleet_menu(artwork_included=True):
     for index, craft in enumerate(fleet.FLEET, start=1):
         lines.append(
             "| **{}** | **{}** | {} | {:d} × {:,.0f} kN | M{:.2f} ({:,.0f} kt) | "
-            "{} ft | {} nm | {:d} | {} kg | {:.1f}°/s |".format(
+            "{} ft | {} nm | {} | {} kg | {:.1f}°/s |".format(
                 index,
                 craft.name,
                 craft.icao_type,
@@ -693,7 +699,9 @@ def fleet_menu(artwork_included=True):
                 craft.cruise_speed_kt,
                 _thousands(craft.ceiling_ft),
                 _thousands(craft.range_nm),
-                craft.seats_typical,
+                # Seats, or the hold that is there instead of them.
+                "{:d}".format(craft.seats_typical) if craft.carries_passengers
+                else "{:,.0f} m3".format(craft.hold_volume_m3),
                 _thousands(craft.mtow_kg),
                 craft.roll_rate_deg_s,
             )
