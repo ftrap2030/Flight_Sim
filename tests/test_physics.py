@@ -363,6 +363,69 @@ class TestEnvelope(unittest.TestCase):
         self.assertAlmostEqual(readout.drift_deg, 0.0, places=3)
 
 
+class TestTurbulenceSource(unittest.TestCase):
+    """The gusts come from the terrain's lattice hash, not from a generator.
+
+    That is what lets the browser build shake identically -- it carries the same
+    hash bit for bit -- and it is why the per-tick reseed is gone: a tick and a
+    substep index name the sample, so a flight resumed from disk continues into
+    exactly the air it would have flown into anyway.
+    """
+
+    def setUp(self):
+        self.sim = Session.new("a320neo", "stormy", seed=20260905).sim
+
+    def draws(self, ticks=200):
+        out = []
+        for tick in range(ticks):
+            self.sim.state.tick = tick
+            for index in range(100):
+                for axis in range(3):
+                    out.append(self.sim._gust_draw(index, axis))
+        return out
+
+    def test_the_samples_are_actually_standard_normal(self):
+        """A biased gust source would lean the aeroplane one way for ever, and
+        would look exactly like turbulence while doing it."""
+        values = self.draws()
+        mean = sum(values) / len(values)
+        variance = sum((v - mean) ** 2 for v in values) / len(values)
+        self.assertAlmostEqual(mean, 0.0, delta=0.02)
+        self.assertAlmostEqual(variance ** 0.5, 1.0, delta=0.02)
+        # The shape, not just the first two moments: a uniform draw would pass
+        # a mean and a variance check and fail this one.
+        within = sum(1 for v in values if abs(v) < 1.0) / len(values)
+        self.assertAlmostEqual(within, 0.6827, delta=0.01)
+
+    def test_no_axis_is_biased_on_its_own(self):
+        values = self.draws()
+        for axis in range(3):
+            column = values[axis::3]
+            self.assertAlmostEqual(
+                sum(column) / len(column), 0.0, delta=0.03, msg="axis %d" % axis
+            )
+
+    def test_the_same_tick_and_substep_always_give_the_same_gust(self):
+        first = [self.sim._gust_draw(i, 0) for i in range(20)]
+        self.sim.state.tick += 1
+        moved = [self.sim._gust_draw(i, 0) for i in range(20)]
+        self.sim.state.tick -= 1
+        again = [self.sim._gust_draw(i, 0) for i in range(20)]
+        self.assertEqual(first, again)
+        self.assertNotEqual(first, moved, "the tick does not reach the noise")
+
+    def test_a_long_tick_does_not_collide_with_the_next_one(self):
+        """`wait 600 seconds` is six thousand substeps in one tick. Indexing by
+        (tick, substep) rather than by packing them into one integer is what
+        keeps that from reaching into the following tick's samples."""
+        self.sim.state.tick = 4
+        long_tick = {self.sim._gust_draw(i, 0) for i in range(6000)}
+        self.sim.state.tick = 5
+        following = [self.sim._gust_draw(i, 0) for i in range(100)]
+        self.assertEqual(len(long_tick), 6000, "samples repeated within a tick")
+        self.assertFalse(long_tick.intersection(following))
+
+
 class TestAngleHelpers(unittest.TestCase):
     def test_wrap180(self):
         self.assertAlmostEqual(physics.wrap180(190.0), -170.0)

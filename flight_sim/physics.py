@@ -10,7 +10,6 @@ persisted to JSON between turns and resumed exactly.
 """
 
 import math
-import random
 from collections import namedtuple
 from dataclasses import dataclass, field, asdict
 
@@ -25,7 +24,7 @@ from . import navigation
 from . import weather as wx
 from . import airfield
 from .airfield import Airfields
-from .terrain import Terrain
+from .terrain import Terrain, _hash01
 
 TICK_SECONDS = 10.0
 SUBSTEP_S = 0.1
@@ -327,7 +326,6 @@ class Simulator:
         # Turbulence is a filtered random walk rather than white noise, so gusts
         # have believable duration instead of flickering every substep. The
         # filter state lives on FlightState so it survives serialisation.
-        self._rng = random.Random(state.seed * 7919 + state.tick)
         self.route = navigation.Route.from_dict(state.route)
         self._mechanical_turbulence = 0.0
         self._orographic_fpm = 0.0
@@ -754,7 +752,30 @@ class Simulator:
         """
         return min(1.0, self.weather.turbulence + self._mechanical_turbulence)
 
-    def _update_turbulence(self, dt):
+    def _gust_draw(self, index, axis):
+        """A standard-normal sample, from the lattice hash the terrain uses.
+
+        Box-Muller over `terrain._hash01`, which `web/anfell.html` carries bit
+        for bit -- it is what makes a seed grow the same mountains in both
+        builds. Deriving the air from it rather than from a Mersenne Twister is
+        what lets the two builds shake the same way, and it retires the per-tick
+        reseed that stood in for serialising the generator's state: a tick and a
+        substep index name the sample, so a flight resumed from disk continues
+        into exactly the air it would have flown into anyway.
+
+        Indexed by (tick, substep, axis) rather than by packing them into one
+        integer, so there is no arithmetic to overflow and no tick length that
+        could collide with the next tick's samples.
+        """
+        s = self.state
+        salt = s.seed + axis * 7919
+        # log(0) is the one input Box-Muller cannot take, and _hash01's range is
+        # half-open at the bottom.
+        u1 = max(1e-12, _hash01(s.tick, index, salt))
+        u2 = _hash01(s.tick, index, salt + 104729)
+        return math.sqrt(-2.0 * math.log(u1)) * math.cos(2.0 * math.pi * u2)
+
+    def _update_turbulence(self, dt, index=0):
         """Ornstein-Uhlenbeck-ish filtered noise: correlated, bounded gusts."""
         intensity = self._local_turbulence()
         if intensity <= 0.0:
@@ -762,7 +783,7 @@ class Simulator:
         decay = math.exp(-dt / 2.5)  # ~2.5 s correlation time
         turb = self.state.turb
         for i in range(3):
-            turb[i] = turb[i] * decay + self._rng.gauss(0.0, 1.0) * (1.0 - decay) * 3.0
+            turb[i] = turb[i] * decay + self._gust_draw(index, i) * (1.0 - decay) * 3.0
             turb[i] = clamp(turb[i], -3.0, 3.0)
 
     # -- the integrator ------------------------------------------------
@@ -772,12 +793,6 @@ class Simulator:
         s = self.state
         if s.status not in LIVE_STATUSES:
             return self.readout()
-
-        # Re-seed per tick from the tick number, so a flight resumed from disk
-        # produces exactly the same turbulence as one flown straight through.
-        # Serialising the Mersenne Twister state would also work; deriving the
-        # stream from the tick makes the run reproducible however it was reached.
-        self._rng = random.Random(s.seed * 7919 + s.tick)
 
         # Protections are accumulated across the whole tick rather than being
         # whatever happened to be true at the final substep -- a limit that held
@@ -789,11 +804,11 @@ class Simulator:
         previous_x, previous_y = s.x_nm, s.y_nm
         self._refresh_terrain_effects()
 
-        for _ in range(substeps):
+        for index in range(substeps):
             if s.on_ground:
-                self._ground_substep(dt)
+                self._ground_substep(dt, index)
             else:
-                self._substep(dt)
+                self._substep(dt, index)
             if s.status not in LIVE_STATUSES:
                 break
 
@@ -815,10 +830,10 @@ class Simulator:
         s.tick += 1
         return self.readout()
 
-    def _substep(self, dt):
+    def _substep(self, dt, index=0):
         s = self.state
         craft = self.aircraft
-        self._update_turbulence(dt)
+        self._update_turbulence(dt, index)
         # The fan chases the levers before anything reads the thrust, so a
         # command given this substep is felt over the next several.
         engines.spool(s, craft, dt)
@@ -1005,7 +1020,7 @@ class Simulator:
         s.throttle_pct = 0.0
         s.landing_field_ident = field.ident
 
-    def _ground_substep(self, dt):
+    def _ground_substep(self, dt, index=0):
         """On the runway: the takeoff roll and the landing rollout.
 
         One function for both, because it is the same physics either way --
