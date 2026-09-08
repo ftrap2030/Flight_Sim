@@ -12,7 +12,7 @@ than down**, which is what a turbofan does and what makes a late go-around
 frightening -- and thrust follows the fan rather than the lever.
 
 The constraint that makes this safe: at equilibrium the fan has caught up with
-the levers, so *steady-state thrust is unchanged* and the nine calibrated cruise
+the levers, so *steady-state thrust is unchanged* and the calibrated cruise
 figures are exactly as they were. Only the transient moves.
 
 Three kinds of number live here and must not be confused, which is the same

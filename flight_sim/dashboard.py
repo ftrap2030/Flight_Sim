@@ -718,8 +718,8 @@ def fleet_menu(artwork_included=True):
     from . import artwork
 
     lines.append(
-        "*All nine drawn to one scale, from their published dimensions — so the "
-        "sizes are directly comparable.*"
+        "*All {} drawn to one scale, from their published dimensions — so the "
+        "sizes are directly comparable.*".format(len(fleet.FLEET))
     )
     lines.append("")
     for index, craft in enumerate(fleet.FLEET, start=1):

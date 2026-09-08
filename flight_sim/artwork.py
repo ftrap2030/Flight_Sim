@@ -81,6 +81,21 @@ class _Layout:
         self.fus_bottom = self.ground - self.gear_rows
         self.fus_top = self.fus_bottom - self.fus_rows
 
+        # Where the *deck* roof sits, as opposed to the crown of the section.
+        # On every airliner they are the same line. On a Beluga they are not:
+        # the lower lobe is an A330's, and a circular section is as tall as it
+        # is wide, so the flight deck's roof is `fuselage_width_m` above the
+        # belly and the cargo lobe is everything above that. Nothing here is
+        # invented -- the step's height is the difference between the two
+        # published cross-section figures.
+        self.deck_rows = (
+            max(2, int(round(craft.fuselage_width_m * V_SCALE)))
+            if craft.cargo_lobe
+            else self.fus_rows
+        )
+        self.deck_top = min(self.fus_bottom - self.deck_rows, self.fus_bottom - 1)
+        self.lobe_rows = max(0, self.deck_top - self.fus_top)
+
         # Longitudinal stations, as fractions of overall length. These are the
         # proportions common to every Airbus: flight deck in the first tenth,
         # wing box a little behind the midpoint, tail cone over the last fifth.
@@ -112,11 +127,21 @@ class _Layout:
         self.main_gear = max(self.length * 0.50, self.pod_end + 3)
 
         # The fin is laid out backwards from its trailing edge, which on every
-        # Airbus sits just short of the tail cone's end.
-        self.fin_rows = self.fus_top  # cabin roof to fin tip
+        # Airbus sits just short of the tail cone's end. It stands on the tail
+        # cone, and the tail cone is the *deck* roof line -- which is the same
+        # line as the crown on everything but the Beluga.
+        self.fin_rows = self.deck_top  # tail cone roof to fin tip
         self.fin_tip_te = self.length - 2
         self.fin_tip_le = self.fin_tip_te - max(2, self.fin_rows // 2)
         self.fin_base = self.fin_tip_le - self.fin_rows
+
+        # The cargo lobe runs from just behind the flight deck to clear of the
+        # fin's leading edge, rising and falling at forty-five degrees in
+        # character space so its ends read as the near-vertical walls they are.
+        self.lobe_crown_from = self.nose_end + self.lobe_rows
+        self.lobe_crown_to = max(
+            self.lobe_crown_from, self.fin_base - self.lobe_rows - 2
+        )
 
 
 def _trace(canvas, x0, col_from, col_to, row_at, char_flat="_"):
@@ -148,44 +173,71 @@ def _draw_fuselage(canvas, layout, x0):
     airliner's underside really is a straight line for most of its length -- so
     all the shape at the front is in the roof, which is why an A380's forward
     fuselage climbs over three rows and an A319's over one.
+
+    A Beluga inverts that. Its roof is the interesting line: the radome rises
+    only to the flight deck, and the cargo lobe steps up *behind* the deck and
+    runs over the wing before dropping back to the tail cone. On every other
+    type ``deck_top`` and ``fus_top`` are the same row and the step vanishes,
+    so this is one shape, not two.
     """
-    top, bottom = layout.fus_top, layout.fus_bottom
+    deck, bottom = layout.deck_top, layout.fus_bottom
+    top = layout.fus_top
     nose_end, tail_start, length = layout.nose_end, layout.tail_start, layout.length
     tail_span = max(length - tail_start, 1.0)
+    crown_from, crown_to = layout.lobe_crown_from, layout.lobe_crown_to
+    lobe_rows = layout.lobe_rows
 
     def roof(col):
-        if col >= nose_end:
+        if col < nose_end:
+            # sqrt, not linear: the nose rises quickly and then flattens, which
+            # is the shape of a radome rather than a wedge.
+            fraction = math.sqrt(col / max(nose_end, 1.0))
+            return (bottom - 1) - (bottom - 1 - deck) * fraction
+        if not lobe_rows:
+            return deck
+        # Both walls fall at forty-five degrees in character space, which is
+        # what `_trace` draws as a single column of slashes rather than a slope.
+        if col < crown_from:  # the forward wall, behind the flight deck
+            return deck - (col - nose_end)
+        if col <= crown_to:
             return top
-        # sqrt, not linear: the nose rises quickly and then flattens, which is
-        # the shape of a radome rather than a wedge.
-        fraction = math.sqrt(col / max(nose_end, 1.0))
-        return (bottom - 1) - (bottom - 1 - top) * fraction
+        if col >= crown_to + lobe_rows:
+            return deck  # back down onto the tail cone
+        return top + (col - crown_to)
 
     def belly(col):
         if col <= tail_start:
             return bottom
-        return bottom - (bottom - top) * (col - tail_start) / tail_span
+        return bottom - (bottom - deck) * (col - tail_start) / tail_span
 
     _trace(canvas, x0, 0, length, belly)
     _trace(canvas, x0, 0, length, roof)
 
 
 def _draw_cabin(canvas, layout, x0):
-    """Windows, one row per deck, and the flight-deck glazing."""
-    top, bottom = layout.fus_top, layout.fus_bottom
+    """Windows, one row per deck, and the flight-deck glazing.
+
+    A freighter has a flight deck and no cabin, so it gets the glazing and no
+    window rows -- which is what tells the Beluga's forward fuselage from an
+    airliner's at a glance, quite apart from the lobe above it. The rows are
+    placed inside the *deck*, not inside the whole cross-section: a cargo lobe
+    is freight, and nobody sits in it.
+    """
+    top, bottom = layout.deck_top, layout.fus_bottom
     decks = layout.craft.cabin_decks
     interior = list(range(top + 1, bottom + 1))
     if not interior:
         return
 
-    # Space the decks through the cross-section: one row each, from the top.
-    step = max(1, len(interior) // decks)
-    start = int(round(layout.nose_end)) + 2
-    end = int(round(layout.tail_start)) - 1
-    for deck in range(decks):
-        row = interior[min(deck * step, len(interior) - 1)]
-        for col in range(start, end, 2):
-            canvas.put(row, x0 + col, "o")
+    if layout.craft.carries_passengers:
+        # Space the decks through the cross-section: one row each, from the top.
+        step = max(1, len(interior) // decks)
+        start = int(round(layout.nose_end)) + 2
+        end = int(round(layout.tail_start)) - 1
+        for deck in range(decks):
+            row = interior[min(deck * step, len(interior) - 1)]
+            for col in range(start, end, 2):
+                canvas.put(row, x0 + col, "o")
 
     # The flight deck: glazing swept back over the nose.
     canvas.put(interior[0], x0 + int(round(layout.nose_end)) - 1, "\\")
@@ -198,18 +250,39 @@ def _draw_tail(canvas, layout, x0):
         return
     # Leading edge, swept back about 45 degrees in character space.
     for step in range(rows):
-        canvas.put(layout.fus_top - 1 - step, x0 + layout.fin_base + step, "/")
+        canvas.put(layout.deck_top - 1 - step, x0 + layout.fin_base + step, "/")
     # Tip chord, then a near-vertical trailing edge down to the fuselage.
     canvas.hline(0, x0 + layout.fin_tip_le, x0 + layout.fin_tip_te, "_")
-    canvas.vline(x0 + layout.fin_tip_te, 1, layout.fus_top, "|")
+    canvas.vline(x0 + layout.fin_tip_te, 1, layout.deck_top, "|")
     # Tailplane, at the root of the fin, running a little aft of the tail cone
     # so it reads as a surface rather than as more fuselage. Its chord scales
     # with the aeroplane: the A380's is more than twice the A319's, as it is.
     chord = max(4, int(round(layout.craft.length_m * 0.12 * H_SCALE)))
     start = layout.fin_base + 1
-    canvas.hline(
-        layout.fus_top + 1, x0 + start, x0 + min(start + chord, layout.length + 2), "-"
-    )
+    tip = min(start + chord, layout.length + 2)
+    if layout.craft.cargo_lobe:
+        # A Beluga's tailplane is bigger than the A330's it is built on, for
+        # the same reason it carries the endplate fins below: the cargo lobe
+        # blankets the fin and the tail had to grow to get the stability back.
+        tip = layout.length + 2
+    canvas.hline(layout.deck_top + 1, x0 + start, x0 + tip, "-")
+    _draw_auxiliary_fins(canvas, layout, x0, tip)
+
+
+def _draw_auxiliary_fins(canvas, layout, x0, tip_col):
+    """The endplate fins on the tailplane tips, where a type has them.
+
+    Only the Beluga does, and for the same reason it needs them: the cargo lobe
+    blankets the fin, so the tailplane grew a pair of its own to get the
+    directional stability back. Drawn standing on the tailplane's tip, aft of
+    the main fin's trailing edge, which is where the near one appears from
+    abeam.
+    """
+    if not layout.craft.cargo_lobe:
+        return
+    row = layout.deck_top + 1  # the tailplane it stands on
+    canvas.put(row - 1, x0 + tip_col - 1, "/")
+    canvas.put(row - 1, x0 + tip_col, "|")
 
 
 def _draw_belly_fairing(canvas, layout, x0):

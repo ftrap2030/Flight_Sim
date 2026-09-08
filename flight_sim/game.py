@@ -245,8 +245,8 @@ class Session:
             )
             if craft is None:
                 return (
-                    "No such type: `{}`. `fleet` lists the nine.".format(
-                        command.target
+                    "No such type: `{}`. `fleet` lists all {}.".format(
+                        command.target, len(fleet.FLEET)
                     ),
                     False,
                 )
@@ -333,7 +333,9 @@ def choose_aircraft():
             wanted = stripped[4:].strip()
             craft = fleet.resolve(wanted) if wanted else None
             if craft is None:
-                print("`spec a350` — name one of the nine.\n")
+                print(
+                    "`spec a350` — name one of the {}.\n".format(len(fleet.FLEET))
+                )
             else:
                 print(dashboard.spec_card(craft))
                 print()
@@ -342,8 +344,8 @@ def choose_aircraft():
         if craft:
             return craft
         print(
-            "Not one of the nine. Try `1`, `A320neo`, `a350-1000`, `A321XLR`, "
-            "or `spec a380` to see a full card.\n"
+            "Not one of the {}. Try `1`, `A320neo`, `a350-1000`, `BelugaXL`, "
+            "or `spec a380` to see a full card.\n".format(len(fleet.FLEET))
         )
 
 

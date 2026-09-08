@@ -187,7 +187,7 @@ def characteristic_speeds(sim):
 
     # Best lift-to-drag is where induced drag equals profile drag, so
     # CL = sqrt(CD_0 / k). Airbus derives green dot from a rule of thumb on
-    # weight; taking it from the type's own polar keeps it right for all nine.
+    # weight; taking it from the type's own polar keeps it right for every type.
     green_cl = math.sqrt(craft.cd_0 / craft.induced_drag_factor)
 
     # The top of the tape is whichever limit bites first: the airframe's, the
