@@ -1442,6 +1442,12 @@ function touchDown(a, s, groundFt) {
   s.onGround = true; s.status = "rollout";
   s.landingField = field.ident;
   s.rollDirection = field.directionForHeading(s.hdg);
+  /* The main gear straightens the aeroplane on contact. The side load that
+     costs is what gradeTouchdown has just graded, so the crab is a verdict, not
+     a state that survives the wheels -- without this a legal eight-degree crab
+     would drive the aircraft off the runway in about two seconds, now that a
+     heading moves it. */
+  s.hdg = s.rollDirection;
   s.alt = groundFt; s.gamma = 0; s.bank = 0; s.cmdBank = 0;
   s.pitch = 0; s.cmdPitch = 0; s.beta = 0; s.throttle = 0;
 }
@@ -1454,6 +1460,23 @@ function vSpeeds(a, s) {
   return { v1: vs * 1.09, vr: vs * 1.15, v2: vs * 1.20 };
 }
 
+const NOSEWHEEL_RATE_DEG_S = 0.55;
+/* How fast the fin swings the nose toward an uncorrected crosswind. The only
+   invented number in the ground-wind model: *where* the weathervane settles
+   comes from dirStab / rudderPower, which are per type and already calibrated.
+   (physics.WEATHERVANE_RATE_DEG_S) */
+const WEATHERVANE_RATE_DEG_S = 0.06;
+
+/* (headwind, crosswind) along a runway heading, in m/s. The *surface* wind:
+   windAt(0) is 40% of the gradient wind and backed thirty degrees, and that is
+   the layer an aeroplane on its wheels is sitting in. */
+function groundWindMs(s, headingDeg) {
+  const [speedKt, fromDeg] = weather.windAt(0, s.turb[0]);
+  const angle = rad(fromDeg - headingDeg);
+  return [speedKt * Math.cos(angle) * MS_PER_KT,
+          speedKt * Math.sin(angle) * MS_PER_KT];
+}
+
 /* Ground mode, used for both the takeoff roll and the landing rollout. It is
    the same physics either way -- thrust against friction and drag, with the
    wing taking more of the weight the faster it goes -- which is why there is
@@ -1464,9 +1487,20 @@ function groundSubstep(a, s, dt) {
   const field = fieldByIdent(s.landingField);
   if (!field) { endFlight(a, s, "landed"); return; }
 
-  const dir = s.rollDirection, r = rad(dir);
-  const v = Math.max(s.tas, 0);
-  const iasKt = tasToIas(v, s.alt) * KT_PER_MS;
+  const dir = s.rollDirection;
+  /* Resolved in the *runway* frame rather than about the heading, so that
+     within a frame it is a constant offset -- which is what lets the force
+     integration below go on reading true airspeed unchanged. */
+  const [headMs, crossMs] = groundWindMs(s, dir);
+
+  /* Rolling straight down a runway in a crosswind is flying sideways: the air
+     path is offset from the nose even though the wheels are not. Set before the
+     forces are read, so the cost goes through aeroState like every other force
+     rather than being asserted separately. */
+  s.beta = clamp(-deg(Math.atan2(crossMs, Math.max(s.tas, 2))),
+                 -MAX_SIDESLIP, MAX_SIDESLIP);
+
+  const iasKt = tasToIas(Math.max(s.tas, 0), s.alt) * KT_PER_MS;
   const aero = aeroState(a, s);
   const thrust = s.reverse ? -REVERSE_FRACTION * aero.thrust : aero.thrust;
 
@@ -1482,15 +1516,27 @@ function groundSubstep(a, s, dt) {
   const friction = mu * onWheels;
 
   const accel = (thrust - aero.drag - friction) / s.mass;
-  s.tas = Math.max(0, s.tas + accel * dt);
+  /* The floor is the headwind, not zero: it says the wheels cannot turn
+     backwards. Flooring the airspeed instead would let a parked aeroplane in a
+     tailwind taxi itself downwind. */
+  s.tas = Math.max(headMs, s.tas + accel * dt);
+  const groundMs = Math.max(0, s.tas - headMs);
 
-  /* Nosewheel steering while the rudder still has something to push against;
-     above 60 kt the fin takes over and the aircraft weathercocks instead. */
-  if (v * KT_PER_MS > 3) {
+  if (groundMs > 1.5) {
+    /* Nosewheel steering while the rudder still has something to push against,
+       and the weathervane the fin makes as the pedals run out. The two share
+       the one speed term, so the handover happens once. The residual is the net
+       yaw moment in the currency updateSideslip uses in the air: with the
+       pedals centred and the wind on the right, beta is negative and the nose
+       swings right, into wind, which is what weathervaning is. */
     const authority = clamp(1 - (iasKt - 20) / 60, 0.15, 1);
-    s.hdg = wrap360(s.hdg + s.rudder * 0.55 * authority * dt);
+    const residual = s.rudder - (a.dirStab / a.rudderPower) * s.beta;
+    s.hdg = wrap360(s.hdg
+      + s.rudder * NOSEWHEEL_RATE_DEG_S * authority * dt
+      + residual * WEATHERVANE_RATE_DEG_S * (1 - authority) * dt);
+  } else {
+    s.hdg = dir;
   }
-  s.beta = 0;
 
   /* Rotation. The pitch command only bites past Vr, and the aircraft leaves the
      ground when the wing genuinely carries it -- there is no lift-off speed
@@ -1516,8 +1562,13 @@ function groundSubstep(a, s, dt) {
     s.alt = groundFt;
   }
 
-  s.x += Math.sin(r) * s.tas * dt * NM_PER_M;
-  s.y += Math.cos(r) * s.tas * dt * NM_PER_M;
+  /* Along the heading, not along the runway. `rollDirection` stays the runway's
+     own direction -- the frame the centreline offset and the overrun test are
+     measured in -- but the aeroplane goes where its nose points, so that
+     steering it has a consequence. It did not before. */
+  const hr = rad(s.hdg);
+  s.x += Math.sin(hr) * groundMs * dt * NM_PER_M;
+  s.y += Math.cos(hr) * groundMs * dt * NM_PER_M;
   s.t += dt;
   s.maxIas = Math.max(s.maxIas, iasKt);
 
@@ -1533,7 +1584,11 @@ function groundSubstep(a, s, dt) {
   }
   /* Only a landing ends when it stops. A takeoff roll that has not started yet
      is just an aeroplane sitting on the runway. */
-  if (s.touchdown && s.tas * KT_PER_MS < STOPPED_KT) { s.tas = 0; endFlight(a, s, "landed"); }
+  /* What has to stop is the wheels: in a twenty-knot tailwind an airspeed of
+     twenty-four knots is forty-four over the ground. */
+  if (s.touchdown && groundMs * KT_PER_MS < STOPPED_KT) {
+    s.tas = headMs; endFlight(a, s, "landed");
+  }
 }
 
 const fieldByIdent = ident =>
@@ -1614,6 +1669,12 @@ function newFlight(keepView) {
   settleEngines(craft, S);
   clearFailures(S);
   if (armedOnTakeoff) S.armedFailure = ["engine", 0];
+  if (onGround) {
+    /* Stationary over the ground, which is not stationary through the air:
+       lined up into a twenty-knot wind the airspeed indicator already reads
+       twenty, and that is why the roll is shorter. */
+    S.tas = groundWindMs(S, S.rollDirection)[0];
+  }
   if (!onGround) {
     S.pitch = S.cmdPitch = S.lawPitch = levelFlightPitch(craft, S);
     S.throttle = trimThrottle(craft, S);
@@ -3763,15 +3824,26 @@ function updatePanel() {
      air it is in is moving too. The autopilot's NAV channel needs the drift
      angle -- that one term is the whole difference between aiming the nose at
      a waypoint and arriving at it. */
-  const horiz = s.tas * Math.cos(rad(s.gamma));
-  const trackRad = rad(s.hdg - s.beta);
   /* The wind at this height and with this gust, not the profile's headline
      figure -- the same call the integrator makes, so the panel cannot report a
      groundspeed the aeroplane does not have. */
   const [windKt, windFrom] = weather.windAt(agl, s.turb[0]);
-  const windMs = windKt * MS_PER_KT, windTo = rad(windFrom + 180);
-  const vx = horiz * Math.sin(trackRad) + windMs * Math.sin(windTo);
-  const vy = horiz * Math.cos(trackRad) + windMs * Math.cos(windTo);
+  let vx, vy;
+  if (s.onGround) {
+    /* On wheels the aeroplane goes where it points, at the speed the wheels are
+       turning. The sideways component of the wind is carried by the tyres, not
+       by the aeroplane's momentum, so it must not be added here -- a parked
+       A320 in the crosswind profile used to read 45 knots of groundspeed. */
+    const speed = Math.max(0, s.tas - groundWindMs(s, s.rollDirection)[0]);
+    vx = speed * Math.sin(rad(s.hdg));
+    vy = speed * Math.cos(rad(s.hdg));
+  } else {
+    const horiz = s.tas * Math.cos(rad(s.gamma));
+    const trackRad = rad(s.hdg - s.beta);
+    const windMs = windKt * MS_PER_KT, windTo = rad(windFrom + 180);
+    vx = horiz * Math.sin(trackRad) + windMs * Math.sin(windTo);
+    vy = horiz * Math.cos(trackRad) + windMs * Math.cos(windTo);
+  }
   const trackDeg = wrap360(deg(Math.atan2(vx, vy)));
 
   /* Handed to the audio engine and to the autopilot so neither recomputes what

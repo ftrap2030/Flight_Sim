@@ -104,6 +104,38 @@ class TestWindShear(unittest.TestCase):
             self.assertAlmostEqual(speed, 45.0, places=6)
             self.assertAlmostEqual(direction, 270.0, places=6)
 
+    def test_the_crosswind_sign_matches_its_own_docstring(self):
+        """It did not, for as long as nothing but a test in `abs()` read it.
+
+        A sign that has never been exercised is not a convention, it is a
+        coin toss -- and the ground roll now steers by this one.
+        """
+        state = WeatherState(wx.CLEAR, seed=1).hold(
+            wind_speed_kt=20.0, wind_dir_deg=90.0
+        )
+        self.assertAlmostEqual(state.wind_components(0.0)[1], 20.0, places=6)
+        self.assertAlmostEqual(state.wind_components(180.0)[1], -20.0, places=6)
+        self.assertAlmostEqual(state.wind_components(90.0)[0], 20.0, places=6)
+        self.assertAlmostEqual(state.wind_components(270.0)[0], -20.0, places=6)
+
+    def test_the_runway_reads_the_surface_wind_not_the_gradient_wind(self):
+        """Two and a half times too much wind on the wheels, otherwise -- and
+        pointing thirty degrees wrong, which is the half that turns a pure
+        headwind aloft into a crosswind component on the runway."""
+        state = WeatherState(wx.CROSSWIND, seed=1).hold(
+            wind_speed_kt=45.0, wind_dir_deg=0.0
+        )
+        aloft_head, aloft_cross = state.wind_components(0.0)
+        self.assertAlmostEqual(aloft_head, 45.0, places=6)
+        self.assertAlmostEqual(aloft_cross, 0.0, places=6)
+
+        surface_speed = 45.0 * wx.SURFACE_WIND_FRACTION
+        backing = math.radians(wx.SURFACE_BACKING_DEG)
+        head, cross = state.wind_components_at(0.0, 0.0)
+        self.assertAlmostEqual(head, surface_speed * math.cos(backing), places=6)
+        # Backed, so it comes from the left of where it does aloft.
+        self.assertAlmostEqual(cross, -surface_speed * math.sin(backing), places=6)
+
     def test_a_gust_moves_the_wind_about_its_mean(self):
         """`gust_kt` is the peak -- "45 gusting 65" -- so 65 is the top of the
         range, not something added to 45. Reached only at the noise clamp."""

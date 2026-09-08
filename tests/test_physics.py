@@ -9,6 +9,7 @@ from flight_sim import atmosphere as atm
 from flight_sim import autopilot
 from flight_sim import fbw
 from flight_sim import physics
+from flight_sim import weather as wx
 from flight_sim.game import Session
 
 # Cruise fuel flow is strongly weight-dependent, so a target quoted without a
@@ -426,6 +427,225 @@ class TestTurbulenceSource(unittest.TestCase):
         self.assertFalse(long_tick.intersection(following))
 
 
+class TestGroundWind(unittest.TestCase):
+    """Wind on the takeoff roll and the rollout.
+
+    It reached neither before, and in the Python that was an inconsistency
+    rather than merely an omission: `readout()` added the wind to its ground
+    speed while the integrator moved the aeroplane at true airspeed, so a parked
+    A320 in the crosswind profile reported eighteen knots of groundspeed.
+    """
+
+    def setUp(self):
+        # A distinct seed keeps this away from the worlds other tests explore.
+        self.session = Session.new(
+            "a320neo", "clear", seed=20260905, start=physics.RUNWAY_START
+        )
+        self.sim = self.session.sim
+        self.state = self.sim.state
+        self.field = self.sim.airfields.by_ident(
+            self.state.landing_field_ident, self.state.x_nm, self.state.y_nm
+        )
+        self.runway = self.field.runway_heading_deg
+
+    def set_wind(self, head_kt=0.0, cross_kt=0.0):
+        """Put a chosen *surface* wind on the runway.
+
+        The profile's figure is the gradient wind, and the friction layer takes
+        40% of it, so the number that reaches the wheels has to be worked back.
+        """
+        import math as _math
+
+        speed = _math.hypot(head_kt, cross_kt) / wx.SURFACE_WIND_FRACTION
+        bearing = self.runway + _math.degrees(_math.atan2(cross_kt, head_kt))
+        self.sim.weather.hold(
+            wind_speed_kt=speed,
+            wind_dir_deg=(bearing + wx.SURFACE_BACKING_DEG) % 360.0,
+            turbulence=0.0,
+            gust_kt=0.0,
+        )
+        self.state.tas_ms = self.sim.ground_wind_ms(self.runway)[0]
+
+    def roll(self, fly_straight=True):
+        """Full power to lift-off. Returns (feet used, lift-off IAS)."""
+        state, sim, field = self.state, self.sim, self.field
+        state.brakes = 0.0
+        state.throttle_pct = 100.0
+        vr = fbw.takeoff_speeds(sim).vr
+        start = field.frame_for(state.x_nm, state.y_nm, self.runway)[0]
+        used = 0.0
+        for _ in range(4000):
+            readout = sim.readout()
+            if not state.on_ground:
+                return used, readout.ias_kt
+            if readout.ias_kt > vr * physics.ROTATE_MARGIN:
+                state.cmd_pitch_deg = 12.0
+            along, across = field.frame_for(state.x_nm, state.y_nm, self.runway)
+            if fly_straight:
+                # The pilot's feet: hold the runway heading and the centreline.
+                error = physics.wrap180(state.heading_deg - self.runway) + across * 0.01
+                state.rudder_deg = physics.clamp(
+                    state.rudder_deg - error * 2.0, -30.0, 30.0
+                )
+            used = along - start
+            sim.step_tick(0.1)
+            if state.status not in physics.LIVE_STATUSES:
+                return used, None
+        return used, None
+
+    # -- the invariants ------------------------------------------------
+
+    def test_still_air_leaves_the_calibrated_roll_exactly_where_it_was(self):
+        """With no wind every new expression collapses to the old one, so this
+        is the guard that the whole change is a no-op in still air. CLAUDE.md
+        quotes 5,600 ft for this aeroplane in this world."""
+        self.set_wind(0.0)
+        used, _vlo = self.roll()
+        self.assertAlmostEqual(used, 5600.0, delta=25.0)
+
+    def test_lined_up_into_wind_the_asi_reads_and_the_aeroplane_does_not_move(self):
+        """The wind is a true speed, so the indicated one is lower: ANFL sits at
+        4,560 ft and the ASI under-reads by the density ratio, as it does."""
+        self.set_wind(20.0)
+        readout = self.sim.readout()
+        self.assertAlmostEqual(readout.tas_kt, 20.0, delta=0.01)
+        self.assertAlmostEqual(
+            readout.ias_kt,
+            atm.tas_to_ias(20.0 * atm.MS_PER_KT, self.state.altitude_ft)
+            * atm.KT_PER_MS,
+            delta=0.01,
+        )
+        self.assertLess(readout.ias_kt, readout.tas_kt)
+        self.assertAlmostEqual(readout.ground_speed_kt, 0.0, places=6)
+
+    def test_parked_downwind_the_aeroplane_stays_parked(self):
+        """`tas_ms` is negative here -- a pitot tube in reversed flow. Flooring
+        the *airspeed* at zero instead of the groundspeed would have this
+        aeroplane taxi itself downwind at twenty knots with the brakes set."""
+        self.set_wind(-20.0)
+        self.state.brakes = 1.0
+        self.state.throttle_pct = 0.0
+        before = (self.state.x_nm, self.state.y_nm)
+        self.assertLess(self.state.tas_ms, 0.0)
+        for _ in range(8):
+            self.sim.step_tick(1.0)
+        self.assertEqual((self.state.x_nm, self.state.y_nm), before)
+        self.assertAlmostEqual(self.sim.readout().ground_speed_kt, 0.0, places=6)
+        self.assertAlmostEqual(self.sim.readout().ias_kt, 0.0, places=6)
+
+    def test_a_headwind_shortens_the_roll_and_a_tailwind_lengthens_it(self):
+        self.set_wind(0.0)
+        still, _ = self.roll()
+
+        self.setUp()
+        self.set_wind(20.0)
+        head, _ = self.roll()
+
+        self.setUp()
+        self.set_wind(-20.0)
+        tail, _ = self.roll()
+
+        self.assertLess(head, still * 0.85)
+        self.assertGreater(head, still * 0.75)
+        self.assertGreater(tail, still * 1.15)
+        self.assertLess(tail, still * 1.30)
+
+    def test_the_roll_follows_the_square_of_the_groundspeed_at_rotation(self):
+        """The published-physics check. Still air is v_lo^2/2a; with a headwind
+        the aeroplane starts at v = w and covers (v_lo - w)^2/2a over the
+        ground, so the ratio is a pure square law. The model comes in a couple
+        of points shy of it, and that is explainable rather than error: the
+        engines spool as a function of time, not of speed, so the wind does not
+        shorten the thrust-limited first seconds proportionally."""
+        self.set_wind(0.0)
+        still, vlo = self.roll()
+        for headwind in (10.0, 20.0):
+            self.setUp()
+            self.set_wind(headwind)
+            used, _ = self.roll()
+            predicted = still * ((vlo - headwind) / vlo) ** 2
+            self.assertAlmostEqual(used / predicted, 1.0, delta=0.06)
+
+    def test_rotation_happens_at_the_same_airspeed_whatever_the_wind(self):
+        """V-speeds are indicated. Only the ground distance moves."""
+        speeds = []
+        for headwind in (0.0, 20.0, -20.0):
+            self.setUp()
+            self.set_wind(headwind)
+            _used, vlo = self.roll()
+            speeds.append(vlo)
+        self.assertAlmostEqual(max(speeds), min(speeds), delta=1.5)
+
+    # -- the crosswind -------------------------------------------------
+
+    def test_rolling_in_a_crosswind_is_flying_sideways(self):
+        """Beta is set on the ground rather than zeroed, so the cost goes
+        through _aero_state like every other force instead of being asserted."""
+        self.set_wind(0.0, 15.0)
+        self.state.brakes = 0.0
+        self.state.throttle_pct = 100.0
+        self.sim.step_tick(6.0)
+        # Wind from the right puts the air path right of the nose: beta < 0.
+        self.assertLess(self.state.sideslip_deg, -1.0)
+        self.set_wind(0.0, -15.0)
+        self.sim.step_tick(1.0)
+        self.assertGreater(self.state.sideslip_deg, 1.0)
+
+    def test_a_crosswind_costs_a_little_runway(self):
+        self.set_wind(0.0)
+        still, _ = self.roll()
+        for crosswind, most in ((15.0, 0.02), (35.0, 0.05)):
+            self.setUp()
+            self.set_wind(0.0, crosswind)
+            used, _ = self.roll()
+            self.assertGreater(used, still)
+            self.assertLess(used, still * (1.0 + most))
+
+    def test_the_demonstrated_crosswind_is_flyable(self):
+        """An A320's demonstrated crosswind is about 38 knots. It has to be
+        holdable on less than the rudder available, or the fin is wrong."""
+        self.set_wind(0.0, 38.0)
+        state = self.state
+        state.brakes = 0.0
+        state.throttle_pct = 100.0
+        worst_offset = 0.0
+        held = 0.0
+        for _ in range(600):
+            if not state.on_ground or state.status not in physics.LIVE_STATUSES:
+                break
+            _along, across = self.field.frame_for(state.x_nm, state.y_nm, self.runway)
+            error = physics.wrap180(state.heading_deg - self.runway) + across * 0.01
+            state.rudder_deg = physics.clamp(state.rudder_deg - error * 2.0, -30.0, 30.0)
+            worst_offset = max(worst_offset, abs(across))
+            held = max(held, abs(state.rudder_deg))
+            self.sim.step_tick(0.1)
+        self.assertLess(worst_offset, self.field.runway_width_ft / 2.0)
+        self.assertLess(held, 30.0, "ran out of rudder below the demonstrated wind")
+
+    def test_left_alone_in_a_crosswind_it_weathervanes_off_the_runway(self):
+        """Which is what an aeroplane does, and why the pedals are not optional."""
+        self.set_wind(0.0, 18.0)
+        used, _vlo = self.roll(fly_straight=False)
+        self.assertEqual(self.state.status, physics.OVERRUN)
+
+    def test_steering_now_moves_the_aeroplane(self):
+        """It did not. Full rudder held through a roll swung the heading a
+        hundred and seventy degrees off the runway and left the aircraft exactly
+        on the centreline, still accelerating -- because the position was
+        advanced along the frozen runway direction rather than the heading."""
+        self.set_wind(0.0)
+        state = self.state
+        state.brakes = 0.0
+        state.throttle_pct = 100.0
+        for _ in range(120):
+            state.rudder_deg = 25.0
+            self.sim.step_tick(0.1)
+            if not state.on_ground or state.status not in physics.LIVE_STATUSES:
+                break
+        _along, across = self.field.frame_for(state.x_nm, state.y_nm, self.runway)
+        self.assertGreater(abs(across), 20.0)
+
+
 class TestAngleHelpers(unittest.TestCase):
     def test_wrap180(self):
         self.assertAlmostEqual(physics.wrap180(190.0), -170.0)
@@ -477,6 +697,14 @@ class TestTakeoff(unittest.TestCase):
     """The departure. The Python had none of this until the browser grew one."""
 
     def test_a_runway_start_is_stationary_on_the_paving(self):
+        """Stationary over the *ground*, which is not stationary through the air.
+
+        This used to assert `tas_ms == 0`, which was the same statement only
+        because the wind did not reach the runway. Lined up into a wind the
+        airspeed indicator already reads it, and lined up downwind `tas_ms` goes
+        negative -- a pitot tube in reversed flow, which `readout()` floors at
+        zero, as a real one does.
+        """
         session = on_the_runway()
         state = session.sim.state
         field = session.sim.airfields.by_ident(
@@ -484,7 +712,12 @@ class TestTakeoff(unittest.TestCase):
         )
         self.assertTrue(state.on_ground)
         self.assertEqual(state.status, physics.ROLLOUT)
-        self.assertAlmostEqual(state.tas_ms, 0.0)
+        self.assertAlmostEqual(session.sim.readout().ground_speed_kt, 0.0, places=6)
+        self.assertAlmostEqual(
+            state.tas_ms,
+            session.sim.ground_wind_ms(field.runway_heading_deg)[0],
+            places=9,
+        )
         self.assertTrue(field.is_over_runway(state.x_nm, state.y_nm))
         # Lined up, brakes set, and configured for the speeds it will be flown at.
         self.assertAlmostEqual(state.heading_deg, field.runway_heading_deg, places=6)

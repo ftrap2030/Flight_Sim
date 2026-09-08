@@ -24,6 +24,19 @@ from dataclasses import dataclass, field
 from .terrain import _value_noise
 
 
+def _components(speed_kt, from_deg, heading_deg):
+    """Head- and crosswind, in knots, for a wind blowing *from* `from_deg`.
+
+    Positive headwind means wind on the nose; positive crosswind means wind
+    from the right. One owner for the convention, because getting the sign of a
+    crosswind wrong is invisible until something steers by it -- which is
+    exactly what happened: the sign was the opposite of the docstring's for as
+    long as nothing but a test in `abs()` had ever read it.
+    """
+    angle = math.radians(from_deg - heading_deg)
+    return speed_kt * math.cos(angle), speed_kt * math.sin(angle)
+
+
 @dataclass(frozen=True)
 class Weather:
     key: str
@@ -53,15 +66,14 @@ class Weather:
         return "EXTREME"
 
     def wind_components(self, heading_deg):
-        """Headwind and crosswind components in knots for a given heading.
+        """Headwind and crosswind at the gradient wind, for a given heading.
 
-        Positive headwind means wind on the nose; positive crosswind means wind
-        from the right.
+        For the wind an aeroplane on its wheels is actually in, use
+        `WeatherState.wind_components_at`: the surface is 40% of this and backed
+        thirty degrees, and quoting the gradient figure on the runway would
+        overstate the wind by two and a half times.
         """
-        angle = math.radians(self.wind_dir_deg - heading_deg)
-        headwind = self.wind_speed_kt * math.cos(angle)
-        crosswind = -self.wind_speed_kt * math.sin(angle)
-        return headwind, crosswind
+        return _components(self.wind_speed_kt, self.wind_dir_deg, heading_deg)
 
 
 CLEAR = Weather(
@@ -261,6 +273,15 @@ class WeatherState:
 
     def wind_components(self, heading_deg):
         return Weather.wind_components(self, heading_deg)
+
+    def wind_components_at(self, heading_deg, agl_ft, gust_sample=0.0):
+        """Head- and crosswind at a height above the ground.
+
+        What the ground roll reads, because an aeroplane on its wheels is
+        sitting in the friction layer and not in the gradient wind above it.
+        """
+        speed, direction = self.wind_at(agl_ft, gust_sample)
+        return _components(speed, direction, heading_deg)
 
     # -- wind as a function of height ----------------------------------
 

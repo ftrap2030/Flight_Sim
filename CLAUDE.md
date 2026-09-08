@@ -6,7 +6,7 @@ Python is stdlib only, `unittest`, no dependencies.
 
 ```bash
 python main.py                                  # play it
-python -m unittest discover -s tests -t .       # 454 tests, ~70 s
+python -m unittest discover -s tests -t .       # 477 tests, ~90 s
 python main.py --list                           # fleet and weather menus
 python main.py --spec a350-1000                 # one type's card and drawing
 open web/anfell.html                            # the browser build
@@ -169,7 +169,7 @@ has an owner.
 
 ## Testing patterns
 
-- One test file per module, named for it. 454 tests, ~70 s.
+- One test file per module, named for it. 477 tests, ~90 s.
 - Assert against **published figures** where they exist: ISA density tables,
   cruise fuel flow, service ceilings, Vmca. These catch calibration drift that
   self-consistent tests never would.
@@ -273,6 +273,57 @@ multiplied the friction by 1.25 instead, which asserted the effect rather than
 explaining it. Forgetting the spoilers now costs about fifteen hundred feet of
 runway, which is roughly right.
 
+### On the ground, `tas_ms` is the signed along-runway *airspeed*
+
+Not the groundspeed. Every force reads airspeed, so keeping it in that currency
+leaves the whole force model untouched by the wind; the groundspeed the wheels
+are doing is `tas_ms - headwind`, and it is that which moves the aeroplane.
+Standing still in a twenty-knot headwind the airspeed indicator reads twenty and
+the aeroplane does not move, which is what the real one does and is exactly why
+the roll is shorter. Parked downwind `tas_ms` goes *negative* — a pitot tube in
+reversed flow, which `readout()` floors at zero, as a real one does.
+
+Two consequences that are easy to get wrong, and each has a test:
+
+- **The integration floor is the headwind, not zero.** It says the wheels cannot
+  turn backwards. Flooring the airspeed instead lets a parked aeroplane in a
+  tailwind taxi itself downwind at twenty knots with the brakes set.
+- **`STOPPED_KT` is a groundspeed.** In a twenty-knot tailwind an airspeed of
+  twenty-four knots is forty-four over the ground, with the far end arriving.
+
+A twenty-knot surface headwind takes an A320neo's roll from 5,600 ft to 4,467,
+and a twenty-knot tailwind stretches it to 6,859. Both track `((v_lo ∓ w)/v_lo)²`
+a couple of points shy, which is explainable rather than error: the engines
+spool as a function of *time*, so the wind does not shorten the thrust-limited
+first seconds proportionally.
+
+### The lateral wind is not added to the aeroplane's motion
+
+On wheels the side force goes into the tyres — an airliner does not slide
+sideways down a runway at forty-five knots — so adding a lateral term would
+assert a drift rather than explain one, which is the `×1.25` mistake again. What
+a crosswind does instead is two things that were already nearly here:
+
+1. It **weathervanes** the nose, which the code's own comment promised and
+   nothing implemented. Where it settles comes from `directional_stability /
+   rudder_power`, per type and already calibrated, so only the *rate*
+   (`WEATHERVANE_RATE_DEG_S`) is invented.
+2. The aeroplane travels along its **heading**, not along `roll_direction_deg`.
+   That stays the runway's frame, which is what the centreline offset and the
+   overrun test are measured in. Before this, steering did nothing: full rudder
+   held through a takeoff roll swung the heading a hundred and seventy degrees
+   off the runway and left the aircraft exactly on the centreline, accelerating.
+
+The drift then falls out rather than being modelled. A 38 kt crosswind — the
+A320's demonstrated figure — is holdable on 18° of the 30° of rudder available,
+and costs about 3% of the roll; left alone the aeroplane weathervanes off the
+side, which is why the pedals are not optional.
+
+`_touch_down` straightens the aeroplane on contact, because the main gear does.
+The crab is graded first and is therefore a verdict, not a state that survives
+the wheels — without that a legal eight-degree crab would drive the aircraft off
+a runway in about two seconds now that a heading moves it.
+
 ## `web/` is a port of this model, not a second one
 
 `web/anfell.html` carries the atmosphere, the drag polar, the thrust lapse, the
@@ -301,9 +352,14 @@ one second into running down does not.
 
 The two builds are also flown against each other rather than only sampled: the
 same world (seed 20260905 grows the same ANFL, to every printed digit), the same
-A320neo at 71.19 t, wind zeroed, levers to 100% — 5,600 ft of ground roll in the
-Python and 5,630 ft in the browser, 0.5% apart, with the residue explained by
-the Python script's coarser control cadence.
+A320neo at 71.19 t, levers to 100%. In still air that is 5,600 ft of ground roll
+in the Python and 5,620 in the browser, and the agreement holds across the wind
+— head, tail and cross, from 5 to 30 knots — to **0.38%**, with the residue
+explained by the two scripts' control cadences.
+
+The weather itself agrees to 4.8e-4 across four profiles, four elapsed times,
+five heights and a hundred and twenty points of terrain, and the turbulence
+agrees to one ULP because both builds draw it from the same lattice hash.
 
 Only rendering exists solely in the browser now. Nothing in `flight_sim/` may
 import from or depend on `web/`.

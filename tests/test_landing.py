@@ -370,7 +370,48 @@ class TestRollout(unittest.TestCase):
         session, field, used = self.rolled_out()
         self.assertEqual(session.sim.state.status, physics.LANDED)
         self.assertLess(used, field.runway_length_ft)
-        self.assertLess(session.sim.readout().tas_kt, landing.STOPPED_KT)
+        # Groundspeed, not airspeed: what has to stop is the wheels. In a
+        # twenty-knot tailwind an airspeed of twenty-four knots is forty-four
+        # over the ground, with the far end still arriving.
+        self.assertLess(session.sim.readout().ground_speed_kt, landing.STOPPED_KT)
+
+    def test_the_wind_reaches_the_rollout_too(self):
+        """The ground roll is one function read in two directions, so a headwind
+        that shortens a takeoff has to shorten a landing as well."""
+        def rollout_with(head_kt):
+            session, field, _d = place_on_final(distance_nm=0.2)
+            for _ in range(40):
+                session.sim.step_tick(1.0)
+                if session.sim.state.status != physics.FLYING:
+                    break
+            state = session.sim.state
+            direction = state.roll_direction_deg
+            session.sim.weather.hold(
+                wind_speed_kt=abs(head_kt) / 0.40,
+                wind_dir_deg=(direction + (0.0 if head_kt >= 0 else 180.0) + 30.0) % 360.0,
+                turbulence=0.0, gust_kt=0.0,
+            )
+            state.brakes = 1.0
+            state.reverse_thrust = True
+            state.spoilers = True
+            start = field.frame_for(state.x_nm, state.y_nm, direction)[0]
+            for _ in range(120):
+                session.sim.step_tick(1.0)
+                if session.sim.state.status not in physics.LIVE_STATUSES:
+                    break
+            end = field.frame_for(state.x_nm, state.y_nm, direction)[0]
+            return session, end - start
+
+        _s, still = rollout_with(0.0)
+        _s, into_wind = rollout_with(20.0)
+        downwind_session, downwind = rollout_with(-20.0)
+        self.assertLess(into_wind, still * 0.92)
+        self.assertGreater(downwind, still * 1.08)
+        # And it stopped for the right reason: the wheels, not the pitot tube.
+        if downwind_session.sim.state.status == physics.LANDED:
+            self.assertLess(
+                downwind_session.sim.readout().ground_speed_kt, landing.STOPPED_KT
+            )
 
     def test_braking_shortens_the_roll(self):
         _s1, _f1, with_brakes = self.rolled_out(brakes=True, reverse=True)

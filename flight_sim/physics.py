@@ -55,6 +55,14 @@ VMC_SIDESLIP_DEG = 12.0  # beta beyond this with an engine out is losing it
 NOSEWHEEL_RATE_DEG_S = 0.55
 ROTATE_MARGIN = 0.98
 MAX_ROTATION_DEG = 15.0
+# How fast the fin swings the nose toward an uncorrected crosswind. A handling
+# constant, and the only invented number in the ground-wind model: *where* the
+# weathervane settles comes from `directional_stability / rudder_power`, which
+# are per-type and already calibrated, so only the rate of getting there is
+# chosen. At this value an A320neo in the crosswind profile's eighteen knots
+# wanders off a 150-foot runway in about ten seconds if the pilot does nothing,
+# against nosewheel authority an order of magnitude larger.
+WEATHERVANE_RATE_DEG_S = 0.06
 
 LOW_FUEL_FRACTION = 0.05
 GPWS_HARD_FT = 500.0
@@ -428,7 +436,10 @@ class Simulator:
         s.heading_deg = direction
         s.roll_direction_deg = direction
         s.altitude_ft = self.terrain.elevation(s.x_nm, s.y_nm)
-        s.tas_ms = 0.0
+        # Stationary over the ground, which is not the same as stationary
+        # through the air: lined up into a twenty-knot wind the airspeed
+        # indicator already reads twenty, and that is why the roll is shorter.
+        s.tas_ms = self.ground_wind_ms(direction)[0]
         s.pitch_deg = s.cmd_pitch_deg = 0.0
         s.bank_deg = s.cmd_bank_deg = 0.0
         s.gamma_deg = 0.0
@@ -663,6 +674,19 @@ class Simulator:
             thrust=self._thrust_n(),
         )
 
+    def ground_wind_ms(self, heading_deg, index=0):
+        """(headwind, crosswind) along a runway heading, in m/s.
+
+        The *surface* wind: `wind_at(0)` is 40% of the gradient wind and backed
+        thirty degrees, and that is the layer an aeroplane on its wheels is
+        sitting in. Quoting the gradient figure on the runway would overstate
+        the wind by two and a half times.
+        """
+        head_kt, cross_kt = self.weather.wind_components_at(
+            heading_deg, 0.0, self.state.turb[0]
+        )
+        return head_kt * atm.MS_PER_KT, cross_kt * atm.MS_PER_KT
+
     def _velocity_over_ground_ms(self, tas_ms):
         """Ground velocity components (east, north) in m/s.
 
@@ -671,6 +695,22 @@ class Simulator:
         Wind is then added on top.
         """
         s = self.state
+        if s.on_ground:
+            # On wheels the aeroplane goes where it points, at the speed the
+            # wheels are turning. The sideways component of the wind is carried
+            # by the tyres, not by the aeroplane's momentum -- so it must not be
+            # added here, or the panel would report a groundspeed the integrator
+            # does not produce. It used to: a parked A320 in the crosswind
+            # profile read eighteen knots of groundspeed.
+            head_ms, _cross_ms = self.ground_wind_ms(s.roll_direction_deg
+                                                     if s.roll_direction_deg is not None
+                                                     else s.heading_deg)
+            # `s.tas_ms`, not the argument: callers floor airspeed at zero for
+            # display, and on the ground that floor would turn the negative
+            # airspeed of an aeroplane parked downwind into positive groundspeed.
+            speed = max(0.0, s.tas_ms - head_ms)
+            heading_rad = math.radians(s.heading_deg)
+            return speed * math.sin(heading_rad), speed * math.cos(heading_rad)
         horizontal_ms = tas_ms * math.cos(math.radians(s.gamma_deg))
         air_track_rad = math.radians(s.heading_deg - s.sideslip_deg)
         # Wind is a function of height: surface friction slows and backs it, so
@@ -1019,6 +1059,13 @@ class Simulator:
         s.sideslip_deg = 0.0
         s.throttle_pct = 0.0
         s.landing_field_ident = field.ident
+        # The main gear straightens the aeroplane on contact. The side load that
+        # costs is what MAX_TOUCHDOWN_CRAB_DEG has just graded, two lines above
+        # -- so the crab is a verdict, not a state that survives the wheels.
+        # Without this a legal eight-degree crab would drive the aircraft off a
+        # 150-foot runway in about two seconds, now that a heading moves it.
+        s.roll_direction_deg = field.landing_direction_for_heading(s.heading_deg)
+        s.heading_deg = s.roll_direction_deg
 
     def _ground_substep(self, dt, index=0):
         """On the runway: the takeoff roll and the landing rollout.
@@ -1027,6 +1074,22 @@ class Simulator:
         thrust against friction and drag, with the wing taking more of the
         weight the faster it goes. Which of the two this is depends on
         `touchdown`: a roll that has not landed from anywhere is a departure.
+
+        **`tas_ms` is the signed along-runway airspeed here, not the
+        groundspeed.** Every force reads airspeed, so keeping it in that
+        currency leaves the whole force model untouched by the wind; the
+        groundspeed the wheels are doing is `tas_ms - headwind`, and it is that
+        which moves the aeroplane. Standing still in a twenty-knot headwind, the
+        airspeed indicator reads twenty and the aeroplane does not move, which
+        is what the real one does and is exactly why the roll is shorter. In a
+        tailwind `tas_ms` goes negative at rest, which is a pitot tube in
+        reversed flow; `readout()` already floors it at zero.
+
+        The lateral wind is *not* added to the aeroplane's motion. On wheels the
+        side force goes into the tyres, not into the aeroplane's momentum -- an
+        airliner does not slide sideways down a runway at forty-five knots. What
+        a crosswind does instead is weathervane the nose, and the aeroplane then
+        goes where it is pointing.
         """
         s = self.state
         craft = self.aircraft
@@ -1048,23 +1111,56 @@ class Simulator:
         if s.roll_direction_deg is None:
             s.roll_direction_deg = field.landing_direction_for_heading(s.heading_deg)
         direction = s.roll_direction_deg
-        rad = math.radians(direction)
+
+        # Resolved in the *runway* frame rather than about the heading, so that
+        # within a tick it is a constant offset -- which is what lets the force
+        # integration below go on reading true airspeed unchanged.
+        headwind_ms, crosswind_ms = self.ground_wind_ms(direction, index)
+
+        # Rolling straight down a runway in a crosswind is flying sideways: the
+        # air path is offset from the nose even though the wheels are not. Set
+        # before the forces are read, so the cost goes through _aero_state like
+        # every other force rather than being asserted separately.
+        s.sideslip_deg = clamp(
+            -math.degrees(math.atan2(crosswind_ms, max(s.tas_ms, 2.0))),
+            -MAX_SIDESLIP_DEG,
+            MAX_SIDESLIP_DEG,
+        )
 
         thrust, drag, friction = landing.ground_forces(self)
-        s.tas_ms = max(0.0, s.tas_ms + (thrust - drag - friction) / s.mass_kg * dt)
-        ias_kt = atm.tas_to_ias(s.tas_ms, s.altitude_ft) * atm.KT_PER_MS
+        # The floor is the headwind, not zero: it says the wheels cannot turn
+        # backwards. Flooring the airspeed instead would let a parked aeroplane
+        # in a tailwind taxi itself downwind.
+        s.tas_ms = max(
+            headwind_ms, s.tas_ms + (thrust - drag - friction) / s.mass_kg * dt
+        )
+        ground_ms = max(0.0, s.tas_ms - headwind_ms)
+        ias_kt = atm.tas_to_ias(max(s.tas_ms, 0.0), s.altitude_ft) * atm.KT_PER_MS
 
-        # Nosewheel steering, while the rudder pedals still have something to
-        # push against. Above sixty knots or so the fin takes over and the
-        # aircraft weathercocks instead of steering.
-        if s.tas_ms > 1.5:
+        if ground_ms > 1.5:
+            # Nosewheel steering, while the rudder pedals still have something
+            # to push against, and the weathervane the fin makes as the pedals
+            # run out. The two share the one speed term, so the handover happens
+            # once: nosewheel authority falls as the fin's rises.
             authority = clamp(1.0 - (ias_kt - 20.0) / 60.0, 0.15, 1.0)
+            # The net yaw moment, in the same currency `_update_sideslip` uses
+            # in the air: the rudder's moment against the fin's weathercock
+            # moment, normalised by rudder power so it reads as degrees of
+            # rudder. With the pedals centred and the wind on the right, beta is
+            # negative and the residual is positive -- the nose swings right,
+            # into wind, which is what weathervaning is. Cn_beta / Cn_delta_r is
+            # per type and already calibrated, so *where* it balances is not a
+            # new number; only the rate of getting there is.
+            residual_deg = s.rudder_deg - (
+                craft.directional_stability / craft.rudder_power
+            ) * s.sideslip_deg
             s.heading_deg = wrap360(
-                s.heading_deg + s.rudder_deg * NOSEWHEEL_RATE_DEG_S * authority * dt
+                s.heading_deg
+                + s.rudder_deg * NOSEWHEEL_RATE_DEG_S * authority * dt
+                + residual_deg * WEATHERVANE_RATE_DEG_S * (1.0 - authority) * dt
             )
         else:
             s.heading_deg = direction
-        s.sideslip_deg = 0.0
         s.bank_deg = s.cmd_bank_deg = 0.0
         s.gamma_deg = 0.0
 
@@ -1095,8 +1191,16 @@ class Simulator:
 
         if s.on_ground:
             s.altitude_ft = ground_ft
-        s.x_nm += math.sin(rad) * s.tas_ms * dt * atm.NM_PER_M
-        s.y_nm += math.cos(rad) * s.tas_ms * dt * atm.NM_PER_M
+        # Along the heading, not along the runway. `roll_direction_deg` stays
+        # the runway's own direction -- the frame the centreline offset and the
+        # overrun test are measured in -- but the aeroplane goes where its nose
+        # points, so that steering it has a consequence. It did not before: full
+        # rudder held through a takeoff roll swung the heading a hundred and
+        # seventy degrees off the runway and left the aircraft exactly on the
+        # centreline, still accelerating.
+        heading_rad = math.radians(s.heading_deg)
+        s.x_nm += math.sin(heading_rad) * ground_ms * dt * atm.NM_PER_M
+        s.y_nm += math.cos(heading_rad) * ground_ms * dt * atm.NM_PER_M
 
         if self._thrust_n() > 0.0 and not s.reverse_thrust:
             burn = min(
@@ -1108,16 +1212,20 @@ class Simulator:
         if not s.on_ground:
             return
 
-        along, _across = field.frame_for(s.x_nm, s.y_nm, direction)
-        if along > field.runway_length_ft:
+        along, across = field.frame_for(s.x_nm, s.y_nm, direction)
+        # Off the end, or off the side. The lateral one is new and is only
+        # reachable now that steering moves the aeroplane; the browser has had
+        # it since it grew a takeoff, on the same threshold.
+        if along > field.runway_length_ft or abs(across) > field.runway_width_ft * 3.0:
             self._record_impact()
             s.status = OVERRUN
             return
 
-        # Only an arrival ends when it stops. A takeoff roll that has not begun
-        # yet is an aeroplane sitting on a runway, not a completed flight.
-        if not departing and s.tas_ms * atm.KT_PER_MS < landing.STOPPED_KT:
-            s.tas_ms = 0.0
+        # Only an arrival ends when it stops, and it is the *wheels* that have
+        # to stop: in a twenty-knot tailwind an airspeed of twenty-four knots is
+        # forty-four over the ground, with the far end still arriving.
+        if not departing and ground_ms * atm.KT_PER_MS < landing.STOPPED_KT:
+            s.tas_ms = headwind_ms
             s.status = LANDED
 
     def _record_flight(self, previous_x, previous_y):
