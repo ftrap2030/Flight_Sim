@@ -24,6 +24,7 @@ CRUISE_TARGETS = {
     "a320neo": (35000, 2000, 71.3),
     "a321": (35000, 2300, 85.1),
     "a321xlr": (35000, 2600, 94.3),
+    "a330-800": (37000, 5750, 224.0),
     "a330neo": (37000, 6050, 235.0),
     "a350": (37000, 5800, 252.4),
     "a350k": (37000, 6700, 285.0),
@@ -128,7 +129,8 @@ class TestPublishedPerformance(unittest.TestCase):
         }
         families = {
             "a319neo": "LEAP", "a320": "CFM56", "a320neo": "LEAP",
-            "a321": "LEAP", "a321xlr": "LEAP", "a330neo": "Trent 7000",
+            "a321": "LEAP", "a321xlr": "LEAP",
+            "a330-800": "Trent 7000", "a330neo": "Trent 7000",
             "a350": "Trent XWB", "a350k": "Trent XWB", "a380": "Trent 970",
         }
         for key, family in families.items():

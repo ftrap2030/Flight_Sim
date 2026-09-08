@@ -7,13 +7,13 @@ from flight_sim import atmosphere as atm
 
 
 class TestFleetData(unittest.TestCase):
-    def test_nine_aircraft(self):
-        self.assertEqual(len(fleet.FLEET), 9)
+    def test_the_fleet_is_what_it_says_it_is(self):
+        self.assertEqual(len(fleet.FLEET), 10)
         self.assertEqual(
             [a.key for a in fleet.FLEET],
             [
                 "a319neo", "a320", "a320neo", "a321", "a321xlr",
-                "a330neo", "a350", "a350k", "a380",
+                "a330-800", "a330neo", "a350", "a350k", "a380",
             ],
         )
 
@@ -57,9 +57,10 @@ class TestFleetData(unittest.TestCase):
         self.assertGreater(fleet.A321XLR.range_nm, fleet.A321.range_nm)
 
     def test_resolve_accepts_menu_numbers_and_names(self):
-        self.assertIs(fleet.resolve("1"), fleet.A319NEO)
-        self.assertIs(fleet.resolve("2"), fleet.A320)
-        self.assertIs(fleet.resolve("9"), fleet.A380)
+        """Names, not digits -- `test_menu_numbers_track_the_fleet_order` owns
+        those, and owns them structurally. A digit written down here is a third
+        copy of the fleet order and goes stale the moment a type is inserted,
+        which is what `resolve("9")` did when the A330-800 went in."""
         self.assertIs(fleet.resolve("A320neo"), fleet.A320NEO)
         self.assertIs(fleet.resolve("  a350  "), fleet.A350)
         self.assertIs(fleet.resolve("A380-800"), fleet.A380)
@@ -68,6 +69,11 @@ class TestFleetData(unittest.TestCase):
         self.assertIs(fleet.resolve("a35k"), fleet.A350K)
         self.assertIs(fleet.resolve("A321XLR"), fleet.A321XLR)
         self.assertIs(fleet.resolve("A330-900"), fleet.A330NEO)
+        self.assertIs(fleet.resolve("A330-800"), fleet.A330_800)
+        self.assertIs(fleet.resolve("a338"), fleet.A330_800)
+        # Bare "a330" is the -900 deliberately: an ambiguous alias that quietly
+        # picks the rarer of two is worse than no alias.
+        self.assertIs(fleet.resolve("a330"), fleet.A330NEO)
         self.assertIs(fleet.resolve("A319neo"), fleet.A319NEO)
         self.assertIsNone(fleet.resolve("boeing 737"))
         self.assertIsNone(fleet.resolve(None))

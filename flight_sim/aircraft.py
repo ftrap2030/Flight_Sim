@@ -482,6 +482,66 @@ A321XLR = Aircraft(
     ),
 )
 
+A330_800 = Aircraft(
+    key="a330-800",
+    name="A330-800neo",
+    icao_type="A338",
+    engines="2 x Rolls-Royce Trent 7000-72 (324.0 kN each)",
+    entry_service=2020,
+    # The same wing and the same engines as the -900. Everything that tells the
+    # two apart is 4.84 m of fuselage and the weight that comes with it, which
+    # is exactly the kind of difference this model is supposed to produce rather
+    # than be told.
+    wing_area_m2=361.6,
+    wing_span_m=64.00,
+    length_m=58.82,
+    height_m=17.39,
+    fuselage_width_m=5.64,
+    fuselage_height_m=5.64,
+    wing_sweep_deg=30.0,
+    wingtip="composite sharklets",
+    oew_kg=132000.0,
+    mtow_kg=251000.0,
+    mlw_kg=186000.0,
+    mzfw_kg=176000.0,
+    payload_kg=36000.0,
+    fuel_capacity_l=139090.0,
+    start_fuel_kg=56000.0,
+    seats_typical=257,
+    seats_max=406,
+    range_nm=8150.0,
+    thrust_sl_n=648000.0,
+    tsfc=1.42e-5,  # the same Trent 7000 as the -900, so the same figure
+    # Solved, like every other drag polar here, against a published cruise burn
+    # -- but with the TSFC inherited rather than solved, because it is the same
+    # Trent 7000. Less wetted area for the same span, so it comes out marginally
+    # the cleaner of the two, and its L/D of 19.5 against the -900's 19.3 is the
+    # arithmetic agreeing with the shape.
+    cd_0=0.01834,
+    oswald_e=0.82,
+    mach_crit=0.835,
+    vmo_kt=330.0,
+    mmo=0.86,
+    ceiling_ft=41450.0,
+    cruise_mach=0.82,
+    roll_rate_deg_s=10.6,
+    pitch_rate_deg_s=2.45,
+    engine_arms_m=(-10.0, 10.0),
+    rudder_power=0.0024,
+    dihedral_effect=0.50,
+    yaw_tau_s=2.65,
+    handling=(
+        "The -900's shorter sister, and the fleet's demonstration that a "
+        "difference can be emergent rather than declared: same wing, same "
+        "engines, 4.84 m less aeroplane. Five tonnes lighter over the same "
+        "364 square metres, so it carries a lower wing loading, stalls slower "
+        "and climbs better -- and reaches nearly a thousand miles further on "
+        "the same tanks, because the fuselage it is not carrying is drag it "
+        "does not pay for. The trade is thirty passengers."
+    ),
+)
+
+
 A330NEO = Aircraft(
     key="a330neo",
     name="A330-900neo",
@@ -686,6 +746,7 @@ FLEET = [
     A320NEO,
     A321,
     A321XLR,
+    A330_800,
     A330NEO,
     A350,
     A350K,
@@ -696,15 +757,6 @@ FLEET_BY_KEY = {a.key: a for a in FLEET}
 # Accept the obvious things a pilot might type at the selection menu. The bare
 # digits are the menu numbers and so must track the order of FLEET.
 _ALIASES = {
-    "1": "a319neo",
-    "2": "a320",
-    "3": "a320neo",
-    "4": "a321",
-    "5": "a321xlr",
-    "6": "a330neo",
-    "7": "a350",
-    "8": "a350k",
-    "9": "a380",
     "a19n": "a319neo",
     "a319": "a319neo",
     "319": "a319neo",
@@ -722,6 +774,12 @@ _ALIASES = {
     "321neo": "a321",
     "xlr": "a321xlr",
     "321xlr": "a321xlr",
+    "a338": "a330-800",
+    "a330800": "a330-800",
+    "330-800": "a330-800",
+    "3308": "a330-800",
+    # Bare "a330" stays the -900: it is the one airlines actually took, and an
+    # ambiguous alias that silently picks the rarer of two is worse than none.
     "a330": "a330neo",
     "a339": "a330neo",
     "330": "a330neo",
@@ -742,6 +800,13 @@ _ALIASES = {
     "a380-800": "a380",
     "a380800": "a380",
 }
+
+
+# The menu digits are *derived* from the fleet order, not listed beside it.
+# Listed, they are a second copy of that order and go stale the moment a type is
+# inserted -- which is exactly what happened when the A330-800 went in ahead of
+# the -900 and `resolve("6")` went on pointing at the one after it.
+_ALIASES.update({str(i + 1): a.key for i, a in enumerate(FLEET)})
 
 
 def resolve(text):

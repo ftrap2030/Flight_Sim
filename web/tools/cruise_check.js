@@ -19,7 +19,8 @@ const { chromium } = require(PW);
 const CASES = [
   ['a319neo', 35000, 1850,  64600], ['a320',    35000,  2400,  69600],
   ['a320neo', 35000, 2000,  71300], ['a321',    35000,  2300,  85100],
-  ['a321xlr', 35000, 2600,  94300], ['a330neo', 37000,  6050, 235000],
+  ['a321xlr', 35000, 2600,  94300], ['a330-800', 37000, 5750, 224000],
+  ['a330neo', 37000,  6050, 235000],
   ['a350',    37000, 5800, 252400], ['a350k',   37000,  6700, 285000],
   ['a380',    37000, 11500, 497000]
 ];
@@ -38,6 +39,19 @@ const TOLERANCE = 0.05;
   p.on('pageerror', e => errs.push(e.message));
   await p.goto('file://' + page);
   await p.waitForTimeout(6000);
+
+  /* Every type in the fleet must have a case. Without this the tool happily
+     reports "all inside 5%" while quietly not checking a type nobody added a
+     target for -- which is what it did the moment the A330-800 went in. A guard
+     that is silent about what it is not looking at is not a guard. */
+  const uncovered = await p.evaluate(
+    keys => FLEET.map(a => a.key).filter(k => !keys.includes(k)),
+    CASES.map(c => c[0]));
+  if (uncovered.length) {
+    console.error('no cruise target for: ' + uncovered.join(', '));
+    await browser.close();
+    process.exit(1);
+  }
 
   const rows = await p.evaluate(cases => {
     paused = true;
