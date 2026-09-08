@@ -46,7 +46,14 @@ node web/tools/cruise_check.js "$PWD/web/anfell.html"
 ```
 
 Every type must come back inside 5% of its published block fuel flow, at the
-mass that figure belongs to.
+mass that figure belongs to — and a coverage guard fails the run if any type in
+`FLEET` has no case at all, because a guard that is silent about what it is not
+looking at is not a guard.
+
+The BelugaXL has no published block fuel flow to be held to, so it gets a second
+kind of case rather than an exemption: bisect for the altitude where the thrust
+margin actually goes to zero, and compare that against the published service
+ceiling. Both builds answer 35,575 ft against a published 35,000.
 
 `tools/parity_check` guards the other half — what the glass cockpit puts on the
 glass:
@@ -56,12 +63,14 @@ node web/tools/parity_check.js "$PWD/web/anfell.html" > /tmp/web.json
 python web/tools/parity_check.py /tmp/web.json
 ```
 
-A hundred states across four types: every speed mark, every V-speed, all five
-Flight Mode Annunciator columns, the per-engine N1/N2/EGT/fuel flow and every
-ECAM line with its colour must match `flight_sim/`. This is the easier half to
-get wrong, because a speed tape with its marks in the wrong place still looks
-exactly like a speed tape, and an E/WD announcing the failure of the engine that
-is still running still looks exactly like an E/WD.
+A hundred and twenty-five states across five types — four airliners and the
+BelugaXL, whose numbers are the least like anything else in the fleet: every
+speed mark, every V-speed, all five Flight Mode Annunciator columns, the
+per-engine N1/N2/EGT/fuel flow and every ECAM line with its colour must match
+`flight_sim/`. This is the easier half to get wrong, because a speed tape with
+its marks in the wrong place still looks exactly like a speed tape, and an E/WD
+announcing the failure of the engine that is still running still looks exactly
+like an E/WD.
 
 It covers the weather too -- the evolved conditions, the wind through the
 friction layer, the rotor and the mountain wave over a hundred and twenty points
