@@ -2,11 +2,12 @@
 
 An Airbus flight simulator in two front ends over one physics model: a text
 simulator with a procedural prose engine, and a WebGL cockpit in the browser.
-Python is stdlib only, `unittest`, no dependencies.
+Python is stdlib only, `unittest`, no dependencies. The fleet is ten airliners
+and one freighter.
 
 ```bash
 python main.py                                  # play it
-python -m unittest discover -s tests -t .       # 499 tests, ~100 s
+python -m unittest discover -s tests -t .       # 509 tests, ~100 s
 python main.py --list                           # fleet and weather menus
 python main.py --spec a350-1000                 # one type's card and drawing
 open web/anfell.html                            # the browser build
@@ -21,7 +22,7 @@ Dependencies flow one way. `atmosphere` knows nothing; `physics` is the hub;
 main.py            CLI: interactive REPL, and a one-shot --command mode
 flight_sim/
   atmosphere.py    ISA, density, TAS/IAS/Mach.       Imports nothing.
-  aircraft.py      The nine-type fleet as frozen dataclasses.
+  aircraft.py      The eleven-type fleet as frozen dataclasses.
   artwork.py       Side profiles generated from each type's dimensions.
   terrain.py       Ridged-fBm world, graded sites, approach surfaces.
   weather.py       Immutable profiles + a mutable WeatherState.
@@ -102,6 +103,21 @@ rather than the error hiding in the fuel page.
 page quietly lie.** `tests/test_physics.py::CRUISE_TARGETS` holds every type to
 5% of its published flow, which is the other guard.
 
+**The BelugaXL is the exception, and it is anchored better rather than worse.**
+Airbus flies its six itself and publishes no block fuel flow, so the anchor
+every other polar was solved against does not exist. Its TSFC is therefore
+*taken* from the Trent 700 rather than solved, and `cd_0` is solved against the
+published **range** at maximum payload — then checked against a published figure
+the solve never saw, the **service ceiling**. Two published anchors, one unknown.
+`test_the_belugas_drag_polar_answers_to_two_published_figures` is that check,
+and `cruise_check.js` asks the browser the same question, so the type with no
+fuel figure is not the type with no guard. Note the direction that test insists
+on: asking "what drag makes the thrust margin zero *at* the published ceiling"
+is circular, because `_thrust_available_n` fades thrust across `ceiling_ft`
+itself — solved that way it demands a polar half again as draggy and an L/D of
+10. The non-circular question is where the margin actually goes to zero, which
+lands within 1.6% in both builds.
+
 Cruise fuel flow is strongly weight-dependent, so `CRUISE_TARGETS` records the
 **mass each figure belongs to** and a test asserts the model still trims there.
 A target quoted without a weight cannot be verified: the same A321neo burns
@@ -124,6 +140,24 @@ a side view cannot show span — `tests/test_artwork.py` asserts that too, so th
 drawing cannot invent a difference it has no way of seeing. Distinguishing data
 that a profile cannot carry belongs in the caption or the spec card.
 
+The BelugaXL was the test of whether that rule survives a type whose *shape* is
+the point, and it did. `deck_top` is where the flight deck's roof sits and
+`fus_top` is the crown of the section; on every airliner they are the same row
+and the whole cargo-lobe branch collapses to what was there before. On a Beluga
+they are not, because the lower lobe is an A330's fuselage and a circular
+section is as tall as it is wide — so the deck line comes from
+`fuselage_width_m` and the lobe is whatever `fuselage_height_m` adds above it.
+**The step's height is the two published cross-sections, differenced.** A test
+asserts the deck lands exactly where the A330-800's whole fuselage does, and
+that no other type grew a lobe.
+
+The other consequence of a freighter: `_draw_cabin` branches on
+`carries_passengers`, not on a zero seat count, so a Beluga draws its flight-deck
+glazing and no window rows. Three fleet-wide assertions turned out to be about
+*airliners* rather than about aircraft — `seats_max > seats_typical`, one window
+row per deck, and the roll-rate-follows-mass monotonicity — and each is now
+scoped rather than weakened.
+
 ## Bug families that have bitten more than once
 
 **Float truncation in displayed times.** A ten-second tick accumulates to
@@ -138,6 +172,14 @@ registered later. "fly to heading 270" became a destination named "heading 270"
 until the lateral matcher was moved ahead of navigation. Alternation inside one
 pattern is ordered too: `direct|direct to` matches the bare `direct` first.
 **Add a parse test whenever you add a matcher.**
+
+A second way for one matcher to be two: **deciding what a pattern matched by
+searching the text again.** The altitude matcher accepted
+`altitude|alt|flight level|fl` and then ran a *separate* `re.search` for
+`\bfl\b` to decide whether the number was a flight level — and `\bfl\b` cannot
+see the "fl" in `fl350`. So `FL 350` climbed to thirty-five thousand feet and
+`FL350` to three hundred and fifty, from a matcher that already knew which
+keyword it had matched. Capture the alternation and read the group.
 
 **`__getattr__` delegation on `WeatherState`.** It forwards anything not set on
 the instance to the immutable profile — which means a *method* reached that way
@@ -179,7 +221,7 @@ has an owner.
 
 ## Testing patterns
 
-- One test file per module, named for it. 499 tests, ~100 s.
+- One test file per module, named for it. 509 tests, ~100 s.
 - Assert against **published figures** where they exist: ISA density tables,
   cruise fuel flow, service ceilings, Vmca. These catch calibration drift that
   self-consistent tests never would.
@@ -374,6 +416,18 @@ A320neo at 71.19 t, levers to 100%. In still air that is 5,600 ft of ground roll
 in the Python and 5,620 in the browser, and the agreement holds across the wind
 — head, tail and cross, from 5 to 30 knots — to **0.38%**, with the residue
 explained by the two scripts' control cadences.
+
+A whole departure agrees the same way, and that is how a new type earns its
+place: flaps 2, levers to 100, rotate at VR, clean up through 3,000 ft AGL, then
+the autopilot to a cruise altitude and the type's published cruise Mach. The
+BelugaXL rolls 6,213 ft in the Python and 6,231 in the browser (**0.29%**) and
+settles at 8,236 against 8,261 kg/h; the A330-800 6,554 against 6,544 ft and
+5,812 against 5,789 kg/h. Two things make that comparison worth anything: the
+scripts must configure the aeroplane *before* starting the clock, and the
+browser one must run the real frame loop — `weather.advanceTo`,
+`refreshTerrainEffects`, the substeps, then `apUpdate` — because **the browser's
+autopilot runs once a frame and not once a substep**, so a script that only
+calls `substep` flies with the autopilot switched off and lands nowhere near.
 
 The weather itself agrees to 4.8e-4 across four profiles, four elapsed times,
 five heights and a hundred and twenty points of terrain, and the turbulence

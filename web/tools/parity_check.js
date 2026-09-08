@@ -88,7 +88,11 @@ const CASES = [
     throttle: 100, egt: 951, ap: {} }
 ];
 
-const TYPES = ['a320neo', 'a350', 'a380', 'a330neo'];
+/* Four airliners and the freighter. The BelugaXL is here because its numbers
+   are the least like anything else in the fleet -- Mmo 0.78 against 0.89, a
+   ceiling below where the others cruise, an aspect ratio of 10 -- so it is the
+   type most likely to walk into a ported constant that was quietly wrong. */
+const TYPES = ['a320neo', 'a350', 'a380', 'a330neo', 'belugaxl'];
 
 /* The weather is compared separately, because it is a property of the world and
    the clock rather than of an aeroplane. Nothing guarded it before, and it had

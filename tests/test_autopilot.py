@@ -94,6 +94,23 @@ class TestCommands(unittest.TestCase):
             self.assertEqual(command.kind, kind, text)
             self.assertAlmostEqual(command.value, value, msg=text)
 
+    def test_a_flight_level_means_hundreds_of_feet_with_or_without_a_space(self):
+        """`FL350` is how a pilot names a cruise altitude, and it used to mean 350 ft.
+
+        The check for the flight-level form was a second search of the text for
+        `\bfl\b`, which cannot see the "fl" in "fl350" -- so the spaced form
+        climbed to thirty-five thousand feet and the unspaced one to three
+        hundred and fifty, from a matcher that had already told itself which
+        keyword it matched.
+        """
+        for text in ("fl350", "FL350", "fl 350", "flight level 350",
+                     "climb to fl350", "maintain FL350"):
+            self.assertAlmostEqual(cmd.parse(text).value, 35000.0, msg=text)
+        # And a plain altitude is still a plain altitude, three digits or not.
+        for text, value in (("altitude 350", 350.0), ("alt 350", 350.0),
+                            ("altitude 35000", 35000.0)):
+            self.assertAlmostEqual(cmd.parse(text).value, value, msg=text)
+
     def test_autopilot_commands_cost_no_simulation_time(self):
         session = cruising()
         before = session.sim.state.elapsed_s

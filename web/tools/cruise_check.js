@@ -26,6 +26,21 @@ const CASES = [
 ];
 const TOLERANCE = 0.05;
 
+/* The BelugaXL has no published block fuel flow -- Airbus flies its six itself
+   and sells none -- so the anchor every other row uses does not exist for it.
+   tests/test_physics.py holds its polar to two *other* published figures
+   instead, and this is the same question asked of the browser: where does the
+   thrust margin actually go to zero, against the published service ceiling?
+
+   Asking it the other way round -- "what drag makes the margin zero *at* the
+   ceiling" -- is circular, because thrustAvailable fades thrust across
+   a.ceiling itself. Hence a bisection for where the margin dies, not a check
+   that it is dead at a height we already assumed. */
+const CEILING_CASES = [
+  ['belugaxl', 201000]   // key, mass: OEW + full payload + 20 t of fuel
+];
+const CEILING_TOLERANCE = 0.04;
+
 (async () => {
   const page = process.argv[2];
   if (!page) { console.error('usage: cruise_check.js <path to anfell.html>'); process.exit(2); }
@@ -46,7 +61,7 @@ const TOLERANCE = 0.05;
      that is silent about what it is not looking at is not a guard. */
   const uncovered = await p.evaluate(
     keys => FLEET.map(a => a.key).filter(k => !keys.includes(k)),
-    CASES.map(c => c[0]));
+    CASES.map(c => c[0]).concat(CEILING_CASES.map(c => c[0])));
   if (uncovered.length) {
     console.error('no cruise target for: ' + uncovered.join(', '));
     await browser.close();
@@ -75,6 +90,27 @@ const TOLERANCE = 0.05;
     });
   }, CASES);
 
+  const ceilings = await p.evaluate(cases => cases.map(([key, mass]) => {
+    const a = FLEET.find(f => f.key === key);
+    const s = JSON.parse(JSON.stringify(S));
+    Object.assign(s, { mass, fuel: 20000, gamma: 0, bank: 0, flaps: 0,
+                       gear: false, spoilers: false, beta: 0, rudder: 0,
+                       enginesFailed: [], enginesRunning: true,
+                       onGround: false, status: 'flying' });
+    let low = 20000, high = 45000;
+    for (let i = 0; i < 30; i++) {
+      const middle = (low + high) / 2;
+      s.alt = middle;
+      s.tas = a.cruiseMach * soundMs(middle);
+      s.pitch = levelFlightPitch(a, s);
+      s.throttle = trimThrottle(a, s);
+      settleEngines(a, s);
+      if (thrustAvailable(a, s) - aeroState(a, s).drag > 0) low = middle;
+      else high = middle;
+    }
+    return { key, mass, reached: Math.round((low + high) / 2), published: a.ceiling };
+  }), CEILING_CASES);
+
   if (errs.length) console.error('page errors:', errs.slice(0, 3));
   let bad = 0;
   for (const x of rows) {
@@ -85,7 +121,15 @@ const TOLERANCE = 0.05;
       + `${(x.mass / 1000).toFixed(1)}t  ${String(x.flow).padStart(6)} kg/h `
       + `(published ${x.target}, ${(err * 100).toFixed(1)}%)  L/D ${x.ld}`);
   }
+  for (const x of ceilings) {
+    const err = x.reached / x.published - 1;
+    const ok = Math.abs(err) <= CEILING_TOLERANCE;
+    if (!ok) bad++;
+    console.log(`${ok ? ' ' : '!'} ${x.key.padEnd(8)} ceiling `
+      + `${(x.mass / 1000).toFixed(1)}t  ${String(x.reached).padStart(6)} ft `
+      + `(published ${x.published}, ${(err * 100).toFixed(1)}%)`);
+  }
   await browser.close();
-  console.log(bad ? `\n${bad} type(s) outside ${TOLERANCE * 100}%` : `\nall inside ${TOLERANCE * 100}%`);
+  console.log(bad ? `\n${bad} type(s) outside tolerance` : `\nall inside tolerance`);
   process.exit(bad || errs.length ? 1 : 0);
 })();

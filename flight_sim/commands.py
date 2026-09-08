@@ -350,13 +350,17 @@ def _match_autopilot(text, raw):
 
     m = re.match(
         r"^(?:set\s+|maintain\s+|climb to\s+|descend to\s+)?"
-        r"(?:altitude|alt|flight level|fl)\s*(?:to\s+)?" + _NUMBER + r"$",
+        r"(altitude|alt|flight level|fl)\s*(?:to\s+)?" + _NUMBER + r"$",
         text,
     )
     if m:
-        value = float(m.group(1))
-        # "FL350" and "flight level 350" mean 35,000 ft.
-        if value < 600 and re.search(r"flight level|\bfl\b", text):
+        value = float(m.group(2))
+        # "FL350" and "flight level 350" mean 35,000 ft. Read off the keyword
+        # this pattern actually matched, not off a second search of the text:
+        # `\bfl\b` cannot see the "fl" in "fl350", so the most natural way a
+        # pilot has of naming a cruise altitude quietly meant three hundred and
+        # fifty feet, while "fl 350" with a space meant thirty-five thousand.
+        if value < 600 and m.group(1) in ("flight level", "fl"):
             value *= 100.0
         return Command("ap_altitude", value, raw, advances_time=False)
 

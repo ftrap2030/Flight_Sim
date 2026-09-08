@@ -123,6 +123,7 @@ class TestPublishedPerformance(unittest.TestCase):
         published = {  # lb/(lbf*hr) at cruise
             "CFM56": 0.59,
             "LEAP": 0.51,
+            "Trent 700": 0.562,
             "Trent 7000": 0.50,
             "Trent XWB": 0.44,
             "Trent 970": 0.43,
@@ -132,6 +133,12 @@ class TestPublishedPerformance(unittest.TestCase):
             "a321": "LEAP", "a321xlr": "LEAP",
             "a330-800": "Trent 7000", "a330neo": "Trent 7000",
             "a350": "Trent XWB", "a350k": "Trent XWB", "a380": "Trent 970",
+            # The Beluga is the one type this reads in the other direction. Its
+            # TSFC was *taken* from the engine rather than solved, because no
+            # block fuel flow is published to solve against -- so this asserts
+            # the number in aircraft.py is still the Trent 700's and has not
+            # been quietly nudged to make some other figure come out right.
+            "belugaxl": "Trent 700",
         }
         for key, family in families.items():
             craft = fleet.FLEET_BY_KEY[key]

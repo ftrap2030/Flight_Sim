@@ -15,10 +15,10 @@ open web/anfell.html        # the browser build
 
 ## The fleet
 
-Nine Airbus airliners. The differences between them are *emergent*: the A320neo
-climbs better and burns less because its sharklets raise the aspect ratio and
-its LEAP engines have a lower TSFC, not because a "nimbleness" number was typed
-into a table.
+Ten Airbus airliners and a freighter. The differences between them are
+*emergent*: the A320neo climbs better and burns less because its sharklets raise
+the aspect ratio and its LEAP engines have a lower TSFC, not because a
+"nimbleness" number was typed into a table.
 
 | # | Aircraft | Type | Engines | MTOW | Wing / AR | Cruise | Ceiling | Range | Seats | Roll |
 |---|---|---|---|---:|---|---|---|---:|---:|---:|
@@ -27,21 +27,38 @@ into a table.
 | 3 | A320neo | A20N | 2× LEAP-1A26 | 79 t | 122.6 m² / **10.5** | M0.78 | FL398 | 3,500 nm | 165 | 15°/s |
 | 4 | A321neo | A21N | 2× LEAP-1A32 | 97 t | 122.6 m² / 10.5 | M0.78 | FL398 | 4,000 nm | 180 | 12°/s |
 | 5 | A321XLR | A21N | 2× LEAP-1A35 | 101 t | 122.6 m² / 10.5 | M0.78 | FL398 | 4,700 nm | 180 | 11.5°/s |
-| 6 | A330-900neo | A339 | 2× Trent 7000 | 251 t | 361.6 m² / **11.3** | M0.82 | FL414 | 7,200 nm | 287 | 10.2°/s |
-| 7 | A350-900 | A359 | 2× Trent XWB-84 | 280 t | 442 m² / 9.5 | M0.85 | FL431 | 8,300 nm | 315 | 10°/s |
-| 8 | A350-1000 | A35K | 2× Trent XWB-97 | 319 t | 464.3 m² / 9.0 | M0.85 | FL431 | 8,700 nm | 350 | 9°/s |
-| 9 | A380-800 | A388 | 4× Trent 970 | 575 t | 845 m² / 7.5 | M0.85 | FL431 | 8,000 nm | 525 | 7°/s |
+| 6 | A330-800neo | A338 | 2× Trent 7000 | 251 t | 361.6 m² / **11.3** | M0.82 | FL414 | 8,150 nm | 257 | 10.6°/s |
+| 7 | A330-900neo | A339 | 2× Trent 7000 | 251 t | 361.6 m² / **11.3** | M0.82 | FL414 | 7,200 nm | 287 | 10.2°/s |
+| 8 | A350-900 | A359 | 2× Trent XWB-84 | 280 t | 442 m² / 9.5 | M0.85 | FL431 | 8,300 nm | 315 | 10°/s |
+| 9 | A350-1000 | A35K | 2× Trent XWB-97 | 319 t | 464.3 m² / 9.0 | M0.85 | FL431 | 8,700 nm | 350 | 9°/s |
+| 10 | A380-800 | A388 | 4× Trent 970 | 575 t | 845 m² / 7.5 | M0.85 | FL431 | 8,000 nm | 525 | 7°/s |
+| 11 | BelugaXL | A337 | 2× Trent 700 | 227 t | 361.6 m² / *10.1* | M0.69 | FL350 | 2,200 nm | *2,209 m³* | 8.5°/s |
 
 `python main.py --spec a350-1000` prints any type's full card. In flight, `spec`
-does the same for the aircraft you are in and `fleet` shows all nine.
+does the same for the aircraft you are in and `fleet` shows all eleven.
 
 The whole A320 family shares a wing *area*; only the A320 ceo lacks sharklets,
 which is why it alone has the lower aspect ratio and pays for it in induced drag.
 The A321neo is nineteen tonnes heavier on that same area, so it stalls sixteen
 knots faster than the A320 and rolls three degrees a second slower — the engines
-did nothing for its inertia. The A330-900 has the highest aspect ratio in the
-fleet at 11.3, a long slender wing on a comparatively small area, and at medium
-weights very little else holds an altitude so effortlessly.
+did nothing for its inertia. The two A330neos share a wing, a fin and an engine
+and differ in 4.8 m of fuselage: everything that distinguishes the -800 — less
+wetted area, five tonnes less empty weight, nearly a thousand miles more range —
+falls out of that. They have the highest aspect ratio in the fleet at 11.3, a
+long slender wing on a comparatively small area, and at medium weights very
+little else holds an altitude so effortlessly.
+
+The BelugaXL is the exception that tests all of it. It is an A330-200F with the
+upper fuselage replaced by a cargo lobe, and it wears the *ceo* wing — 3.7 m
+less span over the same area, aspect ratio 10.1 against the A330neo's 11.3. Its
+lift-to-drag is 14.4 where an A330 manages 19.3, which is most of a wing's worth
+of drag, so it burns a third more fuel than an A330-900 while weighing less,
+cruises at M0.69 instead of M0.82, and tops out six thousand feet lower. None of
+that is asserted anywhere; it is what a drag polar solved against the type's
+published range does when you fly it. It is also the one type here with no
+published block fuel flow — Airbus flies its six itself and sells none — so its
+polar is anchored against two other published figures instead, and a test
+requires them to agree.
 
 ### They are drawn from their own dimensions
 
@@ -81,6 +98,33 @@ span. Their captions differ, because those quote it. Where a difference is
 genuinely visible it is drawn: the A380's two decks and four engines in two pods,
 and the A321XLR's belly fairing over its rear centre tank, which is the one
 external feature that tells an XLR from an A321neo from directly abeam.
+
+The BelugaXL is the hard case, because its shape *is* the aeroplane — and it is
+still not hand-drawn. Its lower lobe is an A330's fuselage, and a circular
+section is as tall as it is wide, so the flight deck's roof comes out at
+`fuselage_width_m` above the belly and the cargo lobe is whatever
+`fuselage_height_m` adds above that. The step's height is the two published
+cross-sections, differenced; a test asserts the deck line lands exactly where
+the A330-800's whole fuselage does, and that every other type's deck line and
+crown line are still the same row. It draws no cabin windows because it carries
+no passengers.
+
+```
+                                                               /____
+                                                              /    |
+                                                             /     |
+                                                            /      |
+             /_________________________________________    /       |
+            /                                          \  /        |
+        /___                                            \__________|__/|
+    /___  \                                                -------------
+   _                                                          /__
+   ___________________________________________________________
+              o            (#####) ooo  ooo
+------------------------------------------------------------------------
+   |<--------------------------- 63.10 m ---------------------------->|
+   span 60.30 m   ·   height 18.90 m   ·   wing 361.6 m²   ·   aspect ratio 10.1
+```
 
 ## Weather
 
@@ -200,7 +244,7 @@ engine's real lateral offset: 5.75 m on the A320 family, 10.6 m on the A350,
 normalised by dynamic pressure, so as you slow down the same dead engine demands
 ever more rudder until the available travel simply runs out. For the A320neo
 that crossing lands near 110 kt, against a real Vmca of about 115. The A380 is
-the most controllable of the nine on an engine failure, because losing one of
+the most controllable in the fleet on an engine failure, because losing one of
 four is half the asymmetry of losing one of two, against far more fin and wing.
 
 **The envelope is real.** The wing stalls past its critical angle of attack and
@@ -515,9 +559,9 @@ exactly like a speed tape.
 python -m unittest discover -s tests -t .
 ```
 
-499 tests, no dependencies. They check the atmosphere against published ISA
+509 tests, no dependencies. They check the atmosphere against published ISA
 tables, stall speed against its closed form, cruise fuel flow and service
-ceiling against published figures for all nine aircraft, terrain determinism,
+ceiling against published figures for every type, terrain determinism,
 save/load fidelity, that every prose template renders against a live context,
 that the artificial horizon is not upside down, that Vmc falls out of the engine
 geometry rather than being asserted, that every authored runway has a clear
