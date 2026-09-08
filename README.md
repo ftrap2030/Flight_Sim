@@ -139,7 +139,7 @@ Commands are typed the way a pilot would say them:
 | Turning | `turn left heading 180`, `heading 090`, `bank right 25`, `roll level` |
 | Rudder | `rudder left 10`, `full right rudder`, `centre rudder` |
 | Engines | `engine failure`, `shutdown engine 2`, `restart engines` |
-| Failures | `failures`, `fail fuel leak`, `fail hydraulics`, `arm engine failure` |
+| Failures | `failures`, `fail fuel leak`, `fail engine 3 fire`, `arm engine failure`, `fix hydraulics`, `fix all` |
 | Configuration | `flaps 2`, `flaps full`, `gear down`, `speedbrakes out` |
 | On the ground | `max brakes`, `release brakes`, `reverse thrust`, `stow reversers` |
 | Time | `hold`, `wait 60 seconds`, `wait 2 minutes` |

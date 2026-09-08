@@ -147,6 +147,11 @@ def menu():
         "`arm engine failure` sets one to fire at V1 on the takeoff roll, which "
         "is the case worth practising."
     )
+    lines.append("")
+    lines.append(
+        "Add an engine number to any of the engine ones -- `fail engine 3 fire` "
+        "-- and undo any of them: `fix hydraulics`, or `fix all`."
+    )
     return "\n".join(lines)
 
 
@@ -179,6 +184,55 @@ def trigger(sim, key, engine_index=0):
     if key == "gear":
         s.jammed_gear_down = s.gear_down
     return failure.title
+
+
+def restore_engines(sim):
+    """Everything is running again.
+
+    The one owner of that statement, because it is three pieces of state that
+    have to move together and did not: `restart engines` cleared the failed list
+    and left `engines_on_fire` populated, so the ECAM fell silent while
+    `engines.readouts` went on reporting a fire on an engine that was running --
+    and the browser's E/WD paints that in red. It also never cleared
+    `engines_running`, which is set when the tanks run dry and was a one-way
+    latch, so the command could not do the one thing it exists for.
+    """
+    s = sim.state
+    s.engines_failed = []
+    s.engines_on_fire = []
+    s.engines_running = True
+
+
+def clear(sim, key=None):
+    """Un-break something, or everything. Returns what was cleared.
+
+    The inverse of `trigger`, and in the same place for the same reason: a jam
+    remembers the setting it jammed at, and forgetting to forget that leaves the
+    surface stuck at a position nothing is enforcing any more.
+    """
+    s = sim.state
+    if key is None:
+        cleared = [f.key for f, _index in active(s)]
+        s.failures = []
+        s.jammed_flaps = None
+        s.jammed_gear_down = None
+        s.armed_failure = None
+        restore_engines(sim)
+        return cleared
+
+    if key not in BY_KEY:
+        return []
+    if BY_KEY[key].per_engine:
+        restore_engines(sim)
+        return [key]
+    if key not in s.failures:
+        return []
+    s.failures.remove(key)
+    if key == "flaps":
+        s.jammed_flaps = None
+    if key == "gear":
+        s.jammed_gear_down = None
+    return [key]
 
 
 def active(state):

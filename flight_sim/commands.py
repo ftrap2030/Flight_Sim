@@ -288,21 +288,58 @@ def _match_engines(text, raw):
     # `fail engine 2` names an engine and belongs to the matcher below; bare
     # `fail engine` is the generic failure, so only a *digit* defers.
     if m and not re.match(r"^engine\s*\d$", m.group(1).strip()):
-        failure = failures.resolve(m.group(1))
+        name, index = _engine_number(m.group(1))
+        failure = failures.resolve(name)
         if failure is not None:
             return Command(
                 "arm_failure" if text.startswith("arm ") else "failure",
-                text=raw, advances_time=False, target=failure.key,
+                value=float(index), text=raw, advances_time=False,
+                target=failure.key,
             )
     if text in ("failures", "fail what", "what can go wrong"):
         return Command("show_failures", text=raw, advances_time=False)
-    if re.match(r"^engine\s*(?:failure|out|fire)$", text):
+
+    # The inverse of `fail`, and no-time in the same way. Without it a
+    # `fail hydraulics` was permanent for the session.
+    m = re.match(r"^(?:fix|repair|unfail|restore)\s+(.{2,24})$", text)
+    if m:
+        wanted = m.group(1).strip()
+        if wanted in ("all", "everything", "it", "the aircraft", "the aeroplane"):
+            return Command("repair", text=raw, advances_time=False)
+        name, index = _engine_number(wanted)
+        failure = failures.resolve(name)
+        if failure is not None:
+            return Command("repair", value=float(index), text=raw,
+                           advances_time=False, target=failure.key)
+
+    if re.match(r"^engine\s*(?:failure|out)$", text):
         # No engine named: fail the leftmost, the classic asymmetric case.
         return Command("engine_fail", 0.0, raw)
+    if text == "engine fire":
+        # Told about a fire, report a fire. This said `ENG 1 FAIL` for as long
+        # as it shared a branch with the plain failure above.
+        return Command("failure", text=raw, advances_time=False, target="fire")
 
     if re.match(r"^(?:restart|relight|restore)\s+(?:all\s+)?engines?$", text):
         return Command("engine_restart", text=raw)
     return None
+
+
+def _engine_number(name):
+    """Peel an engine number out of a failure's name.
+
+    `fail engine 3 fire` and `arm engine 2 failure` -- the catalogue's entries
+    are per-*type* rather than per-engine, so the index rides alongside the key
+    rather than being part of it. Returns (name without the digit, zero-based
+    index), and index 0 when none was given: the leftmost engine, which is the
+    classic asymmetric case and what every one of these commands used to do
+    whatever you asked for.
+    """
+    m = re.match(r"^(.*?)\s*\b(\d)\b\s*(.*)$", name.strip())
+    if not m:
+        return name, 0
+    remainder = "{} {}".format(m.group(1), m.group(3)).strip()
+    return (remainder or m.group(1)), max(0, int(m.group(2)) - 1)
 
 
 def _match_autopilot(text, raw):
@@ -487,15 +524,18 @@ def apply(sim, command):
     elif kind == "rudder_set":
         s.rudder_deg = clamp(command.value, -60.0, 60.0)
     elif kind == "failure":
-        failures.trigger(sim, command.target, engine_index=0)
+        failures.trigger(sim, command.target, engine_index=int(command.value))
     elif kind == "arm_failure":
-        failures.arm(sim, command.target, engine_index=0)
+        failures.arm(sim, command.target, engine_index=int(command.value))
+    elif kind == "repair":
+        failures.clear(sim, command.target or None)
     elif kind == "engine_fail":
-        index = int(clamp(command.value, 0, sim.aircraft.engine_count - 1))
-        if index not in s.engines_failed:
-            s.engines_failed.append(index)
+        # Through `failures.trigger` rather than writing to `engines_failed`
+        # here. Two write paths to one piece of state is how a fire came to
+        # survive a restart: only one of them kept the invariants.
+        failures.trigger(sim, "engine", engine_index=int(command.value))
     elif kind == "engine_restart":
-        s.engines_failed.clear()
+        failures.restore_engines(sim)
     elif kind == "brakes":
         s.brakes = clamp(command.value, 0.0, 1.0)
     elif kind == "reverse":
@@ -575,7 +615,7 @@ HELP_TEXT = """\
 | **On the ground** | `brakes`, `max brakes`, `release brakes`, `reverse thrust`, `stow reversers` |
 | **Configuration** | `flaps 1`, `flaps full`, `flaps up`, `gear down`, `gear up`, `speedbrakes out`, `speedbrakes in` |
 | **Time** | `hold` (advance 10 s unchanged), `wait 60 seconds`, `wait 2 minutes` |
-| **Failures** | `failures`, `fail engine 1`, `fail fuel leak`, `arm fail engine` |
+| **Failures** | `failures`, `fail engine 3 fire`, `fail fuel leak`, `arm engine failure`, `fix all` |
 | **Autopilot** | `autopilot on/off`, `set altitude 12000`, `set speed 280`, `vertical speed 1500`, `nav`, `approach mode` |
 | **Time of day** | `time 0530`, `dawn`, `midday`, `dusk`, `night` |
 | **Navigation** | `direct to KEBR`, `show plan`, `clear route`, `airfields`, `debrief` |

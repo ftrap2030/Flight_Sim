@@ -13,6 +13,7 @@ import unittest
 
 from flight_sim import commands as cmd
 from flight_sim import dashboard
+from flight_sim import engines
 from flight_sim import failures
 from flight_sim import fbw
 from flight_sim import landing
@@ -54,7 +55,9 @@ class TestCommands(unittest.TestCase):
         for text in offered:
             with self.subTest(text):
                 self.assertIn(
-                    cmd.parse(text).kind, ("failure", "arm_failure"), text
+                    cmd.parse(text).kind,
+                    ("failure", "arm_failure", "repair"),
+                    text,
                 )
 
     def test_naming_an_engine_still_reaches_the_engine_matcher(self):
@@ -198,6 +201,123 @@ class TestFire(unittest.TestCase):
         text = failures.ecam_text(session.sim)
         self.assertIn("AGENT 1 . . . DISCHARGE", text)
         self.assertNotIn("ENG 1 FAIL", text)
+
+
+class TestOneWritePath(unittest.TestCase):
+    """`failures.trigger` owns `engines_failed`. Everything must go through it.
+
+    It did not: `commands.apply` appended to the list itself, so there were two
+    write paths to one piece of state and only one of them kept the invariants.
+    Four separate bugs came out of that, and they are the four tests below.
+    """
+
+    def test_telling_it_about_a_fire_starts_a_fire(self):
+        """`engine fire` produced `ENG 1 FAIL`: the aeroplane was told about a
+        fire and reported something else."""
+        session = cruising()
+        session.execute("engine fire")
+        self.assertIn(0, session.sim.state.engines_on_fire)
+        self.assertIn("ENG 1 FIRE", failures.ecam_text(session.sim))
+
+    def test_a_restart_puts_the_fire_out(self):
+        """The one that made the two front ends contradict each other.
+
+        `restart engines` cleared `engines_failed` but not `engines_on_fire`, so
+        the ECAM fell silent while `engines.readouts` still reported `fire=True`
+        on an engine that was running -- and the browser's E/WD paints that in
+        red. A display disagreeing with the display beside it is the exact thing
+        `engines.readouts` and `failures.ecam` exist to prevent.
+        """
+        session = cruising("a380")
+        session.execute("fail engine fire")
+        session.execute("restart engines")
+        self.assertEqual(session.sim.state.engines_on_fire, [])
+        self.assertEqual(failures.ecam_text(session.sim), "")
+        self.assertFalse(
+            any(entry.fire for entry in engines.readouts(session.sim)),
+            "an engine is still on fire according to the E/WD",
+        )
+
+    def test_a_restart_restarts_the_engines(self):
+        """`engines_running` was a one-way latch: nothing set it back to True,
+        so the command could not do the one thing it exists for."""
+        session = cruising()
+        session.sim.state.fuel_kg = 0.5
+        for _ in range(3):
+            session.sim.step_tick()
+        self.assertFalse(session.sim.state.engines_running)
+        session.sim.state.fuel_kg = 4000.0  # refuelled, or it stops again
+        session.execute("restart engines")
+        self.assertTrue(session.sim.state.engines_running)
+
+    def test_a_failure_can_name_any_engine_on_the_aircraft(self):
+        """Every failure command was hard-wired to index 0, so on an A380
+        nothing could be broken but the number one engine."""
+        session = cruising("a380")
+        session.execute("fail engine 3 fire")
+        self.assertEqual(session.sim.state.engines_on_fire, [2])
+        self.assertIn("ENG 3 FIRE", failures.ecam_text(session.sim))
+
+    def test_an_armed_failure_can_name_an_engine_too(self):
+        session = on_the_runway("a380")
+        session.execute("arm engine 4 failure")
+        self.assertEqual(session.sim.state.armed_failure, ["engine", 3])
+
+
+class TestUnbreakingThings(unittest.TestCase):
+    """A `fail hydraulics` was permanent for the session: nothing undid it."""
+
+    def test_a_failure_can_be_cleared(self):
+        session = cruising()
+        session.execute("fail hydraulics")
+        self.assertIn("hydraulics", session.sim.state.failures)
+        session.execute("fix hydraulics")
+        self.assertEqual(session.sim.state.failures, [])
+        self.assertEqual(failures.ecam_text(session.sim), "")
+
+    def test_clearing_a_jam_forgets_where_it_jammed(self):
+        """Or the flaps would stay stuck at a setting nothing is enforcing."""
+        session = cruising()
+        session.sim.state.flaps = 2
+        session.execute("fail flap jam")
+        self.assertEqual(session.sim.state.jammed_flaps, 2)
+        session.execute("fix flaps")
+        self.assertIsNone(session.sim.state.jammed_flaps)
+        session.execute("flaps 4")
+        session.sim.step_tick()
+        self.assertEqual(session.sim.state.flaps, 4)
+
+    def test_fix_all_clears_everything_including_the_engines(self):
+        session = cruising("a380")
+        session.execute("fail engine 2 fire")
+        session.execute("fail hydraulics")
+        session.execute("fail brakes")
+        session.execute("fix all")
+        state = session.sim.state
+        self.assertEqual(state.failures, [])
+        self.assertEqual(state.engines_failed, [])
+        self.assertEqual(state.engines_on_fire, [])
+        self.assertEqual(failures.ecam_text(session.sim), "")
+
+    def test_fixing_costs_no_simulation_time(self):
+        session = cruising()
+        session.execute("fail brakes")
+        before = session.sim.state.elapsed_s
+        session.execute("fix brakes")
+        self.assertEqual(session.sim.state.elapsed_s, before)
+
+    def test_the_parser_understands_the_ways_of_saying_it(self):
+        """CLAUDE.md: a parse test whenever a matcher is added."""
+        for text, target in (
+            ("fix hydraulics", "hydraulics"), ("repair brakes", "brakes"),
+            ("fix flap jam", "flaps"), ("fix engine", "engine"),
+        ):
+            command = cmd.parse(text)
+            self.assertEqual(command.kind, "repair", text)
+            self.assertEqual(command.target, target, text)
+        for text in ("fix all", "repair all", "fix everything"):
+            self.assertEqual(cmd.parse(text).kind, "repair", text)
+            self.assertEqual(cmd.parse(text).target, "", text)
 
 
 class TestTheV1Cut(unittest.TestCase):
