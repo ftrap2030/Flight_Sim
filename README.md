@@ -338,7 +338,24 @@ FUEL LEAK
 ```
 
 Those lines are *model* data, not display data, so the text simulator and the
-glass cockpit cannot disagree about what the aeroplane is complaining about.
+glass cockpit cannot disagree about what the aeroplane is complaining about. So
+are the engine parameters, and the text panel shows the same four rows the glass
+E/WD does, above the ECAM as the aeroplane stacks them:
+
+```
+      ENG 1  ENG 2 ENG 3*  ENG 4
+  N1   64.0   64.0   12.7   64.0
+  N2   84.9   84.9   63.4   84.9
+  EGT   585    585    161    585
+  FF  2,883  2,883      0  2,883
+                     FIRE
+```
+
+The failed engine keeps its numbers rather than showing dashes, because the fan
+is running *down* and not stopped — watching N1 decay is how the asymmetry
+announces itself.
+
+Anything broken can be un-broken: `fix hydraulics`, `fix engine 2`, or `fix all`.
 
 ## Somewhere to go
 

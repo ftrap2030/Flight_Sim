@@ -20,6 +20,14 @@ to accumulate in. The sample points are deliberately chosen where the answers
 are *not* zero, and the check says so if the sweep stops finding rough air: two
 builds agreeing that nothing is happening is not agreement about anything.
 
+Some of the states are **transitions** rather than resting states -- a fire then
+a restart, a failure cleared and another raised -- because a resting state cannot
+catch an un-setting. A fire that survived a restart went through sixty-eight
+states that only ever broke the aeroplane, leaving the ECAM silent while the
+E/WD painted FIRE over an engine that was running.
+
+Runs on every push; see `.github/workflows/tests.yml`.
+
 Exits non-zero on the first disagreement, and says which one.
 """
 

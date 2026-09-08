@@ -76,7 +76,10 @@ node web/tools/shots.js "$PWD/web/anfell.html" /tmp/shots
 ```
 
 Both need Playwright and a Chromium; both take the paths as arguments because
-where those live is a property of the machine, not of the simulator.
+where those live is a property of the machine, not of the simulator. **Both also
+run in CI on every push** -- until they did, they ran when somebody remembered,
+which is how the weather came to differ on all four profiles and an EGT
+threshold came to be owned by the model and read only by the display.
 
 ## What the browser build has that the Python does not
 
