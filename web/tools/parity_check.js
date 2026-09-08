@@ -64,6 +64,31 @@ const CASES = [
 
 const TYPES = ['a320neo', 'a350', 'a380', 'a330neo'];
 
+/* The weather is compared separately, because it is a property of the world and
+   the clock rather than of an aeroplane. Nothing guarded it before, and it had
+   drifted badly: the browser had one constant wind vector at every altitude,
+   over every piece of ground, for the whole flight.
+
+   `t` is elapsed seconds, which is what drives the evolution. */
+const WEATHER_CASES = [
+  { profile: 'clear',     t: 0 },
+  { profile: 'clear',     t: 1800 },
+  { profile: 'crosswind', t: 0 },
+  { profile: 'crosswind', t: 450 },
+  { profile: 'crosswind', t: 7200 },
+  { profile: 'stormy',    t: 0 },
+  { profile: 'stormy',    t: 3600 },
+  { profile: 'foggy',     t: 900 }
+];
+
+/* Heights through the friction layer and out the other side of it. */
+const WIND_HEIGHTS = [0, 150, 800, 2000, 9000];
+
+/* Where the terrain coupling is sampled. A rotor of zero in both builds proves
+   nothing, so the sweep runs a line of ground and the Python end asserts that
+   what it found is genuinely non-zero. */
+const ROTOR_SWEEP = { x0: 300, y: 200, step: 0.3, count: 120, aglFt: 1500 };
+
 (async () => {
   const page = process.argv[2];
   if (!page) { console.error('usage: parity_check.js <path to anfell.html>'); process.exit(2); }
@@ -146,7 +171,56 @@ const TYPES = ['a320neo', 'a350', 'a380', 'a330neo'];
     return out;
   }, [CASES, TYPES]);
 
+  const weather = await p.evaluate(([cases, heights, sweep]) => {
+    paused = true;
+    const round = v => Math.round(v * 1e6) / 1e6;
+    return cases.map(c => {
+      const w = new WeatherState(WEATHER_BY_KEY[c.profile], WORLD_SEED, c.t);
+      const row = {
+        profile: c.profile, t: c.t,
+        windKt: round(w.windKt), windDir: round(w.windDir),
+        visSm: round(w.visSm), turbulence: round(w.turbulence),
+        at: heights.map(agl => {
+          const [speed, dir] = w.windAt(agl, 0);
+          return [agl, round(speed), round(dir)];
+        }),
+        /* The gust at the noise clamp and at rest: `gustKt` is the peak, so
+           this is where the two builds could disagree about what a peak means. */
+        gust: [-3, 0, 3].map(k => round(w.windAt(1500, k)[0])),
+        rotor: [], wave: []
+      };
+      /* The terrain effects want a wind that is not drifting underneath the
+         comparison, so they are sampled on a held state. */
+      const held = new WeatherState(WEATHER_BY_KEY[c.profile], WORLD_SEED, c.t)
+        .hold({ windKt: w.windKt, windDir: w.windDir });
+      for (let i = 0; i < sweep.count; i++) {
+        const x = sweep.x0 + i * sweep.step;
+        row.rotor.push(round(held.mechanicalTurbulence(x, sweep.y, sweep.aglFt)));
+        row.wave.push(round(held.orographicVerticalFpm(x, sweep.y, sweep.aglFt)));
+      }
+      return row;
+    });
+  }, [WEATHER_CASES, WIND_HEIGHTS, ROTOR_SWEEP]);
+
+  /* And the gusts themselves. Both builds draw them from the same lattice hash,
+     so these must agree to the last bit rather than to a tolerance. */
+  const gusts = await p.evaluate(() => {
+    const out = [];
+    for (const tick of [0, 1, 7, 250, 6000]) {
+      for (const index of [0, 1, 37, 99]) {
+        for (let axis = 0; axis < 3; axis++) {
+          out.push([tick, index, axis, gustDraw(tick, index, WORLD_SEED, axis)]);
+        }
+      }
+    }
+    return out;
+  });
+
   await browser.close();
   if (errs.length) { console.error('page errors:', errs.slice(0, 3)); process.exit(1); }
-  console.log(JSON.stringify({ cases: CASES, rows }, null, 1));
+  console.log(JSON.stringify({
+    cases: CASES, rows,
+    weatherCases: WEATHER_CASES, windHeights: WIND_HEIGHTS,
+    rotorSweep: ROTOR_SWEEP, weather, gusts
+  }, null, 1));
 })();

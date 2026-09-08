@@ -23,14 +23,20 @@ takeoff, an ILS approach, a landing and synthesised sound.
   at 29.7 ft per texel and is re-baked every mile and a half.
 * **Sound** — oscillators and filtered noise. No audio files. Radio-altitude
   callouts use the browser's own speech synthesiser.
+* **Air** — the wind slows and backs near the ground, so a descent changes your
+  drift; it breaks up in the lee of a ridge; and it goes up the windward face
+  and down the other side, taking the aeroplane with it. Conditions drift over
+  the flight. All of it from `weather.py`'s constants.
 
 ## The flight model is a *port*, not a second implementation
 
-The atmosphere, the drag polar, the thrust lapse, the TSFC figures and the
-control-law protections in this file are the same numbers as `flight_sim/`. An
-A350-900 trimmed at FL370 and M0.85 at 252.4 t burns 5,793 kg/h here and there.
-The terrain is the same ridged multifractal over the same 32-bit integer hash,
-which is why a seed produces the same mountains in both.
+The atmosphere, the drag polar, the thrust lapse, the TSFC figures, the weather
+and the control-law protections in this file are the same numbers as
+`flight_sim/`. An A350-900 trimmed at FL370 and M0.85 at 252.4 t burns
+5,793 kg/h here and there. The terrain is the same ridged multifractal over the
+same 32-bit integer hash, which is why a seed produces the same mountains in
+both — and the turbulence is drawn from that same hash, so the two builds fly
+into the same gusts rather than merely into gusts of the same size.
 
 **They must not drift.** `tools/cruise_check.js` holds this file to
 `tests/test_physics.py::CRUISE_TARGETS`, which is the guard:
@@ -50,10 +56,17 @@ node web/tools/parity_check.js "$PWD/web/anfell.html" > /tmp/web.json
 python web/tools/parity_check.py /tmp/web.json
 ```
 
-Fifty-two states across four types: every speed mark, every V-speed and all five
-Flight Mode Annunciator columns must match `flight_sim/`. This is the easier half
-to get wrong, because a speed tape with its marks in the wrong place still looks
-exactly like a speed tape.
+Sixty-eight states across four types: every speed mark, every V-speed, all five
+Flight Mode Annunciator columns, the per-engine N1/N2/EGT/fuel flow and every
+ECAM line with its colour must match `flight_sim/`. This is the easier half to
+get wrong, because a speed tape with its marks in the wrong place still looks
+exactly like a speed tape, and an E/WD announcing the failure of the engine that
+is still running still looks exactly like an E/WD.
+
+It covers the weather too -- the evolved conditions, the wind through the
+friction layer, the rotor and the mountain wave over a hundred and twenty points
+of terrain, and the gusts, which agree exactly because both builds draw them
+from the same lattice hash.
 
 `tools/shots.js` puts the aircraft at fixed places in the world and photographs
 them, which is how the renderer is checked:

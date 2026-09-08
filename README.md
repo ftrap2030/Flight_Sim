@@ -110,6 +110,20 @@ face and down the lee one. Windward gives you a few hundred feet a minute of
 free lift; the lee side takes it back and more, and in the mountains that is not
 always survivable.
 
+**The gust is a gust.** `gust_kt` is the peak, as it is on a METAR: a stormy
+day's wind swings between 33 and 78 knots about its 55, rather than sitting at
+55 and being *described* as gusting.
+
+**And the wind reaches the runway.** A twenty-knot headwind takes an A320neo's
+takeoff roll from 5,600 feet to 4,467, and a tailwind stretches it to 6,859 —
+both tracking the square of the groundspeed at rotation, because the aeroplane
+starts its roll with the wind's worth of airspeed already on the clock. A
+crosswind weathervanes the nose and you hold it straight with the pedals; the
+A320's demonstrated 38 knots takes about 18° of the 30 available, and if you do
+nothing at all the aeroplane leaves the side of the runway. The sideways wind is
+never added to the aeroplane's motion, because on wheels the tyres take it — an
+airliner does not slide sideways down a runway.
+
 **Time of day** runs too — `time 0530`, `dawn`, `dusk`, `night`. The sun rises,
 crosses and sets, and at night the horizon does not merely dim, it is *absent*,
 leaving the instruments as the only attitude reference you have.
@@ -484,7 +498,7 @@ tape.
 python -m unittest discover -s tests -t .
 ```
 
-455 tests, no dependencies. They check the atmosphere against published ISA
+477 tests, no dependencies. They check the atmosphere against published ISA
 tables, stall speed against its closed form, cruise fuel flow and service
 ceiling against published figures for all nine aircraft, terrain determinism,
 save/load fidelity, that every prose template renders against a live context,
