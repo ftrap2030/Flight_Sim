@@ -59,7 +59,33 @@ const CASES = [
     fail: [['flaps', 0], ['hydraulics', 0], ['brakes', 0]], spool: 5, ap: {} },
   { name: 'everything wrong', alt: 9000, ias: 220, flaps: 3, gear: true,
     fail: [['engine', 0], ['fire', 1], ['fuel', 0], ['gear', 0]], spool: 60,
-    ap: {} }
+    ap: {} },
+  /* Transitions, not resting states. Every case above sets something and looks
+     at it; none of them *un*-sets anything, which is exactly how a fire came to
+     survive a restart with the ECAM silent and the E/WD still painting it. */
+  { name: 'fire, then restart', alt: 20000, ias: 280, flaps: 0, gear: false,
+    fail: [['fire', 1]], then: [['restore']], spool: 30, ap: {} },
+  { name: 'broken, fixed, broken again', alt: 12000, ias: 250, flaps: 2,
+    gear: true, fail: [['hydraulics', 0], ['flaps', 0]],
+    then: [['clear', 'flaps'], ['fail', 'brakes']], spool: 5, ap: {} },
+  { name: 'an engine fixed', alt: 12000, ias: 250, flaps: 0, gear: false,
+    fail: [['engine', 1], ['hydraulics', 0]], then: [['clear', 'engine']],
+    spool: 15, ap: {} },
+  { name: 'the last engine of four', alt: 15000, ias: 260, flaps: 0,
+    gear: false, fail: [['fire', 3]], spool: 20, ap: {} },
+  /* An EGT in each band. The band is model data now, and comparing it means
+     nothing while every state sits in the green. */
+  /* One degree either side of each threshold, so a limit that drifts by any
+     amount at all moves the band. Sampling comfortably inside a band would
+     compare two builds that happen to agree rather than two that must. */
+  { name: 'egt just under the caution', alt: 0, ias: 200, flaps: 0, gear: false,
+    throttle: 100, egt: 875, ap: {} },
+  { name: 'egt just over the caution', alt: 0, ias: 200, flaps: 0, gear: false,
+    throttle: 100, egt: 876, ap: {} },
+  { name: 'egt just under the limit', alt: 0, ias: 200, flaps: 0, gear: false,
+    throttle: 100, egt: 950, ap: {} },
+  { name: 'egt just over the limit', alt: 0, ias: 200, flaps: 0, gear: false,
+    throttle: 100, egt: 951, ap: {} }
 ];
 
 const TYPES = ['a320neo', 'a350', 'a380', 'a330neo'];
@@ -138,11 +164,22 @@ const ROTOR_SWEEP = { x0: 300, y: 200, step: 0.3, count: 120, aglFt: 1500 };
            value that catches an error in any of the three. */
         for (const [key, index] of (c.fail || [])) triggerFailure(a, S, key, index);
         for (let i = 0; i < (c.spool || 0); i++) spoolEngines(a, S, 0.1);
+        for (const [op, arg] of (c.then || [])) {
+          if (op === 'restore') restoreEngines(S);
+          else if (op === 'clear') clearFailure(S, arg);
+          else if (op === 'fail') triggerFailure(a, S, arg, 0);
+        }
+
+        const eng = c.egt === undefined ? engineReadouts(a, S)
+          /* Forced, because no flyable state reaches the caution band: EGT is a
+             function of fan speed and the air going in, and the fan tops out at
+             the takeoff rating. The band is what is being compared. */
+          : engineReadouts(a, S).map(e =>
+              Object.assign({}, e, { egt: c.egt, egtBand: egtBand(c.egt) }));
 
         const sp = characteristicSpeeds(a, S);
         const vs = vSpeeds(a, S);
         const f = fma(a, S);
-        const eng = engineReadouts(a, S);
         out.push({
           key, case: c.name,
           speeds: Object.fromEntries(

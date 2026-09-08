@@ -6,7 +6,7 @@ Python is stdlib only, `unittest`, no dependencies.
 
 ```bash
 python main.py                                  # play it
-python -m unittest discover -s tests -t .       # 477 tests, ~90 s
+python -m unittest discover -s tests -t .       # 499 tests, ~100 s
 python main.py --list                           # fleet and weather menus
 python main.py --spec a350-1000                 # one type's card and drawing
 open web/anfell.html                            # the browser build
@@ -145,6 +145,16 @@ binds to the profile and reports the profile's fixed values. `turbulence_label`
 and `wind_components` are explicitly overridden for this reason; a
 `WeatherState` in extreme turbulence otherwise politely reported `NIL`.
 
+**Two write paths to one piece of state.** `commands.apply` appended to
+`engines_failed` itself instead of calling `failures.trigger`, so only one of
+the two routes kept the invariants. Four bugs came out of that single fact, and
+the worst made the two front ends contradict each other on screen: `restart
+engines` cleared the failed list and not `engines_on_fire`, so the ECAM fell
+silent while `engines.readouts` went on reporting a fire on a running engine and
+the E/WD painted it red. **If a module owns a piece of state, everything writes
+through it** — `failures.trigger`, `failures.clear` and
+`failures.restore_engines` are that owner now.
+
 **Commands listed in two places.** `commands.apply` has a no-op tuple for
 commands that only meta-signal, and an `elif` chain for those that mutate state.
 Listing a command in both means the tuple wins and the handler never runs —
@@ -169,7 +179,7 @@ has an owner.
 
 ## Testing patterns
 
-- One test file per module, named for it. 477 tests, ~90 s.
+- One test file per module, named for it. 499 tests, ~100 s.
 - Assert against **published figures** where they exist: ISA density tables,
   cruise fuel flow, service ceilings, Vmca. These catch calibration drift that
   self-consistent tests never would.
@@ -339,11 +349,19 @@ is the guard; run it after touching `aircraft.py` or `physics.py`.
 
 `web/tools/parity_check.js` and `.py` are the other guard, and they cover what
 the glass cockpit puts on the glass: the speed marks, the V-speeds, the five
-Flight Mode Annunciator columns, the per-engine N1/N2/EGT/fuel flow and every
-ECAM line with its colour, across sixty-eight states and four types. That is the
-easier half to get wrong — a speed tape with its marks in the wrong place still
-looks exactly like a speed tape, and an E/WD announcing the failure of the
-engine that is still running still looks exactly like an E/WD.
+Flight Mode Annunciator columns, the per-engine N1/N2/EGT/fuel flow with its
+band, and every ECAM line with its colour, across a hundred states and four
+types. That is the easier half to get wrong — a speed tape with its marks in the
+wrong place still looks exactly like a speed tape, and an E/WD announcing the
+failure of the engine that is still running still looks exactly like an E/WD.
+
+**Some of those states are transitions, not resting states**, and they are there
+because a resting state cannot catch an un-setting. A fire that survived a
+restart left the ECAM silent while `engines.readouts` went on reporting it, so
+the E/WD painted FIRE over a running engine — through sixty-eight states that
+only ever broke the aeroplane and never repaired it. Four of the EGT states sit
+one degree either side of a threshold, for the same reason: a sample
+comfortably inside a band compares two builds that happen to agree.
 
 Four of those states are broken on purpose, and they carry a fixed number of
 spool substeps so N1 is compared **mid-decay**. A fan at idle or at the takeoff

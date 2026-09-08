@@ -488,9 +488,9 @@ Two Playwright tools in `web/tools/` are what hold that claim up.
 the Python is tested on. `parity_check` compares what the glass actually shows —
 every speed mark, the V-speeds, all five Flight Mode Annunciator columns, the
 per-engine N1, N2, EGT and fuel flow, and every ECAM line with its colour —
-across sixty-eight states and four types. That is the easier half to get wrong:
-a speed tape with its marks in the wrong place still looks exactly like a speed
-tape.
+across a hundred states and four types, and it runs in CI. That is the easier
+half to get wrong: a speed tape with its marks in the wrong place still looks
+exactly like a speed tape.
 
 ## Tests
 
@@ -498,7 +498,7 @@ tape.
 python -m unittest discover -s tests -t .
 ```
 
-477 tests, no dependencies. They check the atmosphere against published ISA
+499 tests, no dependencies. They check the atmosphere against published ISA
 tables, stall speed against its closed form, cruise fuel flow and service
 ceiling against published figures for all nine aircraft, terrain determinism,
 save/load fidelity, that every prose template renders against a live context,

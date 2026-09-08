@@ -117,13 +117,35 @@ def python_row(key, case):
         broken.trigger(sim, key, index)
     for _ in range(case.get("spool", 0)):
         engines.spool(state, craft, 0.1)
+    # Then un-set things. Every case above only ever breaks the aeroplane, and
+    # a state that is never repaired is how a fire came to survive a restart.
+    for step in case.get("then", ()):
+        operation, argument = (step + [None])[:2] if isinstance(step, list) else step
+        if operation == "restore":
+            broken.restore_engines(sim)
+        elif operation == "clear":
+            broken.clear(sim, argument)
+        elif operation == "fail":
+            broken.trigger(sim, argument)
+
+    motors = engines.readouts(sim)
+    if case.get("egt") is not None:
+        # Forced: no flyable state reaches the caution band, because EGT is a
+        # function of fan speed and the fan tops out at the takeoff rating. It
+        # is the band that is being compared, not the way it was arrived at.
+        forced = float(case["egt"])
+        motors = [
+            type(e)(**dict(e.__dict__, egt_c=forced,
+                           egt_band=engines.egt_band(forced)))
+            for e in motors
+        ]
 
     speeds = fbw.characteristic_speeds(sim)
     takeoff = fbw.takeoff_speeds(sim)
     autopilot.note_mode_changes(sim, None)
     annunciator = autopilot.fma(sim, None)
     return (speeds, takeoff, annunciator, autopilot.channels(state),
-            engines.readouts(sim), broken.ecam(sim))
+            motors, broken.ecam(sim))
 
 
 def weather_failures(data):

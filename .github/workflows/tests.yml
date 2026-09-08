@@ -30,3 +30,50 @@ jobs:
 
       - name: Run tests
         run: python -m unittest discover -s tests -t . -v
+
+  # The browser build is the same flight model again in JavaScript, and the only
+  # thing standing between the two of them and a quiet divergence is these two
+  # scripts. Until now they ran when somebody remembered, which is how the
+  # weather came to differ on every profile and an EGT threshold came to be
+  # owned by the model and read only by the display.
+  #
+  # This job installs things, in a repository whose Python half is deliberately
+  # dependency-free. That is a real trade and it is made deliberately: a guard
+  # nobody runs is not a guard. The job above is untouched, still stdlib-only
+  # and still on three Pythons; this one is separate and cannot slow or break
+  # it.
+  browser-parity:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # `--no-save` and no package.json: nothing about the repository changes,
+      # and `web/tools/*.js` resolve `playwright` up the tree from here.
+      - name: Install Playwright and a Chromium
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+
+      # Every type still within 5% of its published block fuel flow. This is the
+      # guard on the aerodynamics: the TSFC values were solved rather than
+      # looked up, so a drifted drag polar shows up here as a fuel flow that has
+      # left its aeroplane.
+      - name: Cruise fuel flow, in the browser build
+        run: node web/tools/cruise_check.js "$PWD/web/anfell.html"
+
+      # And what the glass actually shows: every speed mark, V-speed, flight
+      # mode, engine parameter and ECAM line, plus the weather and the gusts,
+      # across a hundred states and four types.
+      - name: Model parity
+        run: |
+          node web/tools/parity_check.js "$PWD/web/anfell.html" > /tmp/web.json
+          python web/tools/parity_check.py /tmp/web.json

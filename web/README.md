@@ -56,7 +56,7 @@ node web/tools/parity_check.js "$PWD/web/anfell.html" > /tmp/web.json
 python web/tools/parity_check.py /tmp/web.json
 ```
 
-Sixty-eight states across four types: every speed mark, every V-speed, all five
+A hundred states across four types: every speed mark, every V-speed, all five
 Flight Mode Annunciator columns, the per-engine N1/N2/EGT/fuel flow and every
 ECAM line with its colour must match `flight_sim/`. This is the easier half to
 get wrong, because a speed tape with its marks in the wrong place still looks

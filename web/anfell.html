@@ -2101,9 +2101,33 @@ function triggerFailure(a, s, key, engineIndex = 0) {
   return f.title;
 }
 
+/* Everything is running again. One owner for that statement, because it is
+   three pieces of state that have to move together: clearing the failed list
+   and leaving `enginesOnFire` populated makes the E/WD paint FIRE over an
+   engine that is running while the ECAM beside it says nothing.
+   (failures.restore_engines) */
+function restoreEngines(s) {
+  s.enginesFailed = []; s.enginesOnFire = []; s.enginesRunning = true;
+}
+
+/* Un-break one thing, or everything. The inverse of `triggerFailure`, and here
+   for the same reason: a jam remembers the setting it jammed at, and forgetting
+   to forget that leaves a surface stuck at a position nothing is enforcing.
+   (failures.clear) */
+function clearFailure(s, key) {
+  if (!key) return clearFailures(s);
+  const f = FAILURE_BY_KEY[key];
+  if (!f) return;
+  if (f.perEngine) return restoreEngines(s);
+  s.failures = s.failures.filter(k => k !== key);
+  if (key === "flaps") s.jammedFlaps = null;
+  if (key === "gear") s.jammedGear = null;
+}
+
 function clearFailures(s) {
-  s.failures = []; s.enginesFailed = []; s.enginesOnFire = [];
+  s.failures = [];
   s.jammedFlaps = null; s.jammedGear = null; s.armedFailure = null;
+  restoreEngines(s);
 }
 
 const hasFailure = (s, key) => (s.failures || []).includes(key);
