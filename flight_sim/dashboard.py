@@ -8,6 +8,7 @@ displays are laid out (PFD on the left, systems on the right).
 from . import aircraft as fleet
 from . import autopilot
 from . import atmosphere as atm
+from . import engines
 from . import failures
 from . import fbw
 
@@ -162,12 +163,17 @@ def render(sim, readout, title=None):
     lines.append("`FMA  {}`".format(autopilot.fma_text(sim, r)))
     lines.append("")
 
-    # The ECAM, under the annunciator exactly as it sits on the aeroplane. The
-    # words come from `failures.ecam`, so the text panel and the glass one
-    # cannot disagree about what is wrong.
+    # The engines and then the ECAM, in the order the E/WD stacks them: the
+    # parameters across the top, and what is wrong with them underneath. Both
+    # come from the model -- `engines.readouts` and `failures.ecam` -- so the
+    # text panel and the glass one cannot disagree about either.
     ecam = failures.ecam(sim)
-    if ecam:
+    block = engine_block(r)
+    if block or ecam:
         lines.append("```")
+        lines.extend(block)
+        if block and ecam:
+            lines.append("")
         for entry in ecam:
             lines.append(("    " if entry.indent else "") + entry.text)
         lines.append("```")
@@ -383,6 +389,50 @@ def _engine_text(sim, readout):
     if running == total:
         return "{}/{} OK".format(running, total)
     return "**{}/{} — {} OUT**".format(running, total, total - running)
+
+
+# How each EGT band is marked, since a text panel has no colour to paint it
+# with. The band itself is `engines.egt_band`'s to decide, exactly as the E/WD's
+# amber is: what changes between the two front ends is the ink, not the reading.
+_EGT_MARK = {
+    engines.EGT_NORMAL: " ",
+    engines.EGT_CAUTION: "!",
+    engines.EGT_OVER_LIMIT: "#",
+}
+
+
+def engine_block(readout):
+    """The E/WD's top half, in text: N1, N2, EGT and fuel flow per engine.
+
+    The glass cockpit has had this since it grew an E/WD; the simulator the
+    model was written for could not show N1 at all, and said only "2/2 OK".
+    Every figure comes from `readout.engines`, so there is no arithmetic here --
+    the two front ends are reading one set of numbers, which is the whole reason
+    `engines.readouts` exists.
+    """
+    entries = readout.engines or ()
+    if not entries:
+        return []
+
+    def row(label, cell):
+        return "  {:<4}{}".format(label, "".join(cell(e) for e in entries))
+
+    # The numbers are shown for a failed engine too, and are the honest ones:
+    # the fan is running *down*, not stopped, and watching N1 decay is how the
+    # asymmetry announces itself. What the column head says is that the engine
+    # can no longer be believed -- the same distinction the glass draws by
+    # crossing out the dial while still printing the digits inside it.
+    lines = [row("", lambda e: "{:>7}".format(
+        "ENG {}{}".format(e.index + 1, "*" if e.failed else "")))]
+    lines.append(row("N1", lambda e: "{:>7.1f}".format(e.n1_pct)))
+    lines.append(row("N2", lambda e: "{:>7.1f}".format(e.n2_pct)))
+    lines.append(row("EGT", lambda e: "{:>6.0f}{}".format(
+        e.egt_c, _EGT_MARK[e.egt_band])))
+    lines.append(row("FF", lambda e: "{:>7,.0f}".format(e.fuel_flow_kgh)))
+    if any(e.failed for e in entries):
+        lines.append(row("", lambda e: "{:>7}".format(
+            "FIRE" if e.fire else ("OUT" if e.failed else ""))))
+    return lines
 
 
 def _config_text(state):

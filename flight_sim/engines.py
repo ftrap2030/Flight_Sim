@@ -61,6 +61,14 @@ EGT_EXPONENT = 0.815
 EGT_CAUTION_C = 875.0
 EGT_LIMIT_C = 950.0
 
+# What the two thresholds above mean, as a name the displays can read. They had
+# no reader in Python at all: the model declared the limits and the browser
+# re-declared them as its own literals and made the decision, which is the
+# ownership rule backwards. A band rather than a colour because the colour is a
+# display's choice -- the E/WD paints it amber, a text panel has no colour and
+# marks it some other way -- while *where* the thresholds sit is the model's.
+EGT_NORMAL, EGT_CAUTION, EGT_OVER_LIMIT = "normal", "caution", "limit"
+
 
 def commanded_n1_pct(craft, throttle_pct):
     """The fan speed the levers are asking for.
@@ -133,6 +141,15 @@ def total_thrust_fraction(state, craft):
     )
 
 
+def egt_band(egt_value_c):
+    """Which side of the caution and the limit this exhaust temperature is."""
+    if egt_value_c > EGT_LIMIT_C:
+        return EGT_OVER_LIMIT
+    if egt_value_c > EGT_CAUTION_C:
+        return EGT_CAUTION
+    return EGT_NORMAL
+
+
 def egt_c(n1_pct, altitude_ft):
     """Exhaust gas temperature. Derived, and for display only -- see the module
     docstring. Ambient plus a rise that climbs steeply with fan speed."""
@@ -149,6 +166,7 @@ class EngineReadout:
     n1_pct: float
     n2_pct: float
     egt_c: float
+    egt_band: str
     fuel_flow_kgh: float
     thrust_n: float
     failed: bool
@@ -178,6 +196,7 @@ def readouts(sim):
                 if n1 > 0.5
                 else 0.0,
                 egt_c=egt_c(n1, s.altitude_ft),
+                egt_band=egt_band(egt_c(n1, s.altitude_ft)),
                 fuel_flow_kgh=craft.tsfc * thrust * 3600.0,
                 thrust_n=thrust,
                 failed=index in failed,

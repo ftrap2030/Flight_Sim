@@ -274,6 +274,14 @@ def main():
                         "{}: ENG {} {} is {:.3f} in Python and {:.3f} in the browser"
                         .format(where, index + 1, field, mine, theirs)
                     )
+            # The band, not just the value: the thresholds are the model's and
+            # the browser used to hold its own copy and make the decision, so a
+            # drifted limit would have passed a comparison of the temperature.
+            if mine_e.egt_band != theirs_e["egtBand"]:
+                failures.append(
+                    "{}: ENG {} EGT band is {!r} in Python and {!r} in the browser"
+                    .format(where, index + 1, mine_e.egt_band, theirs_e["egtBand"])
+                )
             for field in ("failed", "fire"):
                 if getattr(mine_e, field) != theirs_e[field]:
                     failures.append(

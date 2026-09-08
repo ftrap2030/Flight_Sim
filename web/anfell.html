@@ -1181,6 +1181,16 @@ const N1_IDLE_PCT = 21, N1_MAX_PCT = 100, N1_THRUST_EXPONENT = 2;
 const N2_IDLE_PCT = 58;
 const EGT_RISE_C = 835, EGT_EXPONENT = 0.815;
 const EGT_CAUTION_C = 875, EGT_LIMIT_C = 950;
+const EGT_NORMAL = "normal", EGT_CAUTION = "caution", EGT_OVER_LIMIT = "limit";
+/* Which side of the two thresholds this is. The *band* is model data and comes
+   through `engineReadouts`; the colour below is the display's own choice, which
+   is why the E/WD asks for a band and paints it rather than comparing against
+   these numbers itself. (engines.egt_band) */
+function egtBand(egtC) {
+  if (egtC > EGT_LIMIT_C) return EGT_OVER_LIMIT;
+  if (egtC > EGT_CAUTION_C) return EGT_CAUTION;
+  return EGT_NORMAL;
+}
 
 const thrustFractionForN1 = n1 =>
   Math.pow(Math.max(0, n1 - N1_IDLE_PCT) / (N1_MAX_PCT - N1_IDLE_PCT),
@@ -1227,6 +1237,7 @@ function engineReadouts(a, s) {
       index: i, n1,
       n2: n1 > 0.5 ? N2_IDLE_PCT + (100 - N2_IDLE_PCT) * n1 / N1_MAX_PCT : 0,
       egt: egtC(n1, s.alt),
+      egtBand: egtBand(egtC(n1, s.alt)),
       flow: a.tsfc * thrust * 3600,
       thrust,
       failed: s.enginesFailed.includes(i),
@@ -4744,8 +4755,8 @@ function drawEngineColumn(c, x, y, w, h, entry, a) {
   drawN1Gauge(c, x + w / 2, y + h * 0.30, r, entry, a);
 
   const egtColour = entry.failed ? "#6f8b98"
-    : (entry.egt > EGT_LIMIT_C ? C_RED
-      : (entry.egt > EGT_CAUTION_C ? C_AMBER : C_GREEN));
+    : (entry.egtBand === EGT_OVER_LIMIT ? C_RED
+      : (entry.egtBand === EGT_CAUTION ? C_AMBER : C_GREEN));
   txt(c, Math.round(entry.egt).toString(), x + w / 2, y + h * 0.62,
       h * 0.105, egtColour);
   txt(c, Math.round(entry.flow).toLocaleString(), x + w / 2, y + h * 0.80,

@@ -159,7 +159,7 @@ const ROTOR_SWEEP = { x0: 300, y: 200, step: 0.3, count: 120, aglFt: 1500 };
             n2: Math.round(e.n2 * 1000) / 1000,
             egt: Math.round(e.egt * 1000) / 1000,
             flow: Math.round(e.flow * 1000) / 1000,
-            failed: !!e.failed, fire: !!e.fire
+            egtBand: e.egtBand, failed: !!e.failed, fire: !!e.fire
           })),
           ecam: ecamLines(S).map(l => ({
             text: l.text, colour: ECAM_NAMES[l.colour] || l.colour,

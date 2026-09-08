@@ -58,6 +58,33 @@ class TestTheCurve(unittest.TestCase):
         self.assertAlmostEqual(engines.egt_c(idle_n1, 0.0), 400.0, delta=25.0)
         self.assertAlmostEqual(engines.egt_c(100.0, 0.0), 850.0, delta=25.0)
 
+    def test_the_limits_decide_the_band_here_rather_than_in_a_display(self):
+        """`EGT_CAUTION_C` and `EGT_LIMIT_C` had no reader in Python at all.
+
+        The model declared them and the browser re-declared them as its own
+        literals and made the decision, which is the ownership rule backwards --
+        and it meant `parity_check` could compare the temperature while a
+        drifted threshold went by unnoticed.
+        """
+        self.assertEqual(engines.egt_band(400.0), engines.EGT_NORMAL)
+        self.assertEqual(
+            engines.egt_band(engines.EGT_CAUTION_C), engines.EGT_NORMAL
+        )
+        self.assertEqual(
+            engines.egt_band(engines.EGT_CAUTION_C + 1.0), engines.EGT_CAUTION
+        )
+        self.assertEqual(
+            engines.egt_band(engines.EGT_LIMIT_C), engines.EGT_CAUTION
+        )
+        self.assertEqual(
+            engines.egt_band(engines.EGT_LIMIT_C + 1.0), engines.EGT_OVER_LIMIT
+        )
+
+    def test_the_readout_carries_the_band_beside_the_temperature(self):
+        session = Session.new("a320neo", "clear", seed=42)
+        for entry in engines.readouts(session.sim):
+            self.assertEqual(entry.egt_band, engines.egt_band(entry.egt_c))
+
 
 class TestTheSpool(unittest.TestCase):
     def test_the_levers_no_longer_change_the_thrust_at_once(self):
