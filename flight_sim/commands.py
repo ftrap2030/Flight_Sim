@@ -419,10 +419,38 @@ def _match_navigation(text, raw):
     if m:
         return Command("direct_to", 0.0, raw, advances_time=False,
                        target=m.group(1).strip())
+
+    # A whole plan at once. Ahead of the bare `route` below, which shows the
+    # plan rather than setting one -- the two are only kept apart by the `$`
+    # on that pattern, and a matcher that relies on another matcher's anchor
+    # is one edit away from the "fly to heading 270" bug.
+    m = re.match(
+        r"^(?:set\s+)?(?:route|flight plan)\s+"
+        r"([a-z0-9]{2,20}(?:\s+[a-z0-9]{2,20})*)$",
+        text,
+    )
+    if m:
+        return Command("set_route", 0.0, raw, advances_time=False,
+                       target=m.group(1).strip())
+
+    # Clearing the whole plan before removing one waypoint from it, or
+    # `remove route` takes out a waypoint called "route".
+    if re.match(r"^(?:clear|cancel|delete|remove)\s+(?:the\s+)?"
+                r"(?:plan|route)$", text):
+        return Command("clear_route", text=raw, advances_time=False)
+
+    m = re.match(r"^(?:add|append)(?:\s+waypoint)?\s+([a-z0-9 ]{2,30})$", text)
+    if m:
+        return Command("add_waypoint", 0.0, raw, advances_time=False,
+                       target=m.group(1).strip())
+    m = re.match(r"^(?:remove|drop|delete)(?:\s+waypoint)?\s+"
+                 r"([a-z0-9 ]{2,30})$", text)
+    if m:
+        return Command("remove_waypoint", 0.0, raw, advances_time=False,
+                       target=m.group(1).strip())
+
     if re.match(r"^(?:show |flight )?(?:plan|route|nav|destination)$", text):
         return Command("show_plan", text=raw, advances_time=False)
-    if re.match(r"^(?:clear|cancel|delete)\s+(?:the\s+)?(?:plan|route)$", text):
-        return Command("clear_route", text=raw, advances_time=False)
     if re.match(r"^(?:debrief|summary|how did i do)$", text):
         return Command("debrief", text=raw, advances_time=False)
     return None
@@ -557,7 +585,8 @@ def apply(sim, command):
             s.active_protections = []
             s.alpha_floor_latched = False
     elif kind in ("hold", "status", "map", "airfields", "help", "quit",
-                  "direct_to", "show_plan", "clear_route", "debrief",
+                  "direct_to", "set_route", "add_waypoint", "remove_waypoint",
+                  "show_plan", "clear_route", "debrief",
                   "spec", "fleet", "show_law", "show_failures"):
         pass
     elif kind == "time_of_day":
@@ -622,7 +651,8 @@ HELP_TEXT = """\
 | **Failures** | `failures`, `fail engine 3 fire`, `fail fuel leak`, `arm engine failure`, `fix all` |
 | **Autopilot** | `autopilot on/off`, `set altitude 12000`, `set speed 280`, `vertical speed 1500`, `nav`, `approach mode` |
 | **Time of day** | `time 0530`, `dawn`, `midday`, `dusk`, `night` |
-| **Navigation** | `direct to KEBR`, `show plan`, `clear route`, `airfields`, `debrief` |
+| **Navigation** | `route ANFL KEBR CROW`, `add HRWD`, `remove KEBR`, `direct to KEBR` |
+| **Navigation** | `show plan`, `clear route`, `airfields`, `debrief` |
 | **Flight controls** | `law` (what is protecting you), `direct law`, `alternate law`, `normal law` |
 | **Reference** | `spec` (your aircraft's card), `spec a380`, `fleet` |
 | **Other** | `map` (terrain plan view), `status`, `help`, `quit` |

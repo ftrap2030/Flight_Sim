@@ -91,7 +91,12 @@
     -webkit-backdrop-filter: blur(7px);
   }
 
-  #setup { top: 14px; left: 14px; padding: 11px 13px; display: grid; gap: 9px; min-width: 216px; }
+  /* The plan list made this panel tall enough to run off a laptop screen and
+     take the failures menu with it, so it scrolls rather than overflowing. */
+  #setup {
+    top: 14px; left: 14px; padding: 11px 13px; display: grid; gap: 9px;
+    min-width: 216px; max-height: calc(100% - 28px); overflow-y: auto;
+  }
   #legend { top: 14px; right: 14px; padding: 11px 13px; max-width: 244px; }
 
   .float-title {
@@ -117,6 +122,35 @@
   select:focus-visible, button:focus-visible {
     outline: 2px solid var(--efis-cyan); outline-offset: 1px;
   }
+
+  /* The flight plan. A row per waypoint: the leg's distance, a DIR key that
+     makes it the active one, and a key that takes it out again. */
+  #plan-list {
+    margin: 0; padding: 0; list-style: none;
+    /* Three rows, then it scrolls. The panel it sits in has a whole cockpit
+       under it on a laptop screen, and the ND draws the entire plan anyway --
+       this is the readout, not the map. */
+    display: grid; gap: 2px; max-height: 76px; overflow-y: auto;
+  }
+  #plan-list:empty { display: none; }
+  #plan-list li {
+    display: grid; grid-template-columns: 1fr auto auto auto;
+    align-items: center; gap: 6px;
+    font-family: var(--font-inst); font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+    padding: 2px 4px; border-left: 2px solid transparent;
+    color: var(--ink-dim);
+  }
+  #plan-list li.active {
+    border-left-color: var(--efis-magenta);
+    color: var(--efis-magenta); background: rgba(255,107,224,.07);
+  }
+  #plan-list .nm { color: var(--ink-faint); }
+  #plan-list button {
+    flex: none; padding: 1px 5px; font-size: 9px; letter-spacing: .06em;
+    background: transparent; border: 1px solid var(--edge); color: var(--ink-faint);
+  }
+  #plan-list button:hover { background: var(--edge); color: var(--ink); }
 
   .btn-row { display: flex; gap: 6px; }
   button {
@@ -325,9 +359,10 @@
         </select>
       </label>
       <label class="field">
-        <span>Destination</span>
+        <span>Flight plan</span>
         <select id="sel-dest"></select>
       </label>
+      <ol id="plan-list"></ol>
       <label class="field">
         <span>Break something</span>
         <select id="sel-fail"></select>
@@ -1615,6 +1650,69 @@ const fieldByIdent = ident =>
   buildAuthored().find(f => f.ident === ident) ||
   airfieldsNear(S ? S.x : 0, S ? S.y : 0, 40).find(f => f.ident === ident) || null;
 
+/* ---------- the route (navigation.py) ----------
+   A waypoint carries its own position rather than a reference to the airfield
+   it came from, exactly as `navigation.Waypoint` does. That is what lets a
+   plan name a field three hundred miles away that `airfieldsNear` has long
+   since stopped returning -- the browser's old one-waypoint destination was a
+   live airfield object and quietly went stale when you flew away from it. */
+const WAYPOINT_CAPTURE_NM = 1.5;
+
+class Waypoint {
+  constructor(o) { Object.assign(this, { ident: "", isAirfield: false }, o); }
+  static fromAirfield(f) {
+    return new Waypoint({ name: f.name, x: f.x, y: f.y,
+                          ident: f.ident, isAirfield: true, ils: !!f.ils });
+  }
+  static fromJSON(o) { return new Waypoint(o); }
+  get label() { return this.ident || this.name; }
+  distanceNm(x, y) { return Math.hypot(this.x - x, this.y - y); }
+  bearingFrom(x, y) { return wrap360(deg(Math.atan2(this.x - x, this.y - y))); }
+}
+
+class Route {
+  constructor(waypoints = [], active = 0) {
+    this.waypoints = waypoints; this.active = active;
+  }
+  static fromJSON(o) {
+    if (!o) return new Route();
+    return new Route((o.waypoints || []).map(Waypoint.fromJSON), o.active || 0);
+  }
+  toJSON() { return { waypoints: this.waypoints.map(w => ({ ...w })), active: this.active }; }
+
+  directTo(w) { this.waypoints = [w]; this.active = 0; }
+  append(w) { this.waypoints.push(w); }
+  remove(index) {
+    if (index < 0 || index >= this.waypoints.length) return;
+    this.waypoints.splice(index, 1);
+    this.active = clamp(this.active > index ? this.active - 1 : this.active,
+                        0, Math.max(0, this.waypoints.length - 1));
+  }
+  clear() { this.waypoints = []; this.active = 0; }
+
+  get activeWaypoint() {
+    return this.active >= 0 && this.active < this.waypoints.length
+      ? this.waypoints[this.active] : null;
+  }
+  get destination() {
+    return this.waypoints.length ? this.waypoints[this.waypoints.length - 1] : null;
+  }
+  get finished() { return this.active >= this.waypoints.length; }
+
+  /* Never advances past the final waypoint: arriving at the destination is the
+     point of the route, and the guidance should keep pointing at it. */
+  advanceIfReached(x, y) {
+    const current = this.activeWaypoint;
+    if (!current) return false;
+    if (this.active >= this.waypoints.length - 1) return false;
+    if (current.distanceNm(x, y) <= WAYPOINT_CAPTURE_NM) { this.active++; return true; }
+    return false;
+  }
+}
+
+const activeWaypoint = s => (s.route ? s.route.activeWaypoint : null);
+const destinationOf = s => (s.route ? s.route.destination : null);
+
 /* ---------- session state ---------- */
 let craft = FLEET_BY_KEY["a350"];
 let weather = new WeatherState(WEATHER_BY_KEY["clear"], WORLD_SEED);
@@ -1679,7 +1777,7 @@ function newFlight(keepView) {
     turb: [0, 0, 0],
     /* Commanded heading is the autopilot's, not the pilot's: hand-flying
        commands a bank directly and leaves this null. */
-    cmdHdg: null, ap: freshAutopilot(), dest: null, fmaChanged: {},
+    cmdHdg: null, ap: freshAutopilot(), route: new Route(), fmaChanged: {},
     onGround, status: onGround ? "rollout" : "flying", touchdown: null,
     landingField: home.ident, rollDirection: hdg, approach: null,
     t: 0, tick: 0, seed: WORLD_SEED,
@@ -1852,19 +1950,42 @@ function apDisengageFor(s, kind) {
   else if (kind === "throttle") s.ap.spdKt = null;
 }
 
-/* Guidance to the destination, if one is selected. The browser has no route
-   planner, so this is a one-waypoint direct-to -- which is exactly what the
-   Python's `direct to KEBR` builds, and what navigation.leg_for reads. */
+/* Guidance to the active waypoint (navigation.leg_for).
+
+   The fuel terms are the point of it and the browser did without them for two
+   phases: a leg that only knows distance, bearing and time can tell you where
+   to go but not whether you can get there. They come from the live fuel flow
+   and the *ground* speed, so a headwind or a detour around a ridge shows up in
+   the arrival figure immediately -- which is what makes a route a decision. */
 function legFor(s, readout) {
-  if (!s.dest) return null;
-  const distanceNm = s.dest.distanceNm(s.x, s.y);
+  const wp = activeWaypoint(s);
+  if (!wp) return null;
+  const distanceNm = wp.distanceNm(s.x, s.y);
+  const bearingDeg = wp.bearingFrom(s.x, s.y);
   const gs = Math.max(readout ? readout.gsKt : 1, 1);
+  const etaS = distanceNm / gs * 3600;
+  const flow = readout ? readout.fuelFlowKgh : 0;
+  const fuelRequiredKg = flow * etaS / 3600;
   return {
-    field: s.dest,
-    distanceNm,
-    bearingDeg: s.dest.bearingFrom(s.x, s.y),
-    etaS: distanceNm / gs * 3600
+    waypoint: wp,
+    field: wp.field || null,
+    distanceNm, bearingDeg,
+    relativeBearingDeg: wrap180(bearingDeg - s.hdg),
+    etaS,
+    fuelRequiredKg,
+    fuelOnArrivalKg: s.fuel - fuelRequiredKg,
+    remainingAfterKg: s.fuel - fuelRequiredKg,
+    get reachable() { return this.fuelOnArrivalKg > 0; }
   };
+}
+
+/* "--:--" past a day, exactly as `Leg.eta_text` does: a groundspeed near zero
+   makes the arithmetic produce a number, and it is not information. */
+function etaText(etaS) {
+  if (!isFinite(etaS) || etaS > 24 * 3600) return "--:--";
+  const total = Math.round(etaS);
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:` +
+         `${String(total % 60).padStart(2, "0")}`;
 }
 
 function apHoldAltitude(a, s) {
@@ -3903,6 +4024,9 @@ function updatePanel() {
      the panel just worked out -- aeroState is the most expensive call in the
      frame. */
   return { ias, agl, vs, mach: aero.mach, alpha: aero.alpha, stalled: aero.stalled,
+           /* The leg's fuel-on-arrival is this times the time to run, so it is
+              read off the readout rather than recomputed a second way. */
+           fuelFlowKgh: a.tsfc * aero.thrust * 3600,
            gsKt: Math.hypot(vx, vy) * KT_PER_MS, trackDeg,
            driftDeg: wrap180(trackDeg - s.hdg),
            /* The local wind, so the ND draws the wind the aeroplane is in
@@ -4663,7 +4787,7 @@ function drawNd(c, x, y, d, a, s, readout) {
   /* The airfields around you, and the leg to the one you are going to. */
   for (const f of airfieldsNear(s.x, s.y, range * 1.3).slice(0, 14)) {
     const [fx, fy] = project(f.x, f.y);
-    const isDest = s.dest && f.ident === s.dest.ident;
+    const isDest = s.route.waypoints.some(w => w.ident === f.ident);
     const colour = isDest ? C_MAGENTA : (f.ils ? C_CYAN : "#8fa6b2");
     const r = d * (isDest ? 0.017 : 0.011);
     c.beginPath();
@@ -4682,11 +4806,22 @@ function drawNd(c, x, y, d, a, s, readout) {
       line(c, ax, ay, bx, by, colour, d * 0.008);
     }
   }
-  if (s.dest) {
-    const [dx, dy] = project(s.dest.x, s.dest.y);
+  /* The plan: a magenta track through the waypoints, solid from the aeroplane
+     to the one it is flying to and dashed for the legs still to come, which is
+     how a real ND separates the active leg from the rest of the plan. */
+  if (s.route.waypoints.length) {
+    const wp = s.route.activeWaypoint;
     c.save();
+    if (wp) {
+      const [ax, ay] = project(wp.x, wp.y);
+      line(c, ox, oy, ax, ay, C_MAGENTA, d * 0.007);
+    }
     c.setLineDash([d * 0.02, d * 0.014]);
-    line(c, ox, oy, dx, dy, C_MAGENTA, d * 0.006);
+    for (let i = s.route.active; i < s.route.waypoints.length - 1; i++) {
+      const [px, py] = project(s.route.waypoints[i].x, s.route.waypoints[i].y);
+      const [qx, qy] = project(s.route.waypoints[i + 1].x, s.route.waypoints[i + 1].y);
+      line(c, px, py, qx, qy, C_MAGENTA, d * 0.006);
+    }
     c.restore();
   }
   c.restore();
@@ -4768,7 +4903,7 @@ function drawNd(c, x, y, d, a, s, readout) {
   /* Top right: where you are going, how far, and when you get there. */
   const leg = legFor(s, readout);
   if (leg) {
-    txt(c, leg.field.ident, x + d * 0.975, y + d * 0.045, d * 0.040, C_MAGENTA, "right");
+    txt(c, leg.waypoint.label, x + d * 0.975, y + d * 0.045, d * 0.040, C_MAGENTA, "right");
     txt(c, `${leg.distanceNm.toFixed(1)} NM`, x + d * 0.975, y + d * 0.092,
         d * 0.034, C_GREEN, "right");
     const m = Math.round(leg.etaS / 60);
@@ -5002,7 +5137,7 @@ function fcuPush(ch) {
     /* Pushing the heading knob is how you ask for managed lateral. With no
        destination there is nothing to manage, so it simply lets go. */
     s.ap.hdgDeg = null;
-    if (s.dest) { s.ap.nav = true; s.ap.engaged = true; }
+    if (activeWaypoint(s)) { s.ap.nav = true; s.ap.engaged = true; }
   } else if (ch === "alt") s.ap.altFt = null;
   else if (ch === "vs") s.ap.vsFpm = null;
 }
@@ -5032,9 +5167,10 @@ function updateFcu() {
   const captured = S.ap.appr && S.approach && S.approach.onApproach;
   set("fcu-ap", S.ap.engaged);
   set("fcu-athr", S.ap.spdKt !== null);
-  set("fcu-nav", S.ap.nav, !!S.dest);
+  set("fcu-nav", S.ap.nav, !!activeWaypoint(S));
   set("fcu-appr", captured, S.ap.appr);
-  el("fcu-dest").textContent = S.dest ? S.dest.ident : "---";
+  const dest = destinationOf(S);
+  el("fcu-dest").textContent = dest ? dest.label : "---";
 }
 
 for (const box of document.querySelectorAll('.fcu-win[data-ch]')) {
@@ -5073,7 +5209,7 @@ el("fcu-athr").addEventListener("click", () => {
 });
 el("fcu-nav").addEventListener("click", () => {
   if (S.ap.nav) { S.ap.nav = false; S.ap.hdgDeg = wrap360(S.hdg); }
-  else if (S.dest) { S.ap.nav = true; S.ap.hdgDeg = null; S.ap.engaged = true;
+  else if (activeWaypoint(S)) { S.ap.nav = true; S.ap.hdgDeg = null; S.ap.engaged = true;
                      if (S.ap.altFt === null && S.ap.vsFpm === null) S.ap.altFt = S.alt; }
   updateFcu();
 });
@@ -5201,26 +5337,50 @@ selFail.addEventListener("change", () => {
   updateFcu();
 });
 
-const selDest = el("sel-dest");
+const selDest = el("sel-dest"), planList = el("plan-list");
+
+/* The picker offers what is nearby to *add*; the list below is the plan. The
+   waypoints are copies rather than live airfields, so a plan keeps naming a
+   field long after the aeroplane has flown out of range of the search. */
 function refreshDestinations() {
   const near = airfieldsNear(S.x, S.y, 90).slice(0, 12);
-  const chosen = S.dest ? S.dest.ident : "";
-  selDest.innerHTML = '<option value="">— none —</option>' + near.map(f =>
+  selDest.innerHTML = '<option value="">— add a waypoint —</option>' + near.map(f =>
     `<option value="${f.ident}">${f.ident} · ${Math.round(f.distanceNm(S.x, S.y))} nm` +
     `${f.ils ? " · ILS" : ""}</option>`).join("");
-  selDest.value = chosen;
-  if (S.dest && selDest.value !== chosen) {
-    /* The destination has dropped off the near list. Keep flying to it. */
-    selDest.insertAdjacentHTML("beforeend",
-      `<option value="${S.dest.ident}">${S.dest.ident} · far</option>`);
-    selDest.value = chosen;
-  }
+  selDest.value = "";
+  renderPlan();
 }
+
+function renderPlan() {
+  const route = S.route;
+  planList.innerHTML = route.waypoints.map((w, i) => {
+    /* Each row shows the leg *into* it: from the aeroplane for the active
+       waypoint, and from the waypoint before for the ones after it. */
+    const from = i === route.active ? { x: S.x, y: S.y } : route.waypoints[i - 1];
+    const nm = from ? w.distanceNm(from.x, from.y) : 0;
+    return `<li class="${i === route.active ? "active" : ""}">` +
+      `<span>${w.label}</span>` +
+      `<span class="nm">${from ? nm.toFixed(0) + " nm" : ""}</span>` +
+      `<button data-dir="${i}" title="Direct to">DIR</button>` +
+      `<button data-del="${i}" title="Remove">×</button></li>`;
+  }).join("");
+}
+
+planList.addEventListener("click", ev => {
+  const dir = ev.target.dataset.dir, del = ev.target.dataset.del;
+  if (dir !== undefined) S.route.active = +dir;
+  else if (del !== undefined) S.route.remove(+del);
+  else return;
+  /* An empty plan cannot leave NAV engaged with nothing to fly to. */
+  if (!activeWaypoint(S) && S.ap.nav) { S.ap.nav = false; S.ap.hdgDeg = wrap360(S.hdg); }
+  renderPlan(); updateFcu();
+});
+
 selDest.addEventListener("change", () => {
-  S.dest = airfieldsNear(S.x, S.y, 400).find(f => f.ident === selDest.value) || null;
-  /* Losing the destination cannot leave NAV engaged with nothing to fly to. */
-  if (!S.dest && S.ap.nav) { S.ap.nav = false; S.ap.hdgDeg = wrap360(S.hdg); }
-  updateFcu();
+  const f = airfieldsNear(S.x, S.y, 400).find(a => a.ident === selDest.value);
+  if (f) S.route.append(Waypoint.fromAirfield(f));
+  selDest.value = "";
+  renderPlan(); updateFcu();
 });
 selType.value = "a350"; selWx.value = "clear"; selStart.value = "runway";
 selType.addEventListener("change", () => { craft = FLEET_BY_KEY[selType.value]; newFlight(true); });
@@ -5263,6 +5423,11 @@ function frame(now) {
        and the HUD, and searching the airfield grid a hundred times a frame
        would cost more than the whole integrator. */
     S.approach = approachGuidance(craft, S);
+    /* Once a frame, on the same schedule as the guidance above and for the
+       same reason `physics.step_tick` does it once a tick: a waypoint behind
+       you is not the one to be flying to, and the capture radius is 1.5 nm --
+       nine seconds at cruise, so a hundredth of a second buys nothing. */
+    if (S.route.advanceIfReached(S.x, S.y)) renderPlan();
     checkArmedFailure(craft, S, lastReadout.ias);
     if (!activeFields.length ||
         activeFields[0].distanceNm(S.x, S.y) > 26) refreshActiveFields(S.x, S.y);

@@ -125,26 +125,82 @@ class Session:
                 lines.append("**{}** — {}".format(a.name, a.note))
         return "\n".join(lines)
 
-    def set_destination(self, target):
-        """Point the route at a named airfield."""
+    def _find_field(self, target):
+        """An airfield by ident, or failing that by name. None if neither."""
         state = self.sim.state
         field = self.sim.airfields.by_ident(
             target, state.x_nm, state.y_nm, radius_nm=400.0
         )
+        if field is not None:
+            return field
+        # Fall back to a name match, so "direct to kettlebridge" works too.
+        wanted = (target or "").strip().lower()
+        for candidate in self.sim.airfields.near(state.x_nm, state.y_nm, 400.0):
+            if wanted and wanted in candidate.name.lower():
+                return candidate
+        return None
+
+    def _no_such_field(self, target):
+        return (
+            "No airfield matching `{}` within 400 nm. Try `airfields` for "
+            "what is in reach.".format(target)
+        )
+
+    def set_route(self, target):
+        """Build a whole flight plan: `route ANFL KEBR CROW`.
+
+        All or nothing. A plan with a hole in it is worse than no plan, because
+        the guidance would fly the legs either side of the gap as though it
+        were a straight line and never say why.
+        """
+        idents = (target or "").split()
+        if not idents:
+            return "Name at least one waypoint: `route ANFL KEBR CROW`."
+        fields = []
+        for ident in idents:
+            field = self._find_field(ident)
+            if field is None:
+                return self._no_such_field(ident)
+            fields.append(field)
+
+        self.sim.route.clear()
+        for field in fields:
+            self.sim.route.append(navigation.Waypoint.from_airfield(field))
+        self.sim.sync_route()
+        return self.plan_text()
+
+    def add_waypoint(self, target):
+        """Append one waypoint to the end of the plan."""
+        field = self._find_field(target)
         if field is None:
-            # Fall back to a name match, so "direct to kettlebridge" works too.
-            wanted = (target or "").strip().lower()
-            for candidate in self.sim.airfields.near(
-                state.x_nm, state.y_nm, 400.0
+            return self._no_such_field(target)
+        self.sim.route.append(navigation.Waypoint.from_airfield(field))
+        self.sim.sync_route()
+        return self.plan_text()
+
+    def remove_waypoint(self, target):
+        """Take one waypoint out of the plan, by ident or by name."""
+        wanted = (target or "").strip().lower()
+        route = self.sim.route
+        for index, waypoint in enumerate(route.waypoints):
+            if wanted in (waypoint.ident or "").lower() or (
+                wanted and wanted in waypoint.name.lower()
             ):
-                if wanted and wanted in candidate.name.lower():
-                    field = candidate
-                    break
+                route.waypoints.pop(index)
+                # Keep the cursor on the waypoint it was on, or on the last one
+                # if that was the one removed.
+                if route.active > index:
+                    route.active -= 1
+                route.active = max(0, min(route.active, len(route.waypoints) - 1))
+                self.sim.sync_route()
+                return self.plan_text()
+        return "`{}` is not in the plan.".format(target)
+
+    def set_destination(self, target):
+        """Point the route at a named airfield."""
+        field = self._find_field(target)
         if field is None:
-            return (
-                "No airfield matching `{}` within 400 nm. Try `airfields` for "
-                "what is in reach.".format(target)
-            )
+            return self._no_such_field(target)
 
         self.sim.route.direct_to(navigation.Waypoint.from_airfield(field))
         self.sim.sync_route()
@@ -258,6 +314,12 @@ class Session:
         if command.kind == "show_law":
             return (dashboard.law_card(self.sim), False)
 
+        if command.kind == "set_route":
+            return (self.set_route(command.target), False)
+        if command.kind == "add_waypoint":
+            return (self.add_waypoint(command.target), False)
+        if command.kind == "remove_waypoint":
+            return (self.remove_waypoint(command.target), False)
         if command.kind == "direct_to":
             return (self.set_destination(command.target), False)
 

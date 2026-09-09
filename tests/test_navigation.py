@@ -301,6 +301,63 @@ class TestDebrief(unittest.TestCase):
         self.assertIn("Distance flown", output)
 
 
+class TestMultiLegRoutes(unittest.TestCase):
+    """`Route.append` had no caller anywhere in the repo until now."""
+
+    def test_a_route_command_builds_the_whole_plan(self):
+        session = Session.new("a320neo", "clear", seed=SEED)
+        session.execute("route ANFL KEBR CROW")
+        idents = [w.ident for w in session.sim.route.waypoints]
+        self.assertEqual(idents, ["ANFL", "KEBR", "CROW"])
+        self.assertEqual(session.sim.route.active, 0)
+        self.assertEqual(session.sim.route.destination.ident, "CROW")
+
+    def test_a_plan_with_a_hole_in_it_is_refused_entirely(self):
+        """All or nothing: the guidance would fly across the gap and not say why."""
+        session = Session.new("a320neo", "clear", seed=SEED)
+        session.execute("route ANFL KEBR")
+        output, _ = session.execute("route ANFL ZZZZ CROW")
+        # The parser lowercases, so the message quotes what it looked for.
+        self.assertIn("zzzz", output.lower())
+        # The plan it already had is untouched.
+        self.assertEqual([w.ident for w in session.sim.route.waypoints],
+                         ["ANFL", "KEBR"])
+
+    def test_adding_and_removing_waypoints(self):
+        session = Session.new("a320neo", "clear", seed=SEED)
+        session.execute("route ANFL KEBR")
+        session.execute("add CROW")
+        self.assertEqual([w.ident for w in session.sim.route.waypoints],
+                         ["ANFL", "KEBR", "CROW"])
+        session.execute("remove KEBR")
+        self.assertEqual([w.ident for w in session.sim.route.waypoints],
+                         ["ANFL", "CROW"])
+
+    def test_removing_a_waypoint_keeps_the_cursor_on_the_one_being_flown(self):
+        session = Session.new("a320neo", "clear", seed=SEED)
+        session.execute("route ANFL KEBR CROW HRWD")
+        session.sim.route.active = 2  # flying to CROW
+        session.execute("remove ANFL")
+        self.assertEqual(session.sim.route.active_waypoint.ident, "CROW")
+
+    def test_removing_something_not_in_the_plan_says_so(self):
+        session = Session.new("a320neo", "clear", seed=SEED)
+        session.execute("route ANFL KEBR")
+        output, _ = session.execute("remove CROW")
+        self.assertIn("not in the plan", output)
+        self.assertEqual(len(session.sim.route.waypoints), 2)
+
+    def test_a_multi_leg_plan_survives_a_save_and_load(self):
+        session = Session.new("a320neo", "clear", seed=SEED)
+        session.execute("route ANFL KEBR CROW")
+        session.sim.route.active = 1
+        session.sim.sync_route()
+        restored = Session.from_dict(session.to_dict())
+        self.assertEqual([w.ident for w in restored.sim.route.waypoints],
+                         ["ANFL", "KEBR", "CROW"])
+        self.assertEqual(restored.sim.route.active, 1)
+
+
 class TestDebriefData(unittest.TestCase):
     """The debrief as numbers, which is what stops the two cards drifting."""
 

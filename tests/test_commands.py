@@ -55,6 +55,41 @@ class TestParsing(unittest.TestCase):
         self.assert_parses("speedbrakes out", "spoilers", 1.0)
         self.assert_parses("spoilers in", "spoilers", 0.0)
 
+    def test_route_phrasings(self):
+        """A plan, a waypoint added, a waypoint removed -- and the traps.
+
+        Three patterns here can swallow each other. `route ANFL KEBR` must not
+        be read as "show me the plan"; `remove route` must clear the plan and
+        not look for a waypoint called "route"; and `add`/`remove` must not
+        reach the destination matcher above them.
+        """
+        for text, kind, target in [
+            ("route ANFL KEBR CROW", "set_route", "anfl kebr crow"),
+            ("set route anfl kebr", "set_route", "anfl kebr"),
+            ("flight plan ANFL CROW", "set_route", "anfl crow"),
+            ("add CROW", "add_waypoint", "crow"),
+            ("add waypoint HRWD", "add_waypoint", "hrwd"),
+            ("append KEBR", "add_waypoint", "kebr"),
+            ("remove CROW", "remove_waypoint", "crow"),
+            ("drop KEBR", "remove_waypoint", "kebr"),
+        ]:
+            command = cmd.parse(text)
+            self.assertEqual(command.kind, kind, text)
+            self.assertEqual(command.target, target, text)
+
+    def test_the_bare_word_route_still_shows_the_plan(self):
+        for text in ("route", "plan", "show plan", "flight plan", "destination"):
+            self.assertEqual(cmd.parse(text).kind, "show_plan", text)
+
+    def test_removing_the_route_clears_it_rather_than_hunting_a_waypoint(self):
+        for text in ("clear route", "delete route", "remove route",
+                     "cancel the plan", "delete the route"):
+            self.assertEqual(cmd.parse(text).kind, "clear_route", text)
+
+    def test_route_commands_cost_no_simulation_time(self):
+        for text in ("route ANFL KEBR", "add CROW", "remove CROW", "route"):
+            self.assertFalse(cmd.parse(text).advances_time, text)
+
     def test_time_and_meta(self):
         self.assertEqual(cmd.parse("hold").kind, "hold")
         self.assertEqual(cmd.parse("wait 60 seconds").seconds, 60.0)
