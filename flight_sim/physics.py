@@ -200,6 +200,11 @@ class FlightState:
 
     # The route, serialised. Held as a dict so FlightState stays plain data.
     route: dict = None
+    # What the flight plan said this route would cost. On the state rather than
+    # recomputed at the end, because it is what was *planned* -- recomputing it
+    # from the aeroplane's condition on arrival would quietly rewrite the plan
+    # to match the flight and the comparison would always come out even.
+    planned_fuel_kg: float = 0.0
 
     # The flight record, accumulated tick by tick for the debrief. There is no
     # way to reconstruct "closest you ever came to the ground" after the fact,

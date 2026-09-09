@@ -301,6 +301,88 @@ class TestDebrief(unittest.TestCase):
         self.assertIn("Distance flown", output)
 
 
+class TestDebriefData(unittest.TestCase):
+    """The debrief as numbers, which is what stops the two cards drifting."""
+
+    def landed(self, **overrides):
+        session = Session.new("a320neo", "clear", seed=SEED)
+        state = session.sim.state
+        state.status = physics.LANDED
+        state.elapsed_s = 200.0
+        state.touchdown = {
+            "grade": "greaser", "survivable": True, "sink_rate_fpm": 44.0,
+            "ias_kt": 140.0, "speed_ratio": 0.98, "centreline_ft": 8.0,
+            "crab_deg": 1.0, "remaining_ft": 5100.0,
+            "field_name": "Anfell International", "reason": "",
+        }
+        for key, value in overrides.items():
+            setattr(state, key, value)
+        return session
+
+    def test_every_row_declares_a_kind_the_formatter_knows(self):
+        """A row whose kind no display understands renders as nothing at all."""
+        data = navigation.debrief_data(self.landed(planned_fuel_kg=900.0).sim)
+        for row in data.rows:
+            self.assertIn(row.kind, navigation.ROW_KINDS, row.key)
+            self.assertTrue(navigation.format_row(row), row.key)
+
+    def test_row_keys_are_unique(self):
+        """The parity guard matches on the key, so two rows sharing one hides
+        a disagreement behind whichever is compared second."""
+        keys = [r.key for r in navigation.debrief_data(
+            self.landed(planned_fuel_kg=900.0).sim).rows]
+        self.assertEqual(len(keys), len(set(keys)))
+
+    def test_the_outcome_is_a_key_as_well_as_a_sentence(self):
+        """A display branches on the key; only a human reads the sentence."""
+        data = navigation.debrief_data(self.landed().sim)
+        self.assertEqual(data.outcome, physics.LANDED)
+        self.assertEqual(data.outcome_text, "Landed")
+        self.assertEqual(data.grade, "greaser")
+
+    def test_the_plan_row_appears_only_when_there_was_a_plan(self):
+        without = navigation.debrief_data(self.landed().sim)
+        self.assertNotIn("fuel_planned", [r.key for r in without.rows])
+        with_plan = navigation.debrief_data(self.landed(planned_fuel_kg=900.0).sim)
+        self.assertIn("fuel_planned", [r.key for r in with_plan.rows])
+
+    def test_the_clock_row_never_reads_sixty_seconds(self):
+        row = navigation.DebriefRow("time", "Time airborne", 119.9999, "s", 0, "clock")
+        self.assertEqual(navigation.format_row(row), "2 min 00 s")
+
+    def test_each_kind_renders_the_way_the_browser_does(self):
+        """These exact strings are what `formatRow` in anfell.html produces."""
+        cases = [
+            (navigation.DebriefRow("a", "", 15.4, "nm", 1), "15.4 nm"),
+            (navigation.DebriefRow("b", "", 111.0, "kg", 0, "of", 12000.0),
+             "111 kg of 12,000"),
+            (navigation.DebriefRow("c", "", 250.0, "kt", 0, "mach", 0.414),
+             "250 kt / M0.414"),
+            (navigation.DebriefRow("d", "", 140.0, "kt", 0, "ratio", 98.0),
+             "140 kt (98% of Vref)"),
+            (navigation.DebriefRow("e", "", 8340.0, "kg", 0, "vs", 7900.0),
+             "8,340 kg against a planned 7,900 (+6%)"),
+            (navigation.DebriefRow("f", "", 1.0, "g", 2), "1.00 g"),
+        ]
+        for row, expected in cases:
+            self.assertEqual(navigation.format_row(row), expected, row.key)
+
+    def test_warnings_come_out_sorted(self):
+        """Sorted by the model, so two builds cannot list them differently."""
+        session = self.landed()
+        session.sim.state.warnings_seen = ["STALL", "ALTERNATE LAW", "OVERSPEED"]
+        self.assertEqual(
+            navigation.debrief_data(session.sim).warnings_seen,
+            ["ALTERNATE LAW", "OVERSPEED", "STALL"],
+        )
+
+    def test_the_route_is_named_for_the_logbook(self):
+        session = session_with_route()
+        idents = navigation.debrief_data(session.sim).route_idents
+        self.assertTrue(idents)
+        self.assertTrue(all(isinstance(i, str) and i for i in idents))
+
+
 class TestDisplay(unittest.TestCase):
     def test_the_panel_shows_the_navigation_block(self):
         session = session_with_route("ANFL")

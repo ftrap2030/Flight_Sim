@@ -193,54 +193,179 @@ OUTCOME_TEXT = {
 }
 
 
-def debrief(sim):
-    """A markdown summary of how the flight went."""
+# How a row's numbers relate to each other. The *kind* is model data and the
+# rendering is not: a markdown table and an HTML card may lay a row out however
+# they like, but they must not disagree about what the numbers are or about how
+# many digits of each are meaningful. Six kinds cover every row there is.
+#
+#   plain  one number and a unit
+#   clock  seconds, shown as minutes and seconds
+#   of     a number out of a total -- burned, of what was loaded
+#   mach   an airspeed and the Mach number at the same moment
+#   ratio  an airspeed and a percentage of Vref
+#   vs     what happened, against what was planned
+ROW_KINDS = ("plain", "clock", "of", "mach", "ratio", "vs")
+
+
+@dataclass
+class DebriefRow:
+    """One line of the debrief, as numbers rather than as text.
+
+    `key` is what the parity guard compares on, because a label is prose and
+    might be reworded in one build and not the other. `decimals` is here for
+    the same reason `kind` is: two front ends that round a sink rate
+    differently are two front ends that disagree about the landing.
+    """
+
+    key: str
+    label: str
+    value: float
+    unit: str = ""
+    decimals: int = 0
+    kind: str = "plain"
+    extra: float = 0.0
+
+    def to_dict(self):
+        return {
+            "key": self.key, "label": self.label, "value": self.value,
+            "unit": self.unit, "decimals": self.decimals,
+            "kind": self.kind, "extra": self.extra,
+        }
+
+
+@dataclass
+class Debrief:
+    """How the flight went, as data. `debrief()` is one rendering of it."""
+
+    aircraft_name: str
+    weather_name: str
+    outcome: str  # the status key
+    outcome_text: str
+    grade: str  # the touchdown grade, or "" if there was no touchdown
+    rows: list
+    warnings_seen: list
+    route_idents: list
+    planned_fuel_kg: float = 0.0
+
+    def to_dict(self):
+        return {
+            "aircraft_name": self.aircraft_name,
+            "weather_name": self.weather_name,
+            "outcome": self.outcome,
+            "outcome_text": self.outcome_text,
+            "grade": self.grade,
+            "rows": [r.to_dict() for r in self.rows],
+            "warnings_seen": list(self.warnings_seen),
+            "route_idents": list(self.route_idents),
+            "planned_fuel_kg": self.planned_fuel_kg,
+        }
+
+
+def debrief_data(sim):
+    """Everything the debrief says, as numbers. The single owner.
+
+    There are two front ends and both had grown an end-of-flight card by hand:
+    the same flight, summarised twice, with different rounding and a different
+    set of rows. This is the same fix `fbw.characteristic_speeds` and
+    `failures.ecam` are -- the model says which rows exist, in what order, and
+    to how many digits; a display picks the fonts.
+    """
     state = sim.state
     craft = sim.aircraft
-    lines = ["## Debrief", ""]
-
-    outcome = OUTCOME_TEXT.get(state.status, state.status)
     touchdown = state.touchdown
-    if touchdown:
-        outcome = "{} — **{}**".format(outcome, touchdown["grade"])
-
-    lines.append("**{}** · {} · {}".format(craft.name, sim.weather.name, outcome))
-    lines.append("")
-
     burned = max(0.0, state.initial_fuel_kg - state.fuel_kg)
     minutes = state.elapsed_s / 60.0
+
+    rows = [
+        DebriefRow("time", "Time airborne", state.elapsed_s, "s", 0, "clock"),
+        DebriefRow("distance", "Distance flown", state.distance_flown_nm, "nm", 1),
+        DebriefRow("fuel_burned", "Fuel burned", burned, "kg", 0, "of",
+                   state.initial_fuel_kg),
+    ]
+    if state.planned_fuel_kg > 0.0:
+        rows.append(DebriefRow("fuel_planned", "Against the plan", burned, "kg", 0,
+                               "vs", state.planned_fuel_kg))
+    if minutes > 0.5:
+        rows.append(DebriefRow("average_burn", "Average burn",
+                               burned / minutes * 60.0, "kg/h", 0))
+    rows.extend([
+        DebriefRow("max_altitude", "Maximum altitude", state.max_altitude_ft, "ft", 0),
+        DebriefRow("max_speed", "Highest speed", state.max_ias_kt, "kt", 0, "mach",
+                   state.max_mach),
+        DebriefRow("min_agl", "Closest to the ground", state.min_agl_ft, "ft", 0),
+        DebriefRow("max_load", "Highest load factor", state.max_load_factor, "g", 2),
+    ])
+    if touchdown:
+        rows.extend([
+            DebriefRow("sink", "Touchdown sink rate",
+                       touchdown["sink_rate_fpm"], "fpm", 0),
+            DebriefRow("touchdown_speed", "Touchdown speed", touchdown["ias_kt"],
+                       "kt", 0, "ratio", touchdown["speed_ratio"] * 100.0),
+            DebriefRow("centreline", "Off the centreline",
+                       abs(touchdown["centreline_ft"]), "ft", 0),
+            DebriefRow("remaining", "Runway remaining",
+                       touchdown["remaining_ft"], "ft", 0),
+        ])
+
+    route = getattr(sim, "route", None)
+    idents = [w.ident or w.name for w in route.waypoints] if route else []
+
+    return Debrief(
+        aircraft_name=craft.name,
+        weather_name=sim.weather.name,
+        outcome=state.status,
+        outcome_text=OUTCOME_TEXT.get(state.status, state.status),
+        grade=touchdown["grade"] if touchdown else "",
+        rows=rows,
+        warnings_seen=sorted(state.warnings_seen),
+        route_idents=idents,
+        planned_fuel_kg=state.planned_fuel_kg,
+    )
+
+
+def format_row(row):
+    """One row's value as text. The browser renders the same six kinds."""
+    if row.kind == "clock":
+        # Round to whole seconds first: 119.9999 s split independently gives
+        # the minutes as 1 and the seconds as 60.
+        total = int(round(row.value))
+        return "{:d} min {:02d} s".format(total // 60, total % 60)
+    number = "{:,.{d}f}".format(row.value, d=row.decimals)
+    if row.kind == "of":
+        return "{} {} of {:,.0f}".format(number, row.unit, row.extra)
+    if row.kind == "mach":
+        return "{} {} / M{:.3f}".format(number, row.unit, row.extra)
+    if row.kind == "ratio":
+        return "{} {} ({:.0f}% of Vref)".format(number, row.unit, row.extra)
+    if row.kind == "vs":
+        # The percentage is derived from two numbers the model owns, by one
+        # expression written the same way in both builds.
+        delta = (row.value / row.extra - 1.0) * 100.0 if row.extra else 0.0
+        return "{} {} against a planned {:,.0f} ({:+.0f}%)".format(
+            number, row.unit, row.extra, delta)
+    return "{} {}".format(number, row.unit).strip()
+
+
+def debrief(sim):
+    """A markdown summary of how the flight went."""
+    data = debrief_data(sim)
+    lines = ["## Debrief", ""]
+
+    outcome = data.outcome_text
+    if data.grade:
+        outcome = "{} — **{}**".format(outcome, data.grade)
+    lines.append("**{}** · {} · {}".format(
+        data.aircraft_name, data.weather_name, outcome))
+    lines.append("")
+
     lines.append("| | |")
     lines.append("| --- | ---: |")
-    # Round to whole seconds first: 119.9999 s split independently gives the
-    # minutes as 1 and the seconds as 60.
-    total_seconds = int(round(state.elapsed_s))
-    lines.append("| Time airborne | {:d} min {:02d} s |".format(
-        total_seconds // 60, total_seconds % 60))
-    lines.append("| Distance flown | {:,.1f} nm |".format(state.distance_flown_nm))
-    lines.append("| Fuel burned | {:,.0f} kg of {:,.0f} |".format(
-        burned, state.initial_fuel_kg))
-    if minutes > 0.5:
-        lines.append("| Average burn | {:,.0f} kg/h |".format(burned / minutes * 60.0))
-    lines.append("| Maximum altitude | {:,.0f} ft |".format(state.max_altitude_ft))
-    lines.append("| Highest speed | {:,.0f} kt / M{:.3f} |".format(
-        state.max_ias_kt, state.max_mach))
-    lines.append("| Closest to the ground | {:,.0f} ft |".format(state.min_agl_ft))
-    lines.append("| Highest load factor | {:.2f} g |".format(state.max_load_factor))
-
-    if touchdown:
-        lines.append("| Touchdown sink rate | {:,.0f} fpm |".format(
-            touchdown["sink_rate_fpm"]))
-        lines.append("| Touchdown speed | {:,.0f} kt ({:.0f}% of Vref) |".format(
-            touchdown["ias_kt"], touchdown["speed_ratio"] * 100.0))
-        lines.append("| Off the centreline | {:,.0f} ft |".format(
-            abs(touchdown["centreline_ft"])))
-        lines.append("| Runway remaining | {:,.0f} ft |".format(
-            touchdown["remaining_ft"]))
+    for row in data.rows:
+        lines.append("| {} | {} |".format(row.label, format_row(row)))
 
     lines.append("")
-    if state.warnings_seen:
-        lines.append("**Warnings raised:** {}".format(
-            ", ".join(sorted(state.warnings_seen))))
+    if data.warnings_seen:
+        lines.append("**Warnings raised:** {}".format(", ".join(data.warnings_seen)))
     else:
         lines.append("**No warnings raised at any point.** A clean flight.")
 
