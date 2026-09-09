@@ -557,7 +557,13 @@ def debrief_data(sim):
         DebriefRow("max_altitude", "Maximum altitude", state.max_altitude_ft, "ft", 0),
         DebriefRow("max_speed", "Highest speed", state.max_ias_kt, "kt", 0, "mach",
                    state.max_mach),
-        DebriefRow("min_agl", "Closest to the ground", state.min_agl_ft, "ft", 0),
+        # Floored, because you cannot come closer to the ground than touching
+        # it. The integrator puts the wheels a fraction below the sampled
+        # surface on the substep it lands, so the raw minimum goes slightly
+        # negative and the card read "-0 ft" after every landing. The state
+        # keeps the true figure; the row is what a pilot reads.
+        DebriefRow("min_agl", "Closest to the ground",
+                   max(0.0, state.min_agl_ft), "ft", 0),
         DebriefRow("max_load", "Highest load factor", state.max_load_factor, "g", 2),
     ])
     if touchdown:

@@ -7,7 +7,7 @@ and one freighter.
 
 ```bash
 python main.py                                  # play it
-python -m unittest discover -s tests -t .       # 540 tests, ~120 s
+python -m unittest discover -s tests -t .       # 543 tests, ~120 s
 python main.py --list                           # fleet and weather menus
 python main.py --spec a350-1000                 # one type's card and drawing
 open web/anfell.html                            # the browser build
@@ -221,7 +221,7 @@ has an owner.
 
 ## Testing patterns
 
-- One test file per module, named for it. 540 tests, ~120 s.
+- One test file per module, named for it. 543 tests, ~120 s.
 - Assert against **published figures** where they exist: ISA density tables,
   cruise fuel flow, service ceilings, Vmca. These catch calibration drift that
   self-consistent tests never would.
@@ -444,9 +444,17 @@ settles at 8,236 against 8,261 kg/h; the A330-800 6,554 against 6,544 ft and
 5,812 against 5,789 kg/h. Two things make that comparison worth anything: the
 scripts must configure the aeroplane *before* starting the clock, and the
 browser one must run the real frame loop — `weather.advanceTo`,
-`refreshTerrainEffects`, the substeps, then `apUpdate` — because **the browser's
-autopilot runs once a frame and not once a substep**, so a script that only
-calls `substep` flies with the autopilot switched off and lands nowhere near.
+`refreshTerrainEffects`, the substeps, `updatePanel`, then `apUpdate` — because
+**the browser's autopilot runs once a frame and not once a substep**, so a
+script that only calls `substep` flies with the autopilot switched off and lands
+nowhere near.
+
+**And it must call `updatePanel` for the readout rather than assembling one.**
+That is the same trap a second time: `apFlyApproach` and `apFlyLeg` steer by
+`readout.driftDeg`, so a stand-in readout reporting no drift flies a perfectly
+good ILS into the dirt beside the runway in any crosswind at all — including
+the eight knots a clear day has. The failure looks exactly like a divergence
+between the two builds, and is not one.
 
 The weather itself agrees to 4.8e-4 across four profiles, four elapsed times,
 five heights and a hundred and twenty points of terrain, and the turbulence

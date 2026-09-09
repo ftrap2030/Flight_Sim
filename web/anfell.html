@@ -4362,7 +4362,10 @@ function debriefData(a, s, kind) {
   rows.push(
     row("max_altitude", "Maximum altitude", s.maxAlt, "ft"),
     row("max_speed", "Highest speed", s.maxIas, "kt", 0, "mach", s.maxMach),
-    row("min_agl", "Closest to the ground", s.minAgl, "ft"),
+    /* Floored: you cannot come closer to the ground than touching it. The
+       integrator puts the wheels a fraction below the sampled surface on the
+       substep it lands, and the card read "-0 ft" after every landing. */
+    row("min_agl", "Closest to the ground", Math.max(0, s.minAgl), "ft"),
     row("max_load", "Highest load factor", s.maxG, "g", 2)
   );
   if (td) rows.push(

@@ -357,6 +357,10 @@ class Session:
         if command.kind == "clear_route":
             self.sim.route.clear()
             self.sim.sync_route()
+            # Through `record_plan` like every other route change, or the
+            # cancelled plan's block fuel stays on the state and the debrief
+            # grades the flight against a plan the pilot threw away.
+            self.record_plan()
             return ("Route cleared. No destination set.", False)
 
         if command.kind == "debrief":

@@ -433,6 +433,37 @@ class TestPlanning(unittest.TestCase):
         session = Session.new("a320neo", "clear", seed=SEED)
         self.assertIsNone(navigation.plan(session.sim))
 
+    def test_cancelling_a_plan_cancels_what_it_was_going_to_cost(self):
+        """`clear route` had its own write path and forgot the block fuel.
+
+        Every other route change goes through `record_plan`; this one cleared
+        the waypoints directly, so a cancelled plan's cost stayed on the state
+        and the debrief went on grading the flight against a plan the pilot had
+        thrown away. The two-write-paths family, again.
+        """
+        session = Session.new("a320neo", "clear", seed=SEED)
+        session.execute("route ANFL KEBR CROW")
+        self.assertGreater(session.sim.state.planned_fuel_kg, 0.0)
+        session.execute("clear route")
+        self.assertEqual(session.sim.state.planned_fuel_kg, 0.0)
+        self.assertNotIn(
+            "fuel_planned",
+            [r.key for r in navigation.debrief_data(session.sim).rows],
+        )
+
+    def test_every_route_command_leaves_the_cost_agreeing_with_the_route(self):
+        """Whatever changed the route, the two must not be able to disagree."""
+        session = Session.new("a350", "clear", seed=SEED)
+        for text in ("route ANFL KEBR CROW", "add HRWD", "remove KEBR",
+                     "direct to CROW", "clear route", "route ANFL VSPR"):
+            session.execute(text)
+            costing = navigation.plan(session.sim)
+            expected = costing.block_fuel_kg if costing else 0.0
+            self.assertAlmostEqual(
+                session.sim.state.planned_fuel_kg, expected, delta=1.0,
+                msg="after `{}`".format(text),
+            )
+
     def test_the_plan_is_recorded_on_the_state_when_it_is_filed(self):
         session, plan = self.planned("a320neo", "ANFL KEBR CROW")
         session.execute("show plan")
@@ -626,6 +657,23 @@ class TestDebriefData(unittest.TestCase):
     def test_a_row_is_rendered_from_the_rounded_number(self):
         row = navigation.DebriefRow("sink", "", 140.5, "kt", 0)
         self.assertEqual(navigation.format_row(row), "141 kt")
+
+    def test_the_closest_approach_to_the_ground_is_never_negative(self):
+        """"-0 ft" appeared on the card after every landing.
+
+        The integrator puts the wheels a fraction below the sampled surface on
+        the substep it touches down, so the raw minimum goes slightly negative
+        and rounds to a signed zero. Both builds agreed on it, so the parity
+        guard was happy; it was still wrong on the glass.
+        """
+        session = self.landed()
+        session.sim.state.min_agl_ft = -0.42
+        row = [r for r in navigation.debrief_data(session.sim).rows
+               if r.key == "min_agl"][0]
+        self.assertEqual(row.value, 0.0)
+        self.assertEqual(navigation.format_row(row), "0 ft")
+        # The state keeps the true figure; only the row is floored.
+        self.assertEqual(session.sim.state.min_agl_ft, -0.42)
 
     def test_warnings_come_out_sorted(self):
         """Sorted by the model, so two builds cannot list them differently."""
