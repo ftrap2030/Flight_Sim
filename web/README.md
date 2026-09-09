@@ -108,13 +108,20 @@ threshold came to be owned by the model and read only by the display.
 ## What the browser build has that the Python does not
 
 **Anything you can see**: terrain, weather, the aircraft itself, time of day,
-and the glass cockpit. The takeoff used to be on this list; `flight_sim/` has
-one now, and `tools/parity_check` holds the two to the same V-speeds.
+and the glass cockpit. Plus the **logbook** — finished flights kept in
+`localStorage`, so flying ANFL to CROW again tells you whether you beat the
+last one. Compared on the same aeroplane over the same waypoints, and only
+landings count: a crash burns very little fuel and is not a personal best.
+
+The takeoff used to be on the first list; `flight_sim/` has one now, and
+`tools/parity_check` holds the two to the same V-speeds.
 
 ## What the Python has that this does not
 
-The narrator, the route and debrief machinery, saving and loading, and the
-command parser. This is a cockpit; that is a flight.
+The narrator, saving and loading a flight in progress, and the command parser.
+The route, the flight plan and its cost, and the debrief used to be on this
+list — this was a cockpit and that was a flight. Both are flights now, from one
+set of numbers, and `tools/parity_check` is what says so.
 
 ## Two places the picture and the physics deliberately disagree
 
