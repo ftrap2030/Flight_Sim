@@ -156,6 +156,176 @@ def python_row(key, case):
             motors, broken.ecam(sim))
 
 
+# An integration is not a pure function of a seed, so these are compared to a
+# tolerance rather than exactly -- but a tight one. Both builds run the same
+# steps over the same drag polar in the same order, so the only difference
+# available to them is the last bits of a float.
+PLAN_TOLERANCE = 1e-6
+
+
+def plan_failures(data):
+    """The flight plan, which is a block fuel figure with nothing to check it.
+
+    A speed tape with its marks in the wrong place still looks like a speed
+    tape; a plan that is 6% out looks like a plan. There is nothing on the
+    screen to catch it, which is why it is compared here field by field.
+    """
+    if "plans" not in data:
+        return ["the browser dump has no plan section -- re-run parity_check.js"]
+
+    out = []
+    longest_cruise_nm = 0.0
+    fields = {
+        "cruiseFt": "cruise_ft", "distanceNm": "distance_nm", "timeS": "time_s",
+        "climbFuelKg": "climb_fuel_kg", "climbTimeS": "climb_time_s",
+        "climbDistanceNm": "climb_distance_nm",
+        "cruiseFuelKg": "cruise_fuel_kg", "cruiseTimeS": "cruise_time_s",
+        "descentFuelKg": "descent_fuel_kg", "descentTimeS": "descent_time_s",
+        "descentDistanceNm": "descent_distance_nm",
+        "reserveKg": "reserve_kg", "blockFuelKg": "block_fuel_kg",
+        "requiredKg": "required_kg", "spareKg": "spare_kg",
+    }
+    for case, theirs in zip(data["planCases"], data["plans"]):
+        where = "{} / {}".format(case["key"], " ".join(case["route"]))
+        session = Session.new(case["key"], "clear", seed=SEED)
+        sim = session.sim
+        state = sim.state
+        home = sim.airfields.by_ident(
+            case["route"][0], state.x_nm, state.y_nm, radius_nm=400.0
+        )
+        state.x_nm, state.y_nm = home.x_nm, home.y_nm
+        state.altitude_ft = case["alt"]
+        state.mass_kg = case["massT"] * 1000.0
+        state.fuel_kg = case["fuel"]
+        session.execute("route " + " ".join(case["route"]))
+        mine = navigation.plan(sim)
+        longest_cruise_nm = max(
+            longest_cruise_nm,
+            mine.distance_nm - mine.climb_distance_nm - mine.descent_distance_nm,
+        )
+
+        for browser_name, python_name in fields.items():
+            a = getattr(mine, python_name)
+            b = theirs[browser_name]
+            if abs(a - b) > max(PLAN_TOLERANCE, abs(a) * PLAN_TOLERANCE):
+                out.append("{}: plan {} is {:,.4f} in Python and {:,.4f} in the "
+                           "browser".format(where, python_name, a, b))
+        if mine.enough != theirs["enough"]:
+            out.append("{}: `enough` is {} in Python and {} in the browser -- one "
+                       "of them is telling a pilot they can make it"
+                       .format(where, mine.enough, theirs["enough"]))
+
+        if len(mine.legs) != len(theirs["legs"]):
+            out.append("{}: {} legs in Python and {} in the browser".format(
+                where, len(mine.legs), len(theirs["legs"])))
+            continue
+        for index, (leg, other) in enumerate(zip(mine.legs, theirs["legs"])):
+            label = leg.waypoint.ident or leg.waypoint.name
+            if label != other["label"]:
+                out.append("{}: leg {} is {} in Python and {} in the browser"
+                           .format(where, index, label, other["label"]))
+            for name, a, b in (("distance_nm", leg.distance_nm, other["distanceNm"]),
+                               ("track_deg", leg.track_deg, other["trackDeg"]),
+                               ("fuel_kg", leg.fuel_kg, other["fuelKg"]),
+                               ("time_s", leg.time_s, other["timeS"])):
+                if abs(a - b) > max(PLAN_TOLERANCE, abs(a) * PLAN_TOLERANCE):
+                    out.append("{}: leg {} {} is {:,.4f} in Python and {:,.4f} "
+                               "in the browser".format(where, label, name, a, b))
+
+    # The rotor sweep's lesson, applied to the plan: every case here files a
+    # level low enough that climb and descent fill the distance, and two miles
+    # of cruise cannot tell a mass model from a constant. So at least one case
+    # must genuinely cruise, or the cruise comparison is agreeing about nothing.
+    floor_nm = data.get("minimumCruiseNm", 60.0)
+    if longest_cruise_nm < floor_nm:
+        out.append(
+            "the plan cases never cruise: the longest is {:,.1f} nm against a "
+            "floor of {:,.0f} -- add a route that starts at level".format(
+                longest_cruise_nm, floor_nm)
+        )
+    return out
+
+
+def debrief_failures(data):
+    """The end-of-flight card, which both builds used to write by hand.
+
+    Compared on the rendered string as well as on the numbers, because that is
+    what a pilot reads: two builds can agree on 8339.7 and print 8,340 and
+    8,339, and only one of them is what the logbook then records.
+    """
+    if "debriefs" not in data:
+        return ["the browser dump has no debrief section -- re-run parity_check.js"]
+
+    out = []
+    for case, theirs in zip(data["debriefCases"], data["debriefs"]):
+        where = case["name"]
+        session = Session.new(case["key"], "clear", seed=SEED)
+        sim = session.sim
+        state = sim.state
+        if case["route"]:
+            session.execute("route " + " ".join(case["route"]))
+        touchdown = case["touchdown"]
+        state.status = {
+            "landed": physics.LANDED, "terrain": physics.CRASHED_TERRAIN,
+            "structural": physics.STRUCTURAL_FAILURE, "overrun": physics.OVERRUN,
+            "hardlanding": physics.LANDED, "runwayoverrun": physics.OVERRUN,
+        }[case["kind"]]
+        state.elapsed_s = case["t"]
+        state.distance_flown_nm = case["distance"]
+        state.initial_fuel_kg = case["initialFuel"]
+        state.fuel_kg = case["fuel"]
+        state.planned_fuel_kg = case["planned"]
+        state.max_altitude_ft = case["maxAlt"]
+        state.max_ias_kt = case["maxIas"]
+        state.max_mach = case["maxMach"]
+        state.min_agl_ft = case["minAgl"]
+        state.max_load_factor = case["maxG"]
+        state.warnings_seen = list(case["warnings"])
+        state.touchdown = None if touchdown is None else {
+            "grade": touchdown["grade"],
+            "sink_rate_fpm": touchdown["sink"],
+            "ias_kt": touchdown["ias"],
+            "speed_ratio": touchdown["ratio"],
+            "centreline_ft": touchdown["across"],
+            "remaining_ft": touchdown["remaining"],
+        }
+        mine = navigation.debrief_data(sim)
+
+        for name, a, b in (("outcome", mine.outcome, theirs["outcome"]),
+                           ("outcome_text", mine.outcome_text, theirs["outcomeText"]),
+                           ("grade", mine.grade, theirs["grade"]),
+                           ("warnings_seen", mine.warnings_seen, theirs["warningsSeen"]),
+                           ("route_idents", mine.route_idents, theirs["routeIdents"])):
+            if a != b:
+                out.append("{}: {} is {!r} in Python and {!r} in the browser"
+                           .format(where, name, a, b))
+
+        keys = [r.key for r in mine.rows]
+        other_keys = [r["key"] for r in theirs["rows"]]
+        if keys != other_keys:
+            out.append("{}: rows are {} in Python and {} in the browser"
+                       .format(where, keys, other_keys))
+            continue
+        for row, other in zip(mine.rows, theirs["rows"]):
+            for name, a, b in (("label", row.label, other["label"]),
+                               ("unit", row.unit, other["unit"]),
+                               ("decimals", row.decimals, other["decimals"]),
+                               ("kind", row.kind, other["kind"])):
+                if a != b:
+                    out.append("{}: row {} {} is {!r} in Python and {!r} in the "
+                               "browser".format(where, row.key, name, a, b))
+            for name, a, b in (("value", row.value, other["value"]),
+                               ("extra", row.extra, other["extra"])):
+                if abs(a - b) > max(1e-9, abs(a) * 1e-9):
+                    out.append("{}: row {} {} is {} in Python and {} in the "
+                               "browser".format(where, row.key, name, a, b))
+            rendered = navigation.format_row(row)
+            if rendered != other["text"]:
+                out.append("{}: row {} reads {!r} in Python and {!r} in the "
+                           "browser".format(where, row.key, rendered, other["text"]))
+    return out
+
+
 def weather_failures(data):
     """The weather, which nothing guarded until it had drifted badly.
 
@@ -254,7 +424,7 @@ def main():
     data = json.load(open(sys.argv[1]))
     by_name = {c["name"]: c for c in data["cases"]}
 
-    failures = weather_failures(data)
+    failures = weather_failures(data) + plan_failures(data) + debrief_failures(data)
     for row in data["rows"]:
         case = by_name[row["case"]]
         where = "{} / {}".format(row["key"], row["case"])
@@ -339,9 +509,11 @@ def main():
                 .format(where, channels, row["channels"])
             )
 
-    print("{} states compared, {} types, {} weather cases".format(
-        len(data["rows"]), len({r["key"] for r in data["rows"]}),
-        len(data.get("weather", ()))))
+    print("{} states, {} types, {} weather cases, {} flight plans, "
+          "{} debriefs".format(
+              len(data["rows"]), len({r["key"] for r in data["rows"]}),
+              len(data.get("weather", ())), len(data.get("plans", ())),
+              len(data.get("debriefs", ()))))
     if failures:
         print("\nDISAGREEMENTS ({}):".format(len(failures)))
         for line in failures[:40]:
@@ -350,7 +522,8 @@ def main():
             print("  ... and {} more".format(len(failures) - 40))
         return 1
     print("the two builds agree on every speed, engine parameter, flight mode, "
-          "ECAM line and\nweather sample -- and on every gust, exactly")
+          "ECAM line,\nweather sample, flight-plan figure and debrief row -- "
+          "and on every gust, exactly")
     return 0
 
 

@@ -7,7 +7,7 @@ and one freighter.
 
 ```bash
 python main.py                                  # play it
-python -m unittest discover -s tests -t .       # 509 tests, ~100 s
+python -m unittest discover -s tests -t .       # 540 tests, ~120 s
 python main.py --list                           # fleet and weather menus
 python main.py --spec a350-1000                 # one type's card and drawing
 open web/anfell.html                            # the browser build
@@ -28,7 +28,7 @@ flight_sim/
   weather.py       Immutable profiles + a mutable WeatherState.
   airfield.py      Airfield geometry; procedural and authored sources.
   landing.py       Approach guidance, touchdown grading, ground forces.
-  navigation.py    Routes, leg guidance, the end-of-flight debrief.
+  navigation.py    Routes, the flight plan and its cost, the debrief.
   autopilot.py     ALT / V/S / HDG / SPD / NAV / APPR, and the FMA.
   fbw.py           Normal / alternate / direct law and the protections.
   engines.py       N1 as state, the spool, and the E/WD's numbers.
@@ -221,7 +221,7 @@ has an owner.
 
 ## Testing patterns
 
-- One test file per module, named for it. 509 tests, ~100 s.
+- One test file per module, named for it. 540 tests, ~120 s.
 - Assert against **published figures** where they exist: ISA density tables,
   cruise fuel flow, service ceilings, Vmca. These catch calibration drift that
   self-consistent tests never would.
@@ -256,6 +256,23 @@ VLS, which is the right way round — VLS is a floor and Vref is a target.
 
 `engines.readouts` and `failures.ecam` join them: N1, N2, EGT and fuel flow per
 engine, and every warning line with its colour. The E/WD picks the font.
+
+`navigation.debrief_data` is the newest, and it was added because both front
+ends had already drifted: each had grown an end-of-flight card by hand, over
+the same flight, with different rounding and a different set of rows. It owns
+which rows exist, in what order, with what units and to how many digits;
+`debrief()` renders one as markdown and `showEnding` renders the other as a
+card. Several rows are two numbers rather than one, so a row carries a **kind**
+— `of`, `mach`, `ratio`, `clock`, `vs`, `plain` — and the kind is model data
+too, because it says what the second number *means*.
+
+**Two languages do not round the same way.** Python rounds halves to even and
+JavaScript rounds them away from zero, so a touchdown at 140.5 kt printed 140
+in the text simulator and 141 in the browser — the two front ends disagreeing
+about a landing by a knot. `navigation.round_half_up` is the owner: one
+multiply-add-floor over the same IEEE doubles, done in the *model*, so neither
+formatter is ever handed a tie to break. The parity guard found this on its
+first run, which is the entire argument for the guard.
 
 ## N1 is state; N2 and EGT are not
 
@@ -392,8 +409,10 @@ is the guard; run it after touching `aircraft.py` or `physics.py`.
 `web/tools/parity_check.js` and `.py` are the other guard, and they cover what
 the glass cockpit puts on the glass: the speed marks, the V-speeds, the five
 Flight Mode Annunciator columns, the per-engine N1/N2/EGT/fuel flow with its
-band, and every ECAM line with its colour, across a hundred states and four
-types. That is the easier half to get wrong — a speed tape with its marks in the
+band, and every ECAM line with its colour, across a hundred and twenty-five
+states and five types — plus the flight plan and the debrief, which are worse
+than the rest: a block fuel figure that is 6% out looks exactly like a block
+fuel figure, and there is nothing on the screen to check it against. That is the easier half to get wrong — a speed tape with its marks in the
 wrong place still looks exactly like a speed tape, and an E/WD announcing the
 failure of the engine that is still running still looks exactly like an E/WD.
 
@@ -433,6 +452,16 @@ The weather itself agrees to 4.8e-4 across four profiles, four elapsed times,
 five heights and a hundred and twenty points of terrain, and the turbulence
 agrees to one ULP because both builds draw it from the same lattice hash.
 
+The flight plans agree to 1e-6 across ten routes — every phase, every leg, the
+reserve, the block figure and `enough`, which is the one a build could get
+backwards and tell a pilot they can make it. **Two of those routes start at
+cruise level on purpose**: every other case files a level low enough that the
+climb and the descent fill the distance, and two miles of cruise cannot tell a
+mass model from a constant. A planner that had stopped letting the mass fall
+went through the first eight of them unnoticed. The Python end asserts that at
+least one case genuinely cruises, which is the rotor sweep's vacuity guard
+again and was needed for the same reason.
+
 Only rendering exists solely in the browser now. Nothing in `flight_sim/` may
 import from or depend on `web/`.
 
@@ -443,10 +472,47 @@ texture by at most 165 ft, because the terrain function's finest octave is
 filled to a level surface up to 900 ft above their bed. `natural_elevation` —
 which the airfield search reads — is untouched by both.
 
+## The flight plan is asked of the aeroplane, not of a table
+
+`navigation.plan` costs a route in three phases — a climb at full thrust
+integrated a thousand feet at a time, a cruise with the mass falling as the
+fuel goes, an idle descent — and then thirty minutes of holding at green dot
+for the reserve. Every force comes out of `Simulator._aero_state`, reached
+through `_probe`, which trims the live state somewhere hypothetical and puts it
+back in a `finally`. A planner with its own copy of the drag polar would be a
+second aeroplane, and the fuel page and the flight plan would disagree.
+
+Four things it must keep doing, each of which was wrong once:
+
+- **A speed schedule.** `profile_tas_ms` flies a constant indicated speed low
+  down and a constant Mach high up. Flown at cruise Mach throughout, a plan
+  climbs an A320neo through five thousand feet at five hundred knots and both
+  the climb and the descent come out far too short.
+- **The acceleration factor.** At a constant indicated speed the true speed
+  rises the whole way up, so some of the excess thrust goes into going faster
+  rather than into height. Without it the A380's climb to FL370 costs 7.2
+  tonnes against a real figure near nine.
+- **The same factor in the descent, not its inverse.** The denominator is the
+  energy equation and does not care which way the aeroplane is going. Written
+  the other way round every descent came out about 20% too steep — which looks
+  entirely plausible until you notice the fleet covering 2.3 nm per thousand
+  feet down instead of three.
+- **A level the sector can use.** Asked for FL370 on a hundred-mile hop an
+  A320neo spends 74 miles climbing and 111 descending, which does not fit;
+  charging it as though it did bills a climb that never happens. The level
+  search steps down until the profile fits, which is why short sectors cruise
+  low.
+
+Per-leg fuel is the three phase totals attributed by distance, not a fourth
+estimate, so the legs add up to the block figure exactly.
+
+`planned_fuel_kg` lives on `FlightState` and is written when the plan is filed.
+Recomputing it on arrival would be a plan that has watched the flight, and the
+comparison would always come out even.
+
 ## Things deliberately not modelled
 
-No multi-leg route command, though `navigation.Route` fully supports one. The
-A321 is the neo; there is no A321ceo.
+The A321 is the neo; there is no A321ceo.
 
 Only the two control-law reversions a point-mass model can honestly represent
 are implemented: all engines out, and gear down in alternate law. Air data and

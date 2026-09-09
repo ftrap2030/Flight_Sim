@@ -588,26 +588,49 @@ def debrief_data(sim):
     )
 
 
+def round_half_up(value, decimals=0):
+    """Round halves away from zero, in arithmetic both builds compute alike.
+
+    Python rounds halves to *even* and JavaScript rounds them *away from zero*,
+    so a touchdown at 140.5 kt printed 140 in the text simulator and 141 in the
+    browser -- two front ends disagreeing about a landing by a knot, which is
+    exactly the class of thing the parity guard exists to find, and did on its
+    first run.
+
+    The fix is not to pick one language's rule. It is to do the rounding here,
+    in the model, with one multiply-add-floor over the same IEEE doubles: after
+    it there is no tie left for either formatter to break.
+    """
+    factor = 10.0 ** decimals
+    rounded = math.floor(abs(value) * factor + 0.5) / factor
+    return -rounded if value < 0 else rounded
+
+
 def format_row(row):
     """One row's value as text. The browser renders the same six kinds."""
     if row.kind == "clock":
         # Round to whole seconds first: 119.9999 s split independently gives
         # the minutes as 1 and the seconds as 60.
-        total = int(round(row.value))
+        total = int(round_half_up(row.value))
         return "{:d} min {:02d} s".format(total // 60, total % 60)
-    number = "{:,.{d}f}".format(row.value, d=row.decimals)
+    number = "{:,.{d}f}".format(round_half_up(row.value, row.decimals),
+                                d=row.decimals)
     if row.kind == "of":
-        return "{} {} of {:,.0f}".format(number, row.unit, row.extra)
+        return "{} {} of {:,.0f}".format(number, row.unit,
+                                         round_half_up(row.extra))
     if row.kind == "mach":
-        return "{} {} / M{:.3f}".format(number, row.unit, row.extra)
+        return "{} {} / M{:.3f}".format(number, row.unit,
+                                        round_half_up(row.extra, 3))
     if row.kind == "ratio":
-        return "{} {} ({:.0f}% of Vref)".format(number, row.unit, row.extra)
+        return "{} {} ({:.0f}% of Vref)".format(number, row.unit,
+                                                round_half_up(row.extra))
     if row.kind == "vs":
         # The percentage is derived from two numbers the model owns, by one
         # expression written the same way in both builds.
         delta = (row.value / row.extra - 1.0) * 100.0 if row.extra else 0.0
         return "{} {} against a planned {:,.0f} ({:+.0f}%)".format(
-            number, row.unit, row.extra, delta)
+            number, row.unit, round_half_up(row.extra),
+            round_half_up(delta))
     return "{} {}".format(number, row.unit).strip()
 
 

@@ -119,6 +119,77 @@ const WIND_HEIGHTS = [0, 150, 800, 2000, 9000];
    what it found is genuinely non-zero. */
 const ROTOR_SWEEP = { x0: 300, y: 200, step: 0.3, count: 120, aglFt: 1500 };
 
+/* The flight plan, which is compared per *route* rather than per state. Both
+   builds had grown an end-of-flight card by hand and a planner is the same
+   shape of hazard, only worse: a block fuel figure that is 6% out looks
+   entirely plausible and there is nothing on the screen to check it against.
+
+   The masses are chosen to bracket the weight range, because cruise flow is
+   strongly weight-dependent and a planner that forgot the mass falls would
+   still agree at one weight. The short route is the one that exercises the
+   level search, and the long one the one that reaches a cruise at all. */
+const PLAN_CASES = [
+  { key: 'a320neo',  route: ['ANFL', 'KEBR'],                  alt: 4560, massT: 71.3, fuel: 12000 },
+  { key: 'a320neo',  route: ['ANFL', 'KEBR', 'CROW', 'HRWD'],  alt: 4560, massT: 64.6, fuel: 9000 },
+  { key: 'a350',     route: ['ANFL', 'CROW'],                  alt: 4560, massT: 252.4, fuel: 70000 },
+  { key: 'a350',     route: ['ANFL', 'VSPR', 'CROW', 'HRWD'],  alt: 22000, massT: 230.0, fuel: 48000 },
+  { key: 'a380',     route: ['ANFL', 'KEBR', 'CROW'],          alt: 4560, massT: 497.0, fuel: 160000 },
+  { key: 'a330neo',  route: ['ANFL', 'HRWD'],                  alt: 15000, massT: 235.0, fuel: 58000 },
+  { key: 'belugaxl', route: ['ANFL', 'CROW'],                  alt: 4560, massT: 211.0, fuel: 30000 },
+  /* Deliberately not enough fuel: `enough` and `spareKg` are model data too,
+     and a build that got the sign wrong would tell a pilot they could make it. */
+  { key: 'a320neo',  route: ['ANFL', 'KEBR', 'CROW', 'HRWD'],  alt: 4560, massT: 64.6, fuel: 400 },
+  /* Two cases that start at cruise level over a long route, so most of the
+     distance is *cruise* rather than climb and descent. Without them a planner
+     that forgot the mass falls went unnoticed: every other case here files a
+     low level and cruises for two miles, and two miles of cruise cannot tell a
+     mass model from a constant. This is the rotor sweep's lesson again -- the
+     sample has to be somewhere the answer is not nearly zero. */
+  { key: 'a350',     route: ['ANFL', 'KEBR', 'CROW', 'HRWD', 'VSPR', 'ANFL'],
+    alt: 37000, massT: 252.4, fuel: 70000 },
+  { key: 'a380',     route: ['ANFL', 'KEBR', 'CROW', 'HRWD', 'VSPR', 'ANFL'],
+    alt: 37000, massT: 497.0, fuel: 160000 }
+];
+
+/* How much of a case's distance must actually be cruise for the cruise
+   comparison to mean anything. Asserted on the Python end. */
+const MINIMUM_CRUISE_NM = 60.0;
+
+/* One resting end-of-flight state per outcome, for the debrief rows. Every row
+   is compared on its key, its unit, its decimals, its kind and both numbers --
+   and on the rendered string, because that is what a pilot actually reads and
+   two builds can agree on 8339.7 and print 8,340 and 8,339. */
+const DEBRIEF_CASES = [
+  { name: 'a landing, against a plan', key: 'a330neo', kind: 'landed',
+    t: 4320, distance: 69.2, initialFuel: 56000, fuel: 47660, planned: 7900,
+    maxAlt: 25000, maxIas: 251, maxMach: 0.62, minAgl: 780, maxG: 1.31,
+    warnings: [], route: ['ANFL', 'CROW'],
+    touchdown: { grade: 'normal landing', sink: 180, ias: 140, ratio: 1.03,
+                 across: 38, remaining: 5900, onRunway: true } },
+  { name: 'a landing with no plan filed', key: 'a320neo', kind: 'landed',
+    t: 700.4, distance: 15.44, initialFuel: 12000, fuel: 11889, planned: 0,
+    maxAlt: 5009, maxIas: 250, maxMach: 0.4141, minAgl: 2473.6, maxG: 1.004,
+    warnings: ['ALTERNATE LAW'], route: [],
+    touchdown: { grade: 'greaser', sink: 44.4, ias: 140.5, ratio: 0.9812,
+                 across: -8.2, remaining: 5100.5, onRunway: true } },
+  /* Under thirty seconds, so the average-burn row must be absent in both. */
+  { name: 'a crash before the average burn row exists', key: 'a350', kind: 'terrain',
+    t: 24.0, distance: 1.9, initialFuel: 70000, fuel: 69940, planned: 0,
+    maxAlt: 5100, maxIas: 310, maxMach: 0.51, minAgl: 0, maxG: 2.4,
+    warnings: ['TERRAIN — PULL UP', 'STALL'], route: ['ANFL'], touchdown: null },
+  /* 119.9999 s reads as "1 min 60 s" if the split happens before the round. */
+  { name: 'the clock at a minute less an instant', key: 'a380', kind: 'structural',
+    t: 119.9999, distance: 9.1, initialFuel: 160000, fuel: 159052, planned: 0,
+    maxAlt: 12000, maxIas: 420, maxMach: 0.72, minAgl: 300, maxG: 3.85,
+    warnings: ['OVERSPEED'], route: [], touchdown: null },
+  { name: 'an overrun', key: 'belugaxl', kind: 'overrun',
+    t: 300.0, distance: 2.4, initialFuel: 30000, fuel: 29500, planned: 2010,
+    maxAlt: 4600, maxIas: 165, maxMach: 0.25, minAgl: 0, maxG: 1.1,
+    warnings: [], route: ['ANFL', 'CROW'],
+    touchdown: { grade: 'runway excursion', sink: 260, ias: 155, ratio: 1.12,
+                 across: 210, remaining: 0, onRunway: false } }
+];
+
 (async () => {
   const page = process.argv[2];
   if (!page) { console.error('usage: parity_check.js <path to anfell.html>'); process.exit(2); }
@@ -257,11 +328,77 @@ const ROTOR_SWEEP = { x0: 300, y: 200, step: 0.3, count: 120, aglFt: 1500 };
     return out;
   });
 
+  const plans = await p.evaluate(cases => {
+    paused = true;
+    startMode = "airborne";
+    const fields = buildAuthored();
+    return cases.map(c => {
+      craft = FLEET_BY_KEY[c.key];
+      newFlight(true);
+      Object.assign(S, { alt: c.alt, mass: c.massT * 1000, fuel: c.fuel,
+                         gamma: 0, bank: 0, flaps: 0, gear: false,
+                         spoilers: false, beta: 0, rudder: 0,
+                         enginesFailed: [], enginesRunning: true,
+                         onGround: false, status: "flying" });
+      /* Planning from the *field* rather than from wherever the opening
+         position happens to be, so the two builds start from the same point
+         to the metre and the leg distances are comparable at all. */
+      const home = fields.find(f => f.ident === c.route[0]);
+      S.x = home.x; S.y = home.y;
+      S.route = new Route(c.route.map(id =>
+        Waypoint.fromAirfield(fields.find(f => f.ident === id))));
+      const plan = planRoute(craft, S);
+      return {
+        cruiseFt: plan.cruiseFt, distanceNm: plan.distanceNm,
+        timeS: plan.timeS,
+        climbFuelKg: plan.climbFuelKg, climbTimeS: plan.climbTimeS,
+        climbDistanceNm: plan.climbDistanceNm,
+        cruiseFuelKg: plan.cruiseFuelKg, cruiseTimeS: plan.cruiseTimeS,
+        descentFuelKg: plan.descentFuelKg, descentTimeS: plan.descentTimeS,
+        descentDistanceNm: plan.descentDistanceNm,
+        reserveKg: plan.reserveKg, blockFuelKg: plan.blockFuelKg,
+        requiredKg: plan.requiredKg, spareKg: plan.spareKg,
+        enough: plan.enough,
+        legs: plan.legs.map(l => ({
+          label: l.waypoint.label, distanceNm: l.distanceNm,
+          trackDeg: l.trackDeg, fuelKg: l.fuelKg, timeS: l.timeS
+        }))
+      };
+    });
+  }, PLAN_CASES);
+
+  const debriefs = await p.evaluate(cases => {
+    paused = true;
+    const fields = buildAuthored();
+    return cases.map(c => {
+      craft = FLEET_BY_KEY[c.key];
+      newFlight(true);
+      S.route = new Route(c.route.map(id =>
+        Waypoint.fromAirfield(fields.find(f => f.ident === id))));
+      Object.assign(S, { t: c.t, distance: c.distance, initialFuel: c.initialFuel,
+        fuel: c.fuel, plannedFuel: c.planned, maxAlt: c.maxAlt, maxIas: c.maxIas,
+        maxMach: c.maxMach, minAgl: c.minAgl, maxG: c.maxG,
+        warningsSeen: c.warnings.slice(), touchdown: c.touchdown });
+      const d = debriefData(craft, S, c.kind);
+      return {
+        outcome: d.outcome, outcomeText: d.outcomeText, grade: d.grade,
+        warningsSeen: d.warningsSeen, routeIdents: d.routeIdents,
+        rows: d.rows.map(r => ({
+          key: r.key, label: r.label, value: r.value, unit: r.unit,
+          decimals: r.decimals, kind: r.kind, extra: r.extra,
+          text: formatRow(r)
+        }))
+      };
+    });
+  }, DEBRIEF_CASES);
+
   await browser.close();
   if (errs.length) { console.error('page errors:', errs.slice(0, 3)); process.exit(1); }
   console.log(JSON.stringify({
     cases: CASES, rows,
     weatherCases: WEATHER_CASES, windHeights: WIND_HEIGHTS,
-    rotorSweep: ROTOR_SWEEP, weather, gusts
+    rotorSweep: ROTOR_SWEEP, weather, gusts,
+    planCases: PLAN_CASES, plans, debriefCases: DEBRIEF_CASES, debriefs,
+    minimumCruiseNm: MINIMUM_CRUISE_NM
   }, null, 1));
 })();

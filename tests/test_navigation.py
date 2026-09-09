@@ -600,6 +600,33 @@ class TestDebriefData(unittest.TestCase):
         for row, expected in cases:
             self.assertEqual(navigation.format_row(row), expected, row.key)
 
+    def test_halves_round_away_from_zero_in_both_builds(self):
+        """Python rounds halves to even and JavaScript away from zero.
+
+        A touchdown at 140.5 kt printed 140 in the text simulator and 141 in
+        the browser -- two front ends disagreeing about a landing by a knot,
+        which the parity guard found on its first run. Neither language's rule
+        is more correct; what matters is that one arithmetic expression does
+        the rounding before either formatter sees a tie.
+        """
+        for value, decimals, expected in [
+            (140.5, 0, 141.0), (5100.5, 0, 5101.0), (2.5, 0, 3.0),
+            (3.5, 0, 4.0), (0.5, 0, 1.0), (-2.5, 0, -3.0),
+            (1234.5, 0, 1235.0), (1.0049, 2, 1.0),
+            # 2.675 is 2.67499999999999982 as a double, but scaling it lands on
+            # 267.5 exactly and both languages then floor 268.0 -- so the
+            # answer is 2.68 in both, which is the property that matters here.
+            (2.675, 2, 2.68), (1.005, 2, 1.0), (8.835, 2, 8.84),
+        ]:
+            self.assertEqual(
+                navigation.round_half_up(value, decimals), expected,
+                "{} to {} dp".format(value, decimals),
+            )
+
+    def test_a_row_is_rendered_from_the_rounded_number(self):
+        row = navigation.DebriefRow("sink", "", 140.5, "kt", 0)
+        self.assertEqual(navigation.format_row(row), "141 kt")
+
     def test_warnings_come_out_sorted(self):
         """Sorted by the model, so two builds cannot list them differently."""
         session = self.landed()

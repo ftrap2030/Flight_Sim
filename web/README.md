@@ -72,6 +72,21 @@ its marks in the wrong place still looks exactly like a speed tape, and an E/WD
 announcing the failure of the engine that is still running still looks exactly
 like an E/WD.
 
+It also compares **ten flight plans** and **five debriefs**, which are worse
+still: a block fuel figure that is 6% out looks exactly like a block fuel
+figure and there is nothing on the screen to check it against. Every phase,
+every leg, the reserve, the block total and `enough` — the one a build could get
+backwards and tell a pilot they can make it. Two of the routes start at cruise
+level on purpose, because every other case files a level low enough that the
+climb and descent fill the distance, and two miles of cruise cannot tell a mass
+model from a constant; a Python-side assertion fails the run if none of them
+genuinely cruises.
+
+The debrief rows are compared on the rendered *string* as well as the numbers,
+which is how the guard found that Python rounds halves to even and JavaScript
+rounds them away from zero — a touchdown at 140.5 knots printing 140 in one
+build and 141 in the other.
+
 It covers the weather too -- the evolved conditions, the wind through the
 friction layer, the rotor and the mountain wave over a hundred and twenty points
 of terrain, and the gusts, which agree exactly because both builds draw them

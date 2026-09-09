@@ -4385,15 +4385,25 @@ function debriefData(a, s, kind) {
   };
 }
 
+/* Round halves away from zero (navigation.round_half_up). Python rounds them
+   to *even* and JavaScript away from zero, so a touchdown at 140.5 kt printed
+   140 in one build and 141 in the other. One multiply-add-floor over the same
+   IEEE doubles leaves no tie for either formatter to break. */
+const roundHalfUp = (v, d = 0) => {
+  const factor = Math.pow(10, d);
+  const rounded = Math.floor(Math.abs(v) * factor + 0.5) / factor;
+  return v < 0 ? -rounded : rounded;
+};
+
 /* Thousands separators the way Python's `{:,.Nf}` writes them, so the two
    builds print the same string and not merely the same number. */
-const fixed = (v, d) =>
-  v.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const fixed = (v, d) => roundHalfUp(v, d)
+  .toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 
 function formatRow(r) {
   if (r.kind === "clock") {
     // Whole seconds first: 119.9999 split independently reads as 1 min 60 s.
-    const total = Math.round(r.value);
+    const total = roundHalfUp(r.value);
     return `${Math.floor(total / 60)} min ${String(total % 60).padStart(2, "0")} s`;
   }
   const n = fixed(r.value, r.decimals);
@@ -4402,7 +4412,7 @@ function formatRow(r) {
   if (r.kind === "ratio") return `${n} ${r.unit} (${fixed(r.extra, 0)}% of Vref)`;
   if (r.kind === "vs") {
     const delta = r.extra ? (r.value / r.extra - 1) * 100 : 0;
-    const sign = delta >= 0 ? "+" : "";
+    const sign = roundHalfUp(delta) >= 0 ? "+" : "";
     return `${n} ${r.unit} against a planned ${fixed(r.extra, 0)} (${sign}${fixed(delta, 0)}%)`;
   }
   return `${n} ${r.unit}`.trim();

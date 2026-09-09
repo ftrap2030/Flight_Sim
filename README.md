@@ -189,7 +189,8 @@ Commands are typed the way a pilot would say them:
 | Time | `hold`, `wait 60 seconds`, `wait 2 minutes` |
 | Time of day | `time 0530`, `dawn`, `midday`, `dusk`, `night` |
 | Autopilot | `autopilot on/off`, `set altitude 12000`, `set speed 280`, `vertical speed 1500`, `nav`, `approach mode` |
-| Navigation | `direct to KEBR`, `show plan`, `clear route`, `airfields`, `debrief` |
+| Navigation | `route ANFL KEBR CROW`, `add HRWD`, `remove KEBR`, `direct to KEBR` |
+| Navigation | `show plan`, `clear route`, `airfields`, `debrief` |
 | Flight controls | `law`, `normal law`, `alternate law`, `direct law` |
 | Reference | `spec`, `spec a380`, `fleet` |
 | Other | `map`, `status`, `help`, `quit` |
@@ -403,18 +404,56 @@ Anything broken can be un-broken: `fix hydraulics`, `fix engine 2`, or `fix all`
 
 ## Somewhere to go
 
-`direct to KEBR` sets a destination and the panel gains a navigation strip:
-distance, bearing, how far off the nose it sits, ETA, and — the number that
-turns a route into a decision — **fuel on arrival**, computed from the live burn
-and the actual ground speed. Fly into a headwind or detour round a ridge and it
-falls in front of you. Set a destination you cannot reach and it says so.
+`route ANFL KEBR CROW HRWD` files a flight plan; `add` and `remove` amend it,
+`direct to KEBR` collapses it to one destination. The panel gains a navigation
+strip: distance, bearing, how far off the nose it sits, ETA, and — the number
+that turns a route into a decision — **fuel on arrival**, computed from the live
+burn and the actual ground speed. Fly into a headwind or detour round a ridge
+and it falls in front of you.
 
-Every flight ends with a **debrief**: distance flown, fuel burned and average
-burn, maximum altitude and speed, the closest you came to the ground, the
-highest load factor you pulled, your touchdown numbers if you got any, and every
-warning you triggered along the way. Some of that cannot be reconstructed
-afterwards — how near the ground you came is only knowable while it is
-happening — so it is gathered tick by tick as you fly.
+### What it will cost, asked of the aeroplane that will fly it
+
+A plan is priced rather than estimated. The climb is integrated a thousand feet
+at a time at full thrust; the cruise runs with the mass falling as the fuel
+goes, because the same A321neo burns 2,300 kg/h at 85 tonnes and under 2,000
+late in a flight; the descent glides at idle. Every force comes out of the same
+`_aero_state` that flies the aeroplane, so the flight plan and the fuel page
+cannot be two different aircraft.
+
+```
+### Flight plan
+
+| **> ANFL** |  68° |   1.0 nm |  17 kg | 00:10 |
+| KEBR       |  73° |  39.4 nm | 650 kg | 06:14 |
+| CROW       |  65° |  28.9 nm |  41 kg | 04:47 |
+| HRWD       | 196° |  56.3 nm |  56 kg | 09:29 |
+
+Cruise FL270 · 125.6 nm · 21 min
+
+Block fuel 763 kg — 671 climb, 10 cruise, 82 descent — and 958 kg of reserve.
+You have 12,000 kg aboard: 10,279 kg spare over the reserve.
+```
+
+FL270 rather than FL370, because on a 126 nm sector an A320neo would spend
+74 miles climbing and 111 descending and the profile does not fit. The planner
+steps the level down until it does, which is why short sectors cruise low.
+The descent falls out at about three miles per thousand feet across the fleet —
+the rule of thumb every pilot carries — and the BelugaXL comes out steeper,
+because an L/D of 14 has to.
+
+Every flight then ends with a **debrief**: distance flown, fuel burned against
+what was planned, average burn, maximum altitude and speed, the closest you came
+to the ground, the highest load factor you pulled, your touchdown numbers if you
+got any, and every warning you triggered along the way. Some of that cannot be
+reconstructed afterwards — how near the ground you came is only knowable while
+it is happening — so it is gathered tick by tick as you fly.
+
+The debrief is **model data, not display code**. Both front ends had grown an
+end-of-flight card by hand and they had already drifted, so `navigation` now
+owns which rows exist, in what order and to how many digits, and each front end
+only picks fonts. That change immediately exposed a second one: Python rounds
+halves to even and JavaScript rounds them away from zero, so a touchdown at
+140.5 knots printed 140 in one build and 141 in the other.
 
 ## Landing
 
