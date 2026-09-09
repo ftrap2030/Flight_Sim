@@ -204,6 +204,7 @@ class Session:
 
         self.sim.route.direct_to(navigation.Waypoint.from_airfield(field))
         self.sim.sync_route()
+        self.record_plan()
         readout = self.sim.readout()
         leg = readout.leg
         return "**Destination set: {}**\n\n{}\n\n{}".format(
@@ -221,37 +222,64 @@ class Session:
                  ),
         )
 
+    def record_plan(self):
+        """Cost the route and remember the figure the flight will be judged on.
+
+        Written at the moment the plan changes rather than read back at the
+        end: a plan recomputed on arrival would be a plan that has watched the
+        flight, and the comparison would always come out even.
+        """
+        costing = navigation.plan(self.sim)
+        self.sim.state.planned_fuel_kg = costing.block_fuel_kg if costing else 0.0
+        return costing
+
     def plan_text(self):
         route = self.sim.route
         if not route.waypoints:
             return (
-                "No route set. `direct to <ident>` picks a destination; "
+                "No route set. `route ANFL KEBR CROW` files a plan, "
+                "`direct to <ident>` picks a single destination, and "
                 "`airfields` lists what is in reach."
             )
-        readout = self.sim.readout()
-        leg = readout.leg
-        lines = ["### Flight plan", ""]
-        for index, waypoint in enumerate(route.waypoints):
-            marker = "**>**" if index == route.active else "  "
-            lines.append(
-                "{} {} — {:.1f} nm, bearing {:03.0f}°".format(
-                    marker,
-                    waypoint.ident or waypoint.name,
-                    waypoint.distance_nm(
-                        self.sim.state.x_nm, self.sim.state.y_nm
-                    ),
-                    waypoint.bearing_from(
-                        self.sim.state.x_nm, self.sim.state.y_nm
-                    ),
-                )
+        costing = self.record_plan()
+        state = self.sim.state
+        lines = ["### Flight plan", "", "| | | | | |", "| --- | ---: | ---: | ---: | ---: |"]
+
+        flown = route.waypoints[: route.active]
+        for waypoint in flown:
+            lines.append("| ~~{}~~ | | | | |".format(waypoint.ident or waypoint.name))
+        for index, leg in enumerate(costing.legs):
+            lines.append("| {}{} | {:.0f}° | {:,.1f} nm | {:,.0f} kg | {} |".format(
+                "**> " if index == 0 else "",
+                (leg.waypoint.ident or leg.waypoint.name) + ("**" if index == 0 else ""),
+                leg.track_deg, leg.distance_nm, leg.fuel_kg,
+                navigation.eta_text(leg.time_s),
+            ))
+
+        lines.append("")
+        lines.append(
+            "Cruise **FL{:03.0f}** · {:,.1f} nm · {:.0f} min".format(
+                costing.cruise_ft / 100.0, costing.distance_nm, costing.time_s / 60.0
             )
-        if leg is not None:
-            lines.append("")
+        )
+        lines.append("")
+        lines.append(
+            "Block fuel **{:,.0f} kg** — {:,.0f} climb, {:,.0f} cruise, "
+            "{:,.0f} descent — and {:,.0f} kg of reserve.".format(
+                costing.block_fuel_kg, costing.climb_fuel_kg,
+                costing.cruise_fuel_kg, costing.descent_fuel_kg, costing.reserve_kg
+            )
+        )
+        if costing.enough:
             lines.append(
-                "ETA to the active waypoint **{}**, burning {:,.0f} kg of the "
-                "{:,.0f} kg aboard.".format(
-                    leg.eta_text(), leg.fuel_required_kg, readout.fuel_kg
-                )
+                "You have {:,.0f} kg aboard: **{:,.0f} kg spare** over the "
+                "reserve.".format(state.fuel_kg, costing.spare_kg)
+            )
+        else:
+            lines.append(
+                "You have {:,.0f} kg aboard and need {:,.0f}. **Short by "
+                "{:,.0f} kg** — and that is before the reserve is touched."
+                .format(state.fuel_kg, costing.required_kg, -costing.spare_kg)
             )
         return "\n".join(lines)
 

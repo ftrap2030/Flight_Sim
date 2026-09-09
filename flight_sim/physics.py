@@ -72,6 +72,10 @@ GPWS_SOFT_FT = 1000.0
 AIRFIELD_RELOAD_NM = 40.0
 
 # Where a flight begins.
+# The fraction of Vmo a climb or descent is flown at below the Mach crossover.
+# See `Simulator.profile_tas_ms` -- the one invented number in the planner.
+PROFILE_IAS_FRACTION = 0.82
+
 AIRBORNE_START = "airborne"
 RUNWAY_START = "runway"
 
@@ -524,6 +528,220 @@ class Simulator:
             cd += craft.wave_drag_k * (m - craft.mach_crit) ** 3
         drag = q * craft.wing_area_m2 * cd
         return clamp(100.0 * drag / max(self._thrust_available_n(), 1.0), 5.0, 100.0)
+
+    # -- planning: asking the force model about a state we are not in ------
+    #
+    # A flight plan has to answer "what will this cost" before the aeroplane
+    # has been anywhere near the height or the weight in question. That answer
+    # must come from the same `_aero_state` that flies it, or the fuel page and
+    # the flight plan are two different aeroplanes -- so the question is asked
+    # by putting the state somewhere hypothetical, reading the forces, and
+    # putting it back. `navigation.plan` composes these; none of them mutates
+    # anything the caller can observe afterwards.
+
+    # Fields a probe disturbs, restored in a `finally` so an exception midway
+    # cannot leave the aeroplane trimmed for somewhere it is not.
+    _PROBE_FIELDS = (
+        "altitude_ft", "tas_ms", "mass_kg", "pitch_deg", "cmd_pitch_deg",
+        "gamma_deg", "bank_deg", "flaps", "gear_down", "spoilers",
+        "throttle_pct", "engine_n1_pct", "sideslip_deg", "rudder_deg",
+        "on_ground",
+    )
+
+    def _probe(self, altitude_ft, tas_ms, mass_kg, gamma_deg=0.0,
+               throttle_pct=None):
+        """Trim at a hypothetical condition and return its `_aero_state`."""
+        s = self.state
+        saved = {name: getattr(s, name) for name in self._PROBE_FIELDS}
+        try:
+            s.altitude_ft = altitude_ft
+            s.tas_ms = tas_ms
+            s.mass_kg = mass_kg
+            s.gamma_deg = gamma_deg
+            s.bank_deg = 0.0
+            s.flaps = 0
+            s.gear_down = False
+            s.spoilers = False
+            s.sideslip_deg = 0.0
+            s.rudder_deg = 0.0
+            s.on_ground = False
+            s.pitch_deg = s.cmd_pitch_deg = (
+                self.level_flight_pitch_deg() + gamma_deg
+            )
+            s.throttle_pct = (
+                self.throttle_for_flight_path(gamma_deg)
+                if throttle_pct is None else throttle_pct
+            )
+            # The fan has caught up with the levers at any condition a plan
+            # describes; without this the plan trims against a thrust the
+            # engines are not making, which is the 65% error that turned up
+            # the moment thrust started following N1.
+            self.settle_engines()
+            return self._aero_state()
+        finally:
+            for name, value in saved.items():
+                setattr(s, name, value)
+
+    def profile_tas_ms(self, altitude_ft, mach=None):
+        """The speed a climb or a descent is actually flown at.
+
+        Constant *indicated* speed low down and constant Mach high up, crossing
+        over where the two are the same. Every jet climb and descent law is
+        shaped like this, and the reason is the same in both directions: an
+        indicated speed that is unremarkable at cruise is far past Vmo at sea
+        level. Without it a plan climbs an A320neo through five thousand feet
+        at five hundred knots, and both the climb and the descent come out far
+        too short.
+
+        `PROFILE_IAS_FRACTION` is the one invented number here, and it is
+        cross-checked: an A320neo climbs at 280 kt against a Vmo of 350, which
+        is 0.80, and an A350 at about 300 against 340, which is 0.88.
+        """
+        craft = self.aircraft
+        mach = craft.cruise_mach if mach is None else mach
+        ias_ms = craft.vmo_kt * PROFILE_IAS_FRACTION / atm.KT_PER_MS
+        return min(atm.ias_to_tas(ias_ms, altitude_ft),
+                   atm.mach_to_tas(mach, altitude_ft))
+
+    def level_flight_flow_kgh(self, altitude_ft, mach, mass_kg):
+        """Fuel flow in level flight at a height, Mach and weight, in kg/h."""
+        aero = self._probe(altitude_ft, atm.mach_to_tas(mach, altitude_ft), mass_kg)
+        return self.aircraft.tsfc * aero.thrust * 3600.0
+
+    def climb_segment(self, from_ft, to_ft, mass_kg, mach=None, step_ft=1000.0):
+        """Fuel, time and ground distance to climb, integrated in steps.
+
+        Not a table. At each step it asks what the aeroplane can actually do at
+        that height and weight, so an A380 at 575 tonnes climbs slowly because
+        its thrust margin is small rather than because a number said so -- and
+        the rate goes to nothing near the ceiling for the same reason the real
+        one does, which is the thrust fade `_thrust_available_n` already
+        applies.
+
+        Returns (fuel_kg, time_s, distance_nm). Zero for a descent or a level
+        leg, which the caller handles as its own segment.
+        """
+        craft = self.aircraft
+        mach = craft.cruise_mach if mach is None else mach
+        if to_ft <= from_ft:
+            return (0.0, 0.0, 0.0)
+
+        fuel = time_s = distance_m = 0.0
+        mass = mass_kg
+        altitude = from_ft
+        while altitude < to_ft:
+            top = min(altitude + step_ft, to_ft)
+            middle = (altitude + top) / 2.0
+            v = self.profile_tas_ms(middle, mach)
+            aero = self._probe(middle, v, mass, throttle_pct=100.0)
+            # Energy method: the thrust the drag does not use goes into height.
+            excess = aero.thrust - aero.drag
+            if excess <= 0.0:
+                # No margin left: this is the ceiling, and the plan cannot
+                # climb through it. Stop rather than integrate to infinity.
+                break
+            # Not all of the excess goes into height. Climbing at a constant
+            # *indicated* speed means the true speed rises the whole way up, so
+            # some of it goes into going faster -- the acceleration factor,
+            # which is worth several minutes on a climb to the thirties and is
+            # physics rather than a correction factor.
+            v_lo = self.profile_tas_ms(altitude, mach)
+            v_hi = self.profile_tas_ms(top, mach)
+            dv_dh = (v_hi - v_lo) / max((top - altitude) * atm.M_PER_FT, 1e-6)
+            accel_factor = max(1.0 + v * dv_dh / atm.G0, 0.2)
+            climb_rate_ms = excess * v / (mass * atm.G0) / accel_factor
+            step_s = (top - altitude) * atm.M_PER_FT / max(climb_rate_ms, 1e-6)
+            burn = craft.tsfc * aero.thrust * step_s
+            fuel += burn
+            mass -= burn
+            time_s += step_s
+            distance_m += v * step_s
+            altitude = top
+        return (fuel, time_s, distance_m * atm.NM_PER_M)
+
+    def descent_segment(self, from_ft, to_ft, mass_kg, mach=None, step_ft=1000.0):
+        """Fuel, time and ground distance to descend at idle.
+
+        The mirror of the climb and the same integration, except that the path
+        angle is what the aeroplane glides at rather than what the thrust can
+        buy: `idle_flight_path_deg` is the whole descent profile, and it is
+        steeper than most people expect.
+        """
+        craft = self.aircraft
+        mach = craft.cruise_mach if mach is None else mach
+        if to_ft >= from_ft:
+            return (0.0, 0.0, 0.0)
+
+        fuel = time_s = distance_m = 0.0
+        mass = mass_kg
+        altitude = from_ft
+        while altitude > to_ft:
+            bottom = max(altitude - step_ft, to_ft)
+            middle = (altitude + bottom) / 2.0
+            v = self.profile_tas_ms(middle, mach)
+            aero = self._probe(middle, v, mass, throttle_pct=0.0)
+            # The *same* acceleration factor as the climb, not its inverse:
+            # the denominator comes from the energy equation and does not care
+            # which way the aeroplane is going. Descending at a constant
+            # indicated speed the aircraft is slowing down, and that energy
+            # comes back as height -- so the sink rate for a given drag is
+            # lower and the descent is longer. Written the other way round it
+            # made every descent about 20% too steep, which looks plausible
+            # and is wrong.
+            v_hi = self.profile_tas_ms(altitude, mach)
+            v_lo = self.profile_tas_ms(bottom, mach)
+            dv_dh = (v_hi - v_lo) / max((altitude - bottom) * atm.M_PER_FT, 1e-6)
+            accel_factor = max(1.0 + v * dv_dh / atm.G0, 0.2)
+            sink_ms = max(
+                v * math.sin(math.radians(-self._idle_path_at(middle, v, mass)))
+                / accel_factor,
+                0.5,
+            )
+            step_s = (altitude - bottom) * atm.M_PER_FT / sink_ms
+            burn = craft.tsfc * aero.thrust * step_s
+            fuel += burn
+            mass -= burn
+            time_s += step_s
+            distance_m += v * step_s
+            altitude = bottom
+        return (fuel, time_s, distance_m * atm.NM_PER_M)
+
+    def _idle_path_at(self, altitude_ft, tas_ms, mass_kg):
+        """The glide angle, in degrees, at a condition we are not in."""
+        s = self.state
+        saved = {name: getattr(s, name) for name in self._PROBE_FIELDS}
+        try:
+            s.altitude_ft, s.tas_ms, s.mass_kg = altitude_ft, tas_ms, mass_kg
+            s.flaps, s.gear_down, s.spoilers = 0, False, False
+            s.bank_deg = s.sideslip_deg = s.rudder_deg = 0.0
+            s.on_ground = False
+            s.gamma_deg = 0.0
+            s.pitch_deg = s.cmd_pitch_deg = self.level_flight_pitch_deg()
+            s.throttle_pct = 0.0
+            self.settle_engines()
+            return self.idle_flight_path_deg()
+        finally:
+            for name, value in saved.items():
+                setattr(s, name, value)
+
+    def holding_flow_kgh(self, altitude_ft, mass_kg):
+        """Fuel flow holding at green dot, which is what a reserve is spent at.
+
+        Green dot is best lift-to-drag on a clean wing -- the speed a real
+        aeroplane holds at, and the one `fbw.characteristic_speeds` already
+        owns, so the reserve is not a second opinion about how slowly this
+        aeroplane can fly.
+        """
+        s = self.state
+        saved_alt, saved_mass = s.altitude_ft, s.mass_kg
+        try:
+            s.altitude_ft, s.mass_kg = altitude_ft, mass_kg
+            green_dot_kt = fbw.characteristic_speeds(self).green_dot
+        finally:
+            s.altitude_ft, s.mass_kg = saved_alt, saved_mass
+        tas = atm.ias_to_tas(green_dot_kt / atm.KT_PER_MS, altitude_ft)
+        aero = self._probe(altitude_ft, tas, mass_kg)
+        return self.aircraft.tsfc * aero.thrust * 3600.0
 
     # -- per-substep forces --------------------------------------------
 

@@ -177,7 +177,10 @@ class TestCommands(unittest.TestCase):
         session.execute("direct to ANFL")
         output, _f = session.execute("show plan")
         self.assertIn("ANFL", output)
-        self.assertIn("bearing", output)
+        # The plan quotes what it will cost, which is the point of having one.
+        self.assertIn("Block fuel", output)
+        self.assertIn("reserve", output)
+        self.assertIn("Cruise **FL", output)
 
     def test_clear_route_removes_the_destination(self):
         session = session_with_route()
@@ -356,6 +359,179 @@ class TestMultiLegRoutes(unittest.TestCase):
         self.assertEqual([w.ident for w in restored.sim.route.waypoints],
                          ["ANFL", "KEBR", "CROW"])
         self.assertEqual(restored.sim.route.active, 1)
+
+
+class TestPlanning(unittest.TestCase):
+    """What a route costs, asked of the aeroplane that will fly it."""
+
+    def planned(self, key, route, **kwargs):
+        session = Session.new(key, "clear", seed=SEED,
+                              start=physics.RUNWAY_START)
+        session.execute("route " + route)
+        return session, navigation.plan(session.sim, **kwargs)
+
+    def test_the_legs_add_up_to_the_block_fuel(self):
+        """A leg's fuel is a *share* of the three phases, not a fourth estimate."""
+        for key in ("a320neo", "a350", "belugaxl"):
+            _s, plan = self.planned(key, "ANFL KEBR CROW HRWD")
+            self.assertAlmostEqual(
+                sum(leg.fuel_kg for leg in plan.legs), plan.block_fuel_kg,
+                places=6, msg=key,
+            )
+            self.assertAlmostEqual(
+                sum(leg.distance_nm for leg in plan.legs), plan.distance_nm,
+                places=6, msg=key,
+            )
+
+    def test_a_short_sector_files_a_lower_level(self):
+        """FL370 on a hundred-mile hop is a climb the aeroplane never finishes.
+
+        Charging it as though it did is the failure this guards: the profile
+        must fit inside the distance, which is why short sectors cruise low.
+        """
+        _s, short = self.planned("a320neo", "ANFL KEBR")
+        _s, long = self.planned("a320neo", "ANFL KEBR CROW HRWD")
+        self.assertLess(short.cruise_ft, long.cruise_ft)
+        for plan in (short, long):
+            self.assertLessEqual(
+                plan.climb_distance_nm + plan.descent_distance_nm,
+                plan.distance_nm + 1e-6,
+            )
+
+    def test_the_cruise_is_integrated_with_the_mass_falling(self):
+        """Twice the distance must cost less than twice the fuel.
+
+        Cruise flow is strongly weight-dependent, so an aeroplane that gets
+        lighter as it goes burns less per mile at the end than at the start. A
+        planner using the ramp weight throughout would come out exactly linear.
+        """
+        session = Session.new("a350", "clear", seed=SEED)
+        one = navigation._cruise_cost(session.sim, 37000.0, 250000.0, 2000.0)[0]
+        two = navigation._cruise_cost(session.sim, 37000.0, 250000.0, 4000.0)[0]
+        self.assertLess(two, 2.0 * one)
+        self.assertGreater(two, 1.9 * one)
+
+    def test_the_reserve_is_thirty_minutes_of_holding(self):
+        session = Session.new("a320neo", "clear", seed=SEED)
+        session.execute("route ANFL KEBR")
+        plan = navigation.plan(session.sim)
+        flow = session.sim.holding_flow_kgh(
+            navigation.HOLDING_ALTITUDE_FT,
+            session.sim.state.mass_kg - plan.block_fuel_kg,
+        )
+        self.assertAlmostEqual(plan.reserve_kg, flow * 0.5, delta=flow * 0.02)
+
+    def test_a_plan_knows_when_there_is_not_enough_fuel(self):
+        session = Session.new("a320neo", "clear", seed=SEED)
+        session.execute("route ANFL KEBR CROW")
+        session.sim.state.fuel_kg = 200.0
+        plan = navigation.plan(session.sim)
+        self.assertFalse(plan.enough)
+        self.assertLess(plan.spare_kg, 0.0)
+
+    def test_no_route_costs_nothing(self):
+        session = Session.new("a320neo", "clear", seed=SEED)
+        self.assertIsNone(navigation.plan(session.sim))
+
+    def test_the_plan_is_recorded_on_the_state_when_it_is_filed(self):
+        session, plan = self.planned("a320neo", "ANFL KEBR CROW")
+        session.execute("show plan")
+        self.assertGreater(session.sim.state.planned_fuel_kg, 0.0)
+        self.assertAlmostEqual(session.sim.state.planned_fuel_kg,
+                               plan.block_fuel_kg, delta=1.0)
+
+    def test_the_climb_and_descent_flow_through_the_one_force_model(self):
+        """A probe must leave the aeroplane exactly where it found it.
+
+        Everything here trims the live state somewhere hypothetical and puts it
+        back. If that restore ever slipped, the aircraft would silently end up
+        at the planning condition -- which is a bug that would look like a
+        physics bug for a long time.
+        """
+        session = Session.new("a350", "clear", seed=SEED)
+        state = session.sim.state
+        before = {f: getattr(state, f) for f in session.sim._PROBE_FIELDS}
+        session.sim.climb_segment(0.0, 37000.0, 250000.0)
+        session.sim.descent_segment(37000.0, 0.0, 240000.0)
+        session.sim.level_flight_flow_kgh(37000.0, 0.85, 250000.0)
+        session.sim.holding_flow_kgh(1500.0, 240000.0)
+        for name, value in before.items():
+            self.assertEqual(getattr(state, name), value, name)
+
+    def test_the_integration_has_converged_at_the_step_it_uses(self):
+        """A thousand-foot step must not be the reason for the answer.
+
+        Cheap to check and worth checking: an integration whose answer moves
+        when the step changes is reporting its own discretisation, and the
+        difference would be indistinguishable from a modelling error.
+        """
+        for key, top in (("a320neo", 35000.0), ("a350", 37000.0)):
+            sim = Session.new(key, "clear", seed=SEED).sim
+            mass = sim.aircraft.oew_kg + sim.aircraft.payload_kg
+            coarse = sim.climb_segment(0.0, top, mass, step_ft=1000.0)[0]
+            fine = sim.climb_segment(0.0, top, mass, step_ft=250.0)[0]
+            self.assertLess(abs(coarse / fine - 1.0), 0.005, key)
+
+    def test_a_planned_climb_predicts_a_flown_one(self):
+        """The only test of whether the planner is honest: fly it.
+
+        The residue is the flying rather than the plan -- the speed hold below
+        is a proportional nudge on the commanded pitch and lets the aircraft
+        sit a few knots slow, which costs climb rate, so the flown climb comes
+        out consistently longer than the planned one. The integration itself is
+        converged to a twentieth of a percent, which the test above shows.
+        """
+        for key, top in (("a320neo", 33000.0), ("a350", 35000.0)):
+            session = Session.new(key, "clear", seed=SEED)
+            sim, state = session.sim, session.sim.state
+            planned_fuel, planned_time, planned_nm = sim.climb_segment(
+                state.altitude_ft, top, state.mass_kg
+            )
+
+            state.tas_ms = sim.profile_tas_ms(state.altitude_ft)
+            state.pitch_deg = state.cmd_pitch_deg = sim.level_flight_pitch_deg()
+            state.throttle_pct = 100.0
+            sim.settle_engines()
+            fuel0, x0, y0, t0 = (state.fuel_kg, state.x_nm, state.y_nm,
+                                 state.elapsed_s)
+            while state.altitude_ft < top and state.elapsed_s - t0 < 5400:
+                error = state.tas_ms - sim.profile_tas_ms(state.altitude_ft)
+                state.cmd_pitch_deg = physics.clamp(
+                    state.cmd_pitch_deg + error * 0.25, -5.0, 25.0
+                )
+                sim.step_tick(1.0)
+                self.assertIn(state.status, physics.LIVE_STATUSES, key)
+
+            flown_fuel = fuel0 - state.fuel_kg
+            flown_nm = math.hypot(state.x_nm - x0, state.y_nm - y0)
+            for name, planned, flown in (("fuel", planned_fuel, flown_fuel),
+                                         ("time", planned_time,
+                                          state.elapsed_s - t0),
+                                         ("distance", planned_nm, flown_nm)):
+                self.assertLess(
+                    abs(flown / planned - 1.0), 0.12,
+                    "{}: planned {} {:,.0f}, flew {:,.0f}".format(
+                        key, name, planned, flown),
+                )
+
+    def test_a_descent_covers_about_three_miles_per_thousand_feet(self):
+        """The rule of thumb every pilot carries, and it has to fall out.
+
+        It comes from the glide angle, so a draggy aeroplane must come out
+        steeper -- and the BelugaXL, at an L/D of 14 against an A330's 19,
+        duly does.
+        """
+        ratios = {}
+        for key, top in (("a320neo", 37000.0), ("a330-800", 37000.0),
+                         ("belugaxl", 33000.0)):
+            sim = Session.new(key, "clear", seed=SEED).sim
+            _fuel, _time, distance = sim.descent_segment(
+                top, 0.0, sim.aircraft.oew_kg + sim.aircraft.payload_kg
+            )
+            ratios[key] = distance / (top / 1000.0)
+            self.assertTrue(2.0 < ratios[key] < 4.0,
+                            "{}: {:.1f} nm per 1,000 ft".format(key, ratios[key]))
+        self.assertLess(ratios["belugaxl"], ratios["a330-800"])
 
 
 class TestDebriefData(unittest.TestCase):

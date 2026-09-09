@@ -146,6 +146,14 @@
     color: var(--efis-magenta); background: rgba(255,107,224,.07);
   }
   #plan-list .nm { color: var(--ink-faint); }
+  #plan-cost {
+    margin: 0; font-family: var(--font-inst); font-size: 10.5px;
+    line-height: 1.45; letter-spacing: .03em; color: var(--ink-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  #plan-cost:empty { display: none; }
+  #plan-cost b { color: var(--efis-green); font-weight: 600; }
+  #plan-cost .short { color: var(--efis-amber); }
   #plan-list button {
     flex: none; padding: 1px 5px; font-size: 9px; letter-spacing: .06em;
     background: transparent; border: 1px solid var(--edge); color: var(--ink-faint);
@@ -363,6 +371,7 @@
         <select id="sel-dest"></select>
       </label>
       <ol id="plan-list"></ol>
+      <p id="plan-cost"></p>
       <label class="field">
         <span>Break something</span>
         <select id="sel-fail"></select>
@@ -1661,8 +1670,8 @@ const WAYPOINT_CAPTURE_NM = 1.5;
 class Waypoint {
   constructor(o) { Object.assign(this, { ident: "", isAirfield: false }, o); }
   static fromAirfield(f) {
-    return new Waypoint({ name: f.name, x: f.x, y: f.y,
-                          ident: f.ident, isAirfield: true, ils: !!f.ils });
+    return new Waypoint({ name: f.name, x: f.x, y: f.y, ident: f.ident,
+                          isAirfield: true, ils: !!f.ils, elevationFt: f.elev });
   }
   static fromJSON(o) { return new Waypoint(o); }
   get label() { return this.ident || this.name; }
@@ -1713,6 +1722,251 @@ class Route {
 const activeWaypoint = s => (s.route ? s.route.activeWaypoint : null);
 const destinationOf = s => (s.route ? s.route.destination : null);
 
+/* ---------- the flight plan (navigation.plan, physics planning probes) ------
+   What a route costs, asked of the aeroplane that will fly it: a climb at full
+   thrust, a cruise with the mass falling as the fuel goes, an idle descent,
+   and a reserve. Every force comes out of `aeroState`, the same one the
+   integrator reads -- a plan computed from its own drag polar would be a
+   second aeroplane, and the fuel page and the flight plan would disagree.
+
+   `parity_check` compares every one of these numbers against navigation.py. */
+const CRUISE_STEP_NM = 25.0;
+const RESERVE_MINUTES = 30.0;
+const HOLDING_ALTITUDE_FT = 1500.0;
+const LEVEL_STEP_FT = 2000.0;
+const MINIMUM_CRUISE_ABOVE_FIELD_FT = 5000.0;
+const PROFILE_IAS_FRACTION = 0.82;
+
+/* The fields a probe disturbs, put back afterwards. */
+const PROBE_FIELDS = ["alt", "tas", "mass", "pitch", "cmdPitch", "gamma", "bank",
+                      "flaps", "gear", "spoilers", "throttle", "n1", "beta",
+                      "rudder", "onGround"];
+
+function probe(a, s, altFt, tasMs, massKg, gammaDeg = 0, throttlePct = null) {
+  const saved = {};
+  for (const f of PROBE_FIELDS) saved[f] = s[f];
+  try {
+    Object.assign(s, { alt: altFt, tas: tasMs, mass: massKg, gamma: gammaDeg,
+                       bank: 0, flaps: 0, gear: false, spoilers: false,
+                       beta: 0, rudder: 0, onGround: false });
+    s.pitch = s.cmdPitch = levelFlightPitch(a, s) + gammaDeg;
+    s.throttle = throttlePct === null ? throttleForFlightPath(a, s, gammaDeg)
+                                      : throttlePct;
+    settleEngines(a, s);
+    return aeroState(a, s);
+  } finally {
+    for (const f of PROBE_FIELDS) s[f] = saved[f];
+  }
+}
+
+/* Constant indicated speed low down, constant Mach high up. Without it a plan
+   climbs an A320neo through five thousand feet at five hundred knots. */
+function profileTasMs(a, altFt, mach) {
+  mach = mach === undefined ? a.cruiseMach : mach;
+  const iasMs = a.vmo * PROFILE_IAS_FRACTION * MS_PER_KT;
+  return Math.min(iasToTas(iasMs, altFt), mach * soundMs(altFt));
+}
+
+function levelFlightFlowKgh(a, s, altFt, mach, massKg) {
+  return a.tsfc * probe(a, s, altFt, mach * soundMs(altFt), massKg).thrust * 3600;
+}
+
+/* Returns [fuelKg, timeS, distanceNm]. */
+function climbSegment(a, s, fromFt, toFt, massKg, mach, stepFt = 1000) {
+  mach = mach === undefined ? a.cruiseMach : mach;
+  if (toFt <= fromFt) return [0, 0, 0];
+  let fuel = 0, timeS = 0, distanceM = 0, mass = massKg, alt = fromFt;
+  while (alt < toFt) {
+    const top = Math.min(alt + stepFt, toFt), middle = (alt + top) / 2;
+    const v = profileTasMs(a, middle, mach);
+    const aero = probe(a, s, middle, v, mass, 0, 100);
+    const excess = aero.thrust - aero.drag;
+    if (excess <= 0) break;          // the ceiling: no margin left to climb on
+    /* Not all of the excess goes into height: at a constant indicated speed
+       the true speed rises the whole way up. */
+    const vLo = profileTasMs(a, alt, mach), vHi = profileTasMs(a, top, mach);
+    const dvdh = (vHi - vLo) / Math.max((top - alt) * M_PER_FT, 1e-6);
+    const accel = Math.max(1 + v * dvdh / G0, 0.2);
+    const rate = excess * v / (mass * G0) / accel;
+    const stepS = (top - alt) * M_PER_FT / Math.max(rate, 1e-6);
+    const burn = a.tsfc * aero.thrust * stepS;
+    fuel += burn; mass -= burn; timeS += stepS; distanceM += v * stepS;
+    alt = top;
+  }
+  return [fuel, timeS, distanceM * NM_PER_M];
+}
+
+function idlePathDegAt(a, s, altFt, tasMs, massKg) {
+  const saved = {};
+  for (const f of PROBE_FIELDS) saved[f] = s[f];
+  try {
+    Object.assign(s, { alt: altFt, tas: tasMs, mass: massKg, gamma: 0, bank: 0,
+                       flaps: 0, gear: false, spoilers: false, beta: 0,
+                       rudder: 0, onGround: false, throttle: 0 });
+    s.pitch = s.cmdPitch = levelFlightPitch(a, s);
+    settleEngines(a, s);
+    const aero = aeroState(a, s);
+    return -deg(Math.atan2(aero.drag, aero.lift > 1 ? aero.lift : 1));
+  } finally {
+    for (const f of PROBE_FIELDS) s[f] = saved[f];
+  }
+}
+
+function descentSegment(a, s, fromFt, toFt, massKg, mach, stepFt = 1000) {
+  mach = mach === undefined ? a.cruiseMach : mach;
+  if (toFt >= fromFt) return [0, 0, 0];
+  let fuel = 0, timeS = 0, distanceM = 0, mass = massKg, alt = fromFt;
+  while (alt > toFt) {
+    const bottom = Math.max(alt - stepFt, toFt), middle = (alt + bottom) / 2;
+    const v = profileTasMs(a, middle, mach);
+    const aero = probe(a, s, middle, v, mass, 0, 0);
+    /* The *same* acceleration factor as the climb, not its inverse: the
+       denominator is the energy equation and does not care which way the
+       aeroplane is going. Written the other way round every descent came out
+       about 20% too steep, which looks plausible and is wrong. */
+    const vHi = profileTasMs(a, alt, mach), vLo = profileTasMs(a, bottom, mach);
+    const dvdh = (vHi - vLo) / Math.max((alt - bottom) * M_PER_FT, 1e-6);
+    const accel = Math.max(1 + v * dvdh / G0, 0.2);
+    const sink = Math.max(
+      v * Math.sin(rad(-idlePathDegAt(a, s, middle, v, mass))) / accel, 0.5);
+    const stepS = (alt - bottom) * M_PER_FT / sink;
+    const burn = a.tsfc * aero.thrust * stepS;
+    fuel += burn; mass -= burn; timeS += stepS; distanceM += v * stepS;
+    alt = bottom;
+  }
+  return [fuel, timeS, distanceM * NM_PER_M];
+}
+
+/* A reserve is spent holding at green dot, which `characteristicSpeeds` owns --
+   so it is not a second opinion about how slowly this aeroplane can fly. */
+function holdingFlowKgh(a, s, altFt, massKg) {
+  const savedAlt = s.alt, savedMass = s.mass;
+  let greenDotKt;
+  try {
+    s.alt = altFt; s.mass = massKg;
+    greenDotKt = characteristicSpeeds(a, s).greenDot;
+  } finally { s.alt = savedAlt; s.mass = savedMass; }
+  const tas = iasToTas(greenDotKt * MS_PER_KT, altFt);
+  return a.tsfc * probe(a, s, altFt, tas, massKg).thrust * 3600;
+}
+
+const defaultCruiseFt = a =>
+  Math.floor(Math.min(a.ceiling - 2000, 37000) / 1000) * 1000;
+
+function cruiseCost(a, s, cruiseFt, startMassKg, distanceNm) {
+  if (distanceNm <= 0) return [0, 0];
+  const tasKt = a.cruiseMach * soundMs(cruiseFt) * KT_PER_MS;
+  let mass = startMassKg, fuel = 0, timeS = 0, remaining = distanceNm;
+  while (remaining > 0) {
+    const stepNm = Math.min(CRUISE_STEP_NM, remaining);
+    const stepS = stepNm / Math.max(tasKt, 1) * 3600;
+    const burn = levelFlightFlowKgh(a, s, cruiseFt, a.cruiseMach, mass) * stepS / 3600;
+    fuel += burn; mass -= burn; timeS += stepS; remaining -= stepNm;
+  }
+  return [fuel, timeS];
+}
+
+function attributeToLegs(spans, climbNm, climbFuel, climbTime,
+                         cruiseNm, cruiseFuel, cruiseTime,
+                         descentNm, descentFuel, descentTime) {
+  const totalNm = spans.reduce((sum, sp) => sum + sp.distanceNm, 0);
+  const phases = [
+    [Math.min(climbNm, totalNm), climbFuel, climbTime],
+    [Math.max(0, cruiseNm), cruiseFuel, cruiseTime],
+    [Math.max(0, Math.min(descentNm, totalNm)), descentFuel, descentTime]
+  ];
+  const legs = [];
+  let travelled = 0;
+  for (const span of spans) {
+    let fuel = 0, timeS = 0;
+    const start = travelled, end = travelled + span.distanceNm;
+    let phaseStart = 0;
+    for (const [phaseNm, phaseFuel, phaseTime] of phases) {
+      const phaseEnd = phaseStart + phaseNm;
+      const overlap = Math.max(0, Math.min(end, phaseEnd) - Math.max(start, phaseStart));
+      if (overlap > 0 && phaseNm > 0) {
+        fuel += phaseFuel * overlap / phaseNm;
+        timeS += phaseTime * overlap / phaseNm;
+      }
+      phaseStart = phaseEnd;
+    }
+    legs.push({ waypoint: span.waypoint, distanceNm: span.distanceNm,
+                trackDeg: span.trackDeg, fuelKg: fuel, timeS });
+    travelled = end;
+  }
+  return legs;
+}
+
+function planRoute(a, s, cruiseFtWanted) {
+  const route = s.route;
+  if (!route || !route.waypoints.length) return null;
+
+  const spans = [];
+  let x = s.x, y = s.y;
+  for (const wp of route.waypoints.slice(route.active)) {
+    spans.push({ waypoint: wp, distanceNm: wp.distanceNm(x, y),
+                 trackDeg: wp.bearingFrom(x, y) });
+    x = wp.x; y = wp.y;
+  }
+  const totalNm = spans.reduce((sum, sp) => sum + sp.distanceNm, 0);
+  const dest = route.destination;
+  const fieldElevFt = dest ? (dest.elevationFt || 0) : 0;
+
+  /* A level the sector can actually use. FL370 on a hundred-mile hop is a
+     climb the aeroplane never finishes, and costing it as though it did
+     charges for a climb that never happened. */
+  const floorFt = fieldElevFt + MINIMUM_CRUISE_ABOVE_FIELD_FT;
+  let cruiseFt = Math.max(
+    cruiseFtWanted === undefined ? defaultCruiseFt(a) : cruiseFtWanted, floorFt);
+  let climb, descent;
+  for (;;) {
+    climb = climbSegment(a, s, s.alt, cruiseFt, s.mass);
+    descent = descentSegment(a, s, cruiseFt, fieldElevFt, s.mass - climb[0]);
+    if (climb[2] + descent[2] <= totalNm || cruiseFt <= floorFt) break;
+    cruiseFt = Math.max(floorFt, cruiseFt - LEVEL_STEP_FT);
+  }
+
+  let [climbFuel, climbTime, climbNm] = climb;
+  const profileNm = climbNm + descent[2];
+  if (profileNm > totalNm && totalNm > 0) {
+    const shrink = totalNm / profileNm;
+    climbFuel *= shrink; climbTime *= shrink; climbNm *= shrink;
+    descent = descent.map(v => v * shrink);
+  }
+
+  let mass = s.mass - climbFuel;
+  let cruiseNm = 0, cruiseFuel = 0, cruiseTime = 0;
+  for (let pass = 0; pass < 2; pass++) {
+    cruiseNm = Math.max(0, totalNm - climbNm - descent[2]);
+    [cruiseFuel, cruiseTime] = cruiseCost(a, s, cruiseFt, mass, cruiseNm);
+    if (profileNm <= totalNm)
+      descent = descentSegment(a, s, cruiseFt, fieldElevFt, mass - cruiseFuel);
+  }
+  const [descentFuel, descentTime, descentNm] = descent;
+  mass -= cruiseFuel + descentFuel;
+
+  const reserveKg = holdingFlowKgh(a, s, HOLDING_ALTITUDE_FT, mass) *
+                    (RESERVE_MINUTES / 60);
+  const blockFuelKg = climbFuel + cruiseFuel + descentFuel;
+  return {
+    legs: attributeToLegs(spans, climbNm, climbFuel, climbTime,
+                          cruiseNm, cruiseFuel, cruiseTime,
+                          descentNm, descentFuel, descentTime),
+    cruiseFt,
+    climbFuelKg: climbFuel, climbTimeS: climbTime, climbDistanceNm: climbNm,
+    cruiseFuelKg: cruiseFuel, cruiseTimeS: cruiseTime,
+    descentFuelKg: descentFuel, descentTimeS: descentTime,
+    descentDistanceNm: descentNm,
+    reserveKg, fuelOnBoardKg: s.fuel,
+    distanceNm: totalNm,
+    timeS: climbTime + cruiseTime + descentTime,
+    blockFuelKg,
+    requiredKg: blockFuelKg + reserveKg,
+    get enough() { return this.fuelOnBoardKg >= this.requiredKg; },
+    get spareKg() { return this.fuelOnBoardKg - this.requiredKg; }
+  };
+}
+
 /* ---------- session state ---------- */
 let craft = FLEET_BY_KEY["a350"];
 let weather = new WeatherState(WEATHER_BY_KEY["clear"], WORLD_SEED);
@@ -1746,9 +2000,14 @@ function newFlight(keepView) {
   if (mode === "runway") {
     /* Lined up on the threshold, brakes set, ready to go. */
     hdg = home.heading;
+    /* Exactly half the runway back from its centre, which is where
+       `physics._place_on_runway` puts it. This used to sit 0.02 nm further
+       down -- a hundred and twenty-one feet of a five-thousand-foot roll, and
+       enough to make the two builds' flight plans disagree about how far it is
+       to the first waypoint. */
     const back = rad(wrap360(hdg + 180)), half = home.lengthNm / 2;
-    x = home.x + Math.sin(back) * (half - 0.02);
-    y = home.y + Math.cos(back) * (half - 0.02);
+    x = home.x + Math.sin(back) * half;
+    y = home.y + Math.cos(back) * half;
     alt = home.elev; ias = 0; onGround = true; flaps = 1; gear = true; throttle = 0;
   } else if (mode === "approach") {
     const st = approachStart(home, 17);
@@ -5364,6 +5623,26 @@ function renderPlan() {
       `<button data-dir="${i}" title="Direct to">DIR</button>` +
       `<button data-del="${i}" title="Remove">×</button></li>`;
   }).join("");
+  renderPlanCost();
+}
+
+/* What the plan costs, and the figure the debrief will judge the flight
+   against. Written onto the state when the plan changes rather than worked out
+   again at the end: a plan recomputed on arrival has watched the flight, and
+   the comparison would always come out even. */
+function renderPlanCost() {
+  const cost = planRoute(craft, S);
+  const box = el("plan-cost");
+  if (!cost) { box.innerHTML = ""; S.plannedFuel = 0; return; }
+  S.plannedFuel = cost.blockFuelKg;
+  const kg = v => Math.round(v).toLocaleString();
+  box.innerHTML =
+    `FL${String(Math.round(cost.cruiseFt / 100)).padStart(3, "0")} · ` +
+    `${cost.distanceNm.toFixed(0)} nm · ${Math.round(cost.timeS / 60)} min<br>` +
+    `Block <b>${kg(cost.blockFuelKg)} kg</b> + ${kg(cost.reserveKg)} reserve<br>` +
+    (cost.enough
+      ? `${kg(cost.spareKg)} kg spare`
+      : `<span class="short">short by ${kg(-cost.spareKg)} kg</span>`);
 }
 
 planList.addEventListener("click", ev => {

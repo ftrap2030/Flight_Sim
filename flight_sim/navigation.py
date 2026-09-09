@@ -22,6 +22,11 @@ class Waypoint:
     y_nm: float
     ident: str = ""
     is_airfield: bool = False
+    # The field's published elevation, carried on the waypoint rather than
+    # looked up again later: a plan names places the aeroplane has flown far
+    # away from, and the airfield search that found them no longer returns
+    # them. The descent has to end at the right height above sea level.
+    elevation_ft: float = 0.0
 
     def to_dict(self):
         return {
@@ -30,11 +35,15 @@ class Waypoint:
             "y_nm": self.y_nm,
             "ident": self.ident,
             "is_airfield": self.is_airfield,
+            "elevation_ft": self.elevation_ft,
         }
 
     @classmethod
     def from_dict(cls, data):
-        return cls(**data)
+        # `elevation_ft` arrived later than the rest; a save from before it
+        # existed still loads, at sea level.
+        fields = {k: v for k, v in data.items() if k in cls.__annotations__}
+        return cls(**fields)
 
     @classmethod
     def from_airfield(cls, airfield):
@@ -44,6 +53,7 @@ class Waypoint:
             y_nm=airfield.y_nm,
             ident=airfield.ident,
             is_airfield=True,
+            elevation_ft=airfield.elevation_ft,
         )
 
     def distance_nm(self, x_nm, y_nm):
@@ -71,10 +81,19 @@ class Leg:
         return self.fuel_on_arrival_kg > 0.0
 
     def eta_text(self):
-        if not math.isfinite(self.eta_s) or self.eta_s > 24 * 3600:
-            return "--:--"
-        total = int(round(self.eta_s))
-        return "{:02d}:{:02d}".format(total // 60, total % 60)
+        return eta_text(self.eta_s)
+
+
+def eta_text(eta_s):
+    """Minutes and seconds, or `--:--` past a day.
+
+    A groundspeed near zero makes the arithmetic produce a number, and it is
+    not information. One owner, because the flight plan quotes it too.
+    """
+    if not math.isfinite(eta_s) or eta_s > 24 * 3600:
+        return "--:--"
+    total = int(round(eta_s))
+    return "{:02d}:{:02d}".format(total // 60, total % 60)
 
 
 # Distance at which a waypoint counts as reached and the route steps on.
@@ -177,6 +196,252 @@ def leg_for(sim, readout):
         remaining_after_kg=readout.fuel_kg - fuel_required,
     )
 
+
+
+# ---------------------------------------------------------------------------
+# The flight plan
+# ---------------------------------------------------------------------------
+
+# How far the cruise is integrated between re-asking what the aeroplane burns.
+# Cruise flow is strongly weight-dependent -- the same A321neo burns 2,300 kg/h
+# at 85 tonnes and under 2,000 late in a flight -- so a plan that uses the ramp
+# weight the whole way over-predicts a long route, and the debrief then reports
+# a saving that never happened.
+CRUISE_STEP_NM = 25.0
+
+# Final reserve: thirty minutes holding, which is what the rule is.
+RESERVE_MINUTES = 30.0
+HOLDING_ALTITUDE_FT = 1500.0
+
+# How far the level search steps down when the profile will not fit, and how
+# low it is willing to go. Five thousand feet above the destination is the
+# lowest a plan will file: below that there is no cruise worth the name.
+LEVEL_STEP_FT = 2000.0
+MINIMUM_CRUISE_ABOVE_FIELD_FT = 5000.0
+
+
+@dataclass
+class PlanLeg:
+    waypoint: Waypoint
+    distance_nm: float
+    track_deg: float
+    fuel_kg: float
+    time_s: float
+
+
+@dataclass
+class Plan:
+    """What a route will cost, asked of the aeroplane that will fly it.
+
+    Three phases, each integrated through `Simulator`'s own force model rather
+    than from a table: climb at full thrust to the cruise level, cruise at the
+    type's cruise Mach with the mass falling as the fuel goes, and an idle
+    descent to the destination's elevation. Then a reserve.
+
+    The per-leg figures are the phase totals attributed by distance, so they
+    add up to the block fuel exactly rather than being a second estimate.
+    """
+
+    legs: list
+    cruise_ft: float
+    climb_fuel_kg: float
+    climb_time_s: float
+    climb_distance_nm: float
+    cruise_fuel_kg: float
+    cruise_time_s: float
+    descent_fuel_kg: float
+    descent_time_s: float
+    descent_distance_nm: float
+    reserve_kg: float
+    fuel_on_board_kg: float
+
+    @property
+    def distance_nm(self):
+        return sum(leg.distance_nm for leg in self.legs)
+
+    @property
+    def block_fuel_kg(self):
+        """What the flight costs, gate to gate. Not counting the reserve."""
+        return self.climb_fuel_kg + self.cruise_fuel_kg + self.descent_fuel_kg
+
+    @property
+    def required_kg(self):
+        return self.block_fuel_kg + self.reserve_kg
+
+    @property
+    def time_s(self):
+        return self.climb_time_s + self.cruise_time_s + self.descent_time_s
+
+    @property
+    def enough(self):
+        """Whether the fuel aboard covers the block *and* the reserve.
+
+        The reserve is the point: a plan that arrives with nothing left is not
+        a plan that works, it is one that happened to.
+        """
+        return self.fuel_on_board_kg >= self.required_kg
+
+    @property
+    def spare_kg(self):
+        return self.fuel_on_board_kg - self.required_kg
+
+
+def default_cruise_ft(craft):
+    """A cruise level the type can actually hold, rounded to a thousand feet.
+
+    Two thousand below the certified ceiling, because the ceiling is where the
+    climb rate has gone to nothing and nobody plans to cruise there.
+    """
+    return math.floor(min(craft.ceiling_ft - 2000.0, 37000.0) / 1000.0) * 1000.0
+
+
+def plan(sim, cruise_ft=None):
+    """Cost the route the simulator is carrying. None if there is not one.
+
+    Measured from where the aeroplane *is*, through the waypoints still ahead
+    of it -- so it is a live figure rather than a filing, and it answers "can I
+    still get there" halfway down a leg as readily as before departure.
+    """
+    route = getattr(sim, "route", None)
+    if route is None or not route.waypoints:
+        return None
+
+    state = sim.state
+    craft = sim.aircraft
+    cruise_ft = default_cruise_ft(craft) if cruise_ft is None else cruise_ft
+
+    # The legs still to fly: from the aeroplane to the active waypoint, then
+    # between the waypoints after it.
+    spans = []
+    x_nm, y_nm = state.x_nm, state.y_nm
+    for waypoint in route.waypoints[route.active:]:
+        spans.append((waypoint,
+                      waypoint.distance_nm(x_nm, y_nm),
+                      waypoint.bearing_from(x_nm, y_nm)))
+        x_nm, y_nm = waypoint.x_nm, waypoint.y_nm
+    total_nm = sum(span[1] for span in spans)
+
+    destination = route.destination
+    field_elevation_ft = destination.elevation_ft if destination else 0.0
+
+    # Choose a level the sector can actually use. Asked for FL370 on a
+    # hundred-mile hop, an A320neo would spend seventy-four miles climbing and
+    # a hundred and eleven descending -- a profile a hundred miles long does
+    # not have room for, and costing it as though it did charges a climb the
+    # aeroplane never finishes. So step down until it fits, which is what a
+    # dispatcher does and why short sectors cruise low.
+    floor_ft = field_elevation_ft + MINIMUM_CRUISE_ABOVE_FIELD_FT
+    cruise_ft = max(cruise_ft, floor_ft)
+    while True:
+        climb = sim.climb_segment(state.altitude_ft, cruise_ft, state.mass_kg)
+        descent = sim.descent_segment(
+            cruise_ft, field_elevation_ft, state.mass_kg - climb[0]
+        )
+        if climb[2] + descent[2] <= total_nm or cruise_ft <= floor_ft:
+            break
+        cruise_ft = max(floor_ft, cruise_ft - LEVEL_STEP_FT)
+
+    climb_fuel, climb_time, climb_nm = climb
+    # Even the floor may not fit on a sector of a few miles. The aeroplane
+    # genuinely spends all of its distance climbing and descending then, so
+    # both phases are cut back to the share of the distance each takes.
+    profile_nm = climb_nm + descent[2]
+    if profile_nm > total_nm > 0.0:
+        shrink = total_nm / profile_nm
+        climb_fuel, climb_time, climb_nm = (v * shrink for v in climb)
+        descent = tuple(v * shrink for v in descent)
+
+    mass_kg = state.mass_kg - climb_fuel
+
+    # The descent's fuel depends on the mass at the top of it, which depends on
+    # the cruise, which depends on how much distance the descent leaves for it.
+    # Two passes settles it: the descent burns so little that the second pass
+    # moves the answer by grams, but the *distance* it takes moves the cruise
+    # by real fuel.
+    for _ in range(2):
+        cruise_nm = max(0.0, total_nm - climb_nm - descent[2])
+        cruise_fuel, cruise_time = _cruise_cost(sim, cruise_ft, mass_kg, cruise_nm)
+        if profile_nm <= total_nm:
+            descent = sim.descent_segment(
+                cruise_ft, field_elevation_ft, mass_kg - cruise_fuel
+            )
+    descent_fuel, descent_time, descent_nm = descent
+    mass_kg -= cruise_fuel + descent_fuel
+
+    reserve_kg = sim.holding_flow_kgh(HOLDING_ALTITUDE_FT, mass_kg) * (
+        RESERVE_MINUTES / 60.0
+    )
+
+    legs = _attribute_to_legs(
+        spans, climb_nm, climb_fuel, climb_time,
+        cruise_nm, cruise_fuel, cruise_time,
+        descent_nm, descent_fuel, descent_time,
+    )
+    return Plan(
+        legs=legs, cruise_ft=cruise_ft,
+        climb_fuel_kg=climb_fuel, climb_time_s=climb_time, climb_distance_nm=climb_nm,
+        cruise_fuel_kg=cruise_fuel, cruise_time_s=cruise_time,
+        descent_fuel_kg=descent_fuel, descent_time_s=descent_time,
+        descent_distance_nm=descent_nm,
+        reserve_kg=reserve_kg, fuel_on_board_kg=state.fuel_kg,
+    )
+
+
+def _cruise_cost(sim, cruise_ft, start_mass_kg, distance_nm):
+    """Fuel and time to cruise a distance, with the mass falling as it goes."""
+    if distance_nm <= 0.0:
+        return (0.0, 0.0)
+    craft = sim.aircraft
+    tas_kt = atm.mach_to_tas(craft.cruise_mach, cruise_ft) * atm.KT_PER_MS
+    mass_kg = start_mass_kg
+    fuel = time_s = 0.0
+    remaining = distance_nm
+    while remaining > 0.0:
+        step_nm = min(CRUISE_STEP_NM, remaining)
+        step_s = step_nm / max(tas_kt, 1.0) * 3600.0
+        flow = sim.level_flight_flow_kgh(cruise_ft, craft.cruise_mach, mass_kg)
+        burn = flow * step_s / 3600.0
+        fuel += burn
+        mass_kg -= burn
+        time_s += step_s
+        remaining -= step_nm
+    return (fuel, time_s)
+
+
+def _attribute_to_legs(spans, climb_nm, climb_fuel, climb_time,
+                       cruise_nm, cruise_fuel, cruise_time,
+                       descent_nm, descent_fuel, descent_time):
+    """Split the three phase totals across the legs, by distance.
+
+    A leg's fuel is not a fourth estimate -- it is the share of the climb, the
+    cruise and the descent that happens to fall inside it, so the legs add up
+    to the block fuel exactly. A short first leg that is still in the climb
+    therefore costs far more per mile than a long one in the cruise, which is
+    the truth about flying and is worth showing.
+    """
+    total_nm = sum(span[1] for span in spans)
+    boundaries = [
+        (min(climb_nm, total_nm), climb_fuel, climb_time),
+        (max(0.0, cruise_nm), cruise_fuel, cruise_time),
+        (max(0.0, min(descent_nm, total_nm)), descent_fuel, descent_time),
+    ]
+
+    legs = []
+    travelled = 0.0
+    for waypoint, distance_nm, track_deg in spans:
+        fuel = time_s = 0.0
+        start, end = travelled, travelled + distance_nm
+        phase_start = 0.0
+        for phase_nm, phase_fuel, phase_time in boundaries:
+            phase_end = phase_start + phase_nm
+            overlap = max(0.0, min(end, phase_end) - max(start, phase_start))
+            if overlap > 0.0 and phase_nm > 0.0:
+                fuel += phase_fuel * overlap / phase_nm
+                time_s += phase_time * overlap / phase_nm
+            phase_start = phase_end
+        legs.append(PlanLeg(waypoint, distance_nm, track_deg, fuel, time_s))
+        travelled = end
+    return legs
 
 # ---------------------------------------------------------------------------
 # The debrief
