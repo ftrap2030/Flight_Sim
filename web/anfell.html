@@ -248,35 +248,51 @@
   .meter > i.amber { background: var(--efis-amber); }
 
   /* ---- ending card ---- */
+  /* Fixed rather than absolute: the debrief is modal and wants the whole
+     window, not the slice of it the windscreen occupies. Inside `#screen-wrap`
+     the card had to scroll to reach its own "Fly again" button. */
   #ending {
-    position: absolute; inset: 0; display: none;
+    position: fixed; inset: 0; z-index: 20; display: none;
     place-items: center; background: rgba(4,7,9,.86);
     backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
   }
   #ending.show { display: grid; }
+  /* The debrief grew from seven rows to thirteen plus a logbook line, and the
+     card lives inside the windscreen rather than the whole window -- so it
+     scrolls rather than running off the bottom and taking "Fly again" with it. */
   #ending .card {
     background: var(--panel); border: 1px solid var(--edge);
-    padding: 26px 30px; max-width: 460px; text-align: left;
+    padding: 22px 26px; max-width: 520px; text-align: left;
+    max-height: calc(100% - 24px); overflow-y: auto;
   }
   #ending h2 {
     font-family: var(--font-inst); margin: 0 0 4px;
-    font-size: 26px; font-weight: 700; letter-spacing: .04em;
+    font-size: 23px; font-weight: 700; letter-spacing: .04em;
     text-wrap: balance; color: var(--efis-amber);
   }
   #ending h2.good { color: var(--efis-green); }
   #ending h2.bad  { color: var(--efis-red); }
-  #ending p { margin: 0 0 14px; font-size: 14px; line-height: 1.55; color: var(--ink-dim); }
+  #ending p { margin: 0 0 12px; font-size: 13.5px; line-height: 1.5; color: var(--ink-dim); }
   #ending dl {
-    margin: 0 0 18px; display: grid; grid-template-columns: 1fr auto;
-    gap: 3px 16px; font-family: var(--font-inst); font-size: 13px;
+    margin: 0 0 14px; display: grid; grid-template-columns: auto 1fr;
+    gap: 1px 16px; font-family: var(--font-inst); font-size: 12.5px;
     font-variant-numeric: tabular-nums;
   }
   #ending dt { color: var(--ink-faint); }
   #ending dd { margin: 0; text-align: right; color: var(--ink); }
   #ending .end-warnings {
-    margin: 0 0 16px; font-family: var(--font-inst);
+    margin: 0 0 10px; font-family: var(--font-inst);
     font-size: 11.5px; letter-spacing: .04em; color: var(--efis-amber);
   }
+  #ending .end-logbook {
+    margin: 0 0 16px; padding-top: 10px; border-top: 1px solid var(--edge);
+    display: grid; gap: 2px; font-family: var(--font-inst); font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  #ending .end-logbook:empty { display: none; }
+  #ending .lb-route { color: var(--efis-magenta); letter-spacing: .06em; }
+  #ending .lb-note { color: var(--ink-dim); }
+  #ending .lb-note b { color: var(--efis-green); font-weight: 600; }
 
   @media (max-width: 900px) {
     #legend { display: none; }
@@ -413,6 +429,7 @@
         <p id="end-text">—</p>
         <dl id="end-stats"></dl>
         <p id="end-warnings" class="end-warnings">—</p>
+        <p id="end-logbook" class="end-logbook"></p>
         <div class="btn-row"><button id="end-again" type="button">Fly again</button></div>
       </div>
     </div>
@@ -4391,6 +4408,56 @@ function formatRow(r) {
   return `${n} ${r.unit}`.trim();
 }
 
+/* ---------- the logbook ----------
+   Finished flights, kept in `localStorage` so the page behaves the same opened
+   from claude.ai and opened straight off the filesystem -- nothing fetched,
+   nothing declared, which is the promise web/README.md makes about this file.
+
+   Every read and write is wrapped, because the accessor itself throws in a
+   private window and in a browser set to block site data, and an ending card
+   that cannot be drawn is a worse outcome than one with no history on it. */
+const LOGBOOK_KEY = "anfell.logbook.v1";
+const LOGBOOK_LIMIT = 200;
+
+const logbook = {
+  load() {
+    try {
+      const raw = localStorage.getItem(LOGBOOK_KEY);
+      const rows = raw ? JSON.parse(raw) : [];
+      return Array.isArray(rows) ? rows : [];
+    } catch (e) { return []; }
+  },
+  save(rows) {
+    try {
+      localStorage.setItem(LOGBOOK_KEY, JSON.stringify(rows.slice(-LOGBOOK_LIMIT)));
+      return true;
+    } catch (e) { return false; }
+  },
+  /* The key a flight is compared against: the same aeroplane over the same
+     waypoints. Comparing an A380's block fuel against an A319's, or a
+     four-leg route against a two-leg one, would make "best so far" a number
+     with nothing behind it. */
+  key(entry) { return entry.type + "|" + entry.route.join(">"); },
+  record(entry) {
+    const rows = this.load();
+    rows.push(entry);
+    this.save(rows);
+    return rows;
+  }
+};
+
+/* The best previous *landing* on this route: fewest kilograms burned, out of
+   the flights that actually arrived. A crash burns very little fuel and is not
+   a record. */
+function bestPrevious(rows, entry) {
+  const key = logbook.key(entry);
+  const same = rows.filter(r =>
+    logbook.key(r) === key && r.outcome === "landed" && r !== entry);
+  if (!same.length) return null;
+  const best = same.reduce((a, b) => (b.fuelKg < a.fuelKg ? b : a));
+  return { best, count: same.length };
+}
+
 /* ---------- ending ---------- */
 const ENDINGS = {
   landed: { cls: "good", title: "Down and stopped" },
@@ -4434,8 +4501,39 @@ function showEnding(a, s, kind) {
   el("end-warnings").textContent = data.warningsSeen.length
     ? "Warnings raised: " + data.warningsSeen.join(", ")
     : "No warnings raised at any point. A clean flight.";
+
+  const burned = data.rows.find(r => r.key === "fuel_burned");
+  const entry = {
+    at: Date.now(), type: a.name, typeKey: a.key,
+    weather: data.weatherName, route: data.routeIdents,
+    outcome: data.outcome, grade: data.grade,
+    fuelKg: burned ? burned.value : 0,
+    plannedKg: data.plannedFuelKg, seconds: s.t, distanceNm: s.distance
+  };
+  const previous = bestPrevious(logbook.load(), entry);
+  logbook.record(entry);
+  el("end-logbook").innerHTML = logbookLine(entry, previous);
+
   el("ending").classList.add("show");
   return data;
+}
+
+function logbookLine(entry, previous) {
+  const kg = v => Math.round(v).toLocaleString();
+  const where = entry.route.length ? entry.route.join(" → ") : "no plan filed";
+  if (!previous) {
+    return `<span class="lb-route">${where}</span>` +
+           `<span class="lb-note">first flight on this route</span>`;
+  }
+  const delta = entry.fuelKg - previous.best.fuelKg;
+  const flights = previous.count + 1;
+  const verdict = entry.outcome !== "landed"
+    ? `best so far ${kg(previous.best.fuelKg)} kg`
+    : delta < 0
+      ? `<b>a new best, by ${kg(-delta)} kg</b>`
+      : `${kg(delta)} kg off the best of ${kg(previous.best.fuelKg)}`;
+  return `<span class="lb-route">${where}</span>` +
+         `<span class="lb-note">${verdict} · ${flights} flights</span>`;
 }
 
 /* ---------- input ---------- */
