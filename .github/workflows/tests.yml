@@ -72,8 +72,18 @@ jobs:
 
       # And what the glass actually shows: every speed mark, V-speed, flight
       # mode, engine parameter and ECAM line, plus the weather and the gusts,
-      # across a hundred states and four types.
+      # across a hundred and twenty-five states and five types -- and the
+      # flight plan and the debrief, which have no second opinion on screen.
       - name: Model parity
         run: |
           node web/tools/parity_check.js "$PWD/web/anfell.html" > /tmp/web.json
           python web/tools/parity_check.py /tmp/web.json
+
+      # And what it sounds like, which is the one output with no number on
+      # screen to check it against -- which is how it came to be synthesising a
+      # propeller for eleven turbofans. The spectrum is rendered offline and
+      # measured: the fan tone must land on the blade-passing frequency the
+      # published fan diameter and blade count imply, and the energy must sit
+      # where a turbofan's does rather than where a propeller's does.
+      - name: The engines sound like turbofans
+        run: node web/tools/sound_check.js "$PWD/web/anfell.html"
