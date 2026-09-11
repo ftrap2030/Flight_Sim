@@ -390,6 +390,17 @@ def _match_autopilot(text, raw):
         return Command("ap_nav", text=raw, advances_time=False)
     if re.match(r"^(?:nav|lnav)\s+off$", text):
         return Command("ap_nav_off", text=raw, advances_time=False)
+    # The managed descent. Bare mode words only, anchored at both ends, and no
+    # number anywhere in the pattern -- because "descend 2000" is already a
+    # *pitch* command and reaches `_match_attitude` first. A pattern loose
+    # enough to catch "descend" with an argument would swallow it and turn
+    # two thousand feet of hand-flying into a mode change, which is the
+    # matcher-ordering family this module has been bitten by twice.
+    if re.match(r"^(?:arm\s+)?(?:des|descent|managed\s+(?:des|descent|vertical)|"
+                r"vnav)(?:\s+mode)?$", text):
+        return Command("ap_descent", text=raw, advances_time=False)
+    if re.match(r"^(?:des|descent|vnav)\s+off$", text):
+        return Command("ap_descent_off", text=raw, advances_time=False)
     return None
 
 
@@ -604,6 +615,7 @@ def apply(sim, command):
         s.ap_heading_deg = None
         s.ap_speed_kt = None
         s.ap_approach = False
+        s.ap_descent = False
     elif kind == "ap_altitude":
         s.ap_engaged = True
         s.ap_altitude_ft = clamp(command.value, 0.0, 45000.0)
@@ -629,6 +641,20 @@ def apply(sim, command):
         s.ap_heading_deg = None
         if s.ap_altitude_ft is None and s.ap_vs_fpm is None:
             s.ap_altitude_ft = s.altitude_ft
+    elif kind == "ap_descent":
+        s.ap_engaged = True
+        s.ap_descent = True
+        # A managed descent needs a level to leave, and the aeroplane is at one
+        # -- so arming it in the cruise holds what it has until the top of
+        # descent rather than demanding a number the pilot has not given.
+        if s.ap_altitude_ft is None and s.ap_vs_fpm is None:
+            s.ap_altitude_ft = s.altitude_ft
+        s.ap_vs_fpm = None
+        s.ap_approach = False
+    elif kind == "ap_descent_off":
+        s.ap_descent = False
+        if s.ap_engaged and s.ap_altitude_ft is None and s.ap_vs_fpm is None:
+            s.ap_altitude_ft = s.altitude_ft
     elif kind == "ap_nav_off":
         s.ap_nav = False
         if s.ap_engaged and s.ap_heading_deg is None:
@@ -649,7 +675,7 @@ HELP_TEXT = """\
 | **Configuration** | `flaps 1`, `flaps full`, `flaps up`, `gear down`, `gear up`, `speedbrakes out`, `speedbrakes in` |
 | **Time** | `hold` (advance 10 s unchanged), `wait 60 seconds`, `wait 2 minutes` |
 | **Failures** | `failures`, `fail engine 3 fire`, `fail fuel leak`, `arm engine failure`, `fix all` |
-| **Autopilot** | `autopilot on/off`, `set altitude 12000`, `set speed 280`, `vertical speed 1500`, `nav`, `approach mode` |
+| **Autopilot** | `autopilot on/off`, `set altitude 12000`, `set speed 280`, `vertical speed 1500`, `nav`, `descent`, `approach mode` |
 | **Time of day** | `time 0530`, `dawn`, `midday`, `dusk`, `night` |
 | **Navigation** | `route ANFL KEBR CROW`, `add HRWD`, `remove KEBR`, `direct to KEBR` |
 | **Navigation** | `show plan`, `clear route`, `airfields`, `debrief` |

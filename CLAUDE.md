@@ -7,7 +7,7 @@ and one freighter.
 
 ```bash
 python main.py                                  # play it
-python -m unittest discover -s tests -t .       # 549 tests, ~120 s
+python -m unittest discover -s tests -t .       # 562 tests, ~155 s
 python main.py --list                           # fleet and weather menus
 python main.py --spec a350-1000                 # one type's card and drawing
 open web/anfell.html                            # the browser build
@@ -28,8 +28,9 @@ flight_sim/
   weather.py       Immutable profiles + a mutable WeatherState.
   airfield.py      Airfield geometry; procedural and authored sources.
   landing.py       Approach guidance, touchdown grading, ground forces.
-  navigation.py    Routes, the flight plan and its cost, the debrief.
-  autopilot.py     ALT / V/S / HDG / SPD / NAV / APPR, and the FMA.
+  navigation.py    Routes, the flight plan and its cost, the managed
+                   descent, the debrief.
+  autopilot.py     ALT / V/S / HDG / SPD / NAV / APPR / DES, and the FMA.
   fbw.py           Normal / alternate / direct law and the protections.
   engines.py       N1 as state, the spool, and the E/WD's numbers.
   failures.py      Seven failures, the V1 cut, and the ECAM lines.
@@ -279,7 +280,7 @@ has an owner.
 
 ## Testing patterns
 
-- One test file per module, named for it. 549 tests, ~120 s.
+- One test file per module, named for it. 562 tests, ~155 s.
 - Assert against **published figures** where they exist: ISA density tables,
   cruise fuel flow, service ceilings, Vmca. These catch calibration drift that
   self-consistent tests never would.
@@ -576,6 +577,79 @@ estimate, so the legs add up to the block figure exactly.
 `planned_fuel_kg` lives on `FlightState` and is written when the plan is filed.
 Recomputing it on arrival would be a plan that has watched the flight, and the
 comparison would always come out even.
+
+## The descent is one integration, read two ways
+
+`navigation.plan` already integrated an idle descent in order to price it, and
+VNAV needs the same descent as a *path* rather than as a total. Integrating it
+twice would be two aeroplanes, and the symptom would be an arc on the
+navigation display that is not the descent the fuel figure was based on — so
+`Simulator.descent_profile` is the one integration and `descent_segment` reads
+its totals off the last point. The same shape as the ground roll being one
+function read in two directions, and for the same reason.
+
+The profile's points run **from the bottom up**: `(distance_to_go_nm,
+altitude_ft, fuel_kg, time_s)`, where the distance is how far short of the
+field the aeroplane still is when it passes that altitude. So the last point
+*is* the top of descent, and a caller with a range to run reads the altitude
+straight off without needing to know how long the descent came out.
+
+`navigation.descent_guidance` turns that into where the aeroplane should be
+now, and it is **model data** in the sense the speed tape and the FMA are: the
+ND draws the T/D arrowhead and must not work out where it goes. Two things
+about it are deliberate:
+
+- **It is computed against the aircraft's current altitude and mass, not the
+  filed plan's.** The plan is what was intended; this is what is happening. A
+  flight that ended up low, or heavier than it meant to be, has to descend on
+  the profile it can actually fly.
+- **Distance to go follows the route, not the crow.** A plan that doglegs is
+  longer than the straight line to its last waypoint, and descending on the
+  straight line arrives at circuit height with a leg still to fly.
+
+Re-solving a descent costs about twice what a whole instrument readout does, so
+`Simulator.descent_guidance()` caches it against the clock and **every reader
+shares the one answer** — the autopilot flying it, the annunciator naming it
+and the display drawing it. Three solvers would be three different descents.
+Pass `force=True` for a state that was placed rather than flown into: a test,
+or a parity sample, where the clock has not moved but the aeroplane has.
+
+### What the managed descent actually does
+
+`autopilot._fly_descent` is two halves, and the aeroplane sits in the first for
+most of the cruise. Short of the top of descent it is a level hold — which is
+what **ALT CRZ** is — with **DES** armed underneath. Past it the thrust comes
+back to idle and the path is flown on pitch.
+
+**The thrust must go to idle, and the speed channel must not take it back.**
+The plan costed this descent at idle; holding a speed on the throttle would
+burn fuel the plan promised would not be burned, and the debrief's
+planned-against-actual row would quietly blame the pilot. So `update()` skips
+`_hold_speed` while the descent is genuinely at idle, and the annunciator says
+**THR IDLE**, which is what a real one shows. The one exception is being *below*
+the path, where idle cannot stretch the glide and the throttle goes back to the
+speed channel.
+
+**A descent from cruise runs at about 2,400 fpm**, and `_hold_vertical_speed`
+clamped every caller to the 2,000 the altitude channel uses. Left alone that
+would have capped the profile and left the aeroplane permanently behind its own
+path while the annunciator claimed it was on it — the limiter-overwrites-the-
+command family, one level down. It now takes a `limit_fpm`; every other caller
+takes the default and is unchanged.
+
+The numbers that say it works: an A320neo at 71 t leaving FL370 for CROW starts
+down 106.1 nm out, tracks the path inside about 120 ft the whole way at a
+settled 2,100 fpm, and arrives 2.4 nm out at 3,611 ft over a 2,829 ft field —
+782 ft at 2.4 nm, which is a three-degree slope to within a few feet, so it
+hands over exactly where an ILS intercept belongs.
+
+**The descent gradient is the drag polar read out loud, not a number anyone
+chose.** `tests/test_navigation.py` asserts the glide ratio against each type's
+own cruise L/D rather than against a band: just *above* it, and that margin is
+the acceleration factor. "Three miles per thousand feet" turns out to be a
+narrowbody rule — the A320 family manages 2.9 to 3.3, the widebodies 3.6, and
+the BelugaXL, draggy enough that its L/D is 12.9, is the steepest of the fleet
+at 2.6.
 
 ## Things deliberately not modelled
 

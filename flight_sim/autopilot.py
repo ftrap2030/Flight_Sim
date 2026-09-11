@@ -15,6 +15,7 @@ import math
 
 from . import atmosphere as atm
 from . import landing
+from . import navigation as nav
 
 # Channel names, as the panel and the disengage logic use them.
 ALTITUDE = "ALT"
@@ -23,6 +24,7 @@ HEADING = "HDG"
 SPEED = "SPD"
 APPROACH = "APPR"
 NAV = "NAV"
+DESCENT = "DES"
 
 # Limits the autopilot flies within. It is deliberately gentler than the pilot:
 # a passenger-carrying autopilot does not use 60 degrees of bank.
@@ -67,7 +69,12 @@ def channels(state):
     if state.ap_approach:
         active.append(APPROACH)
     else:
-        if state.ap_altitude_ft is not None:
+        # Managed vertical outranks a selected level for the same reason
+        # managed lateral outranks a selected heading: asking for the descent
+        # is asking the aeroplane to fly its own profile.
+        if state.ap_descent:
+            active.append(DESCENT)
+        elif state.ap_altitude_ft is not None:
             active.append(ALTITUDE)
         elif state.ap_vs_fpm is not None:
             active.append(VERTICAL_SPEED)
@@ -91,6 +98,7 @@ def disengage_for(state, command_kind):
         state.ap_altitude_ft = None
         state.ap_vs_fpm = None
         state.ap_approach = False
+        state.ap_descent = False
     elif command_kind in ("bank_set", "heading", "heading_delta"):
         # A heading command re-targets the heading channel rather than killing
         # it; a raw bank command is hand-flying and drops it. Either way managed
@@ -113,16 +121,19 @@ def update(sim, dt):
     # NAV needs the drift angle, which needs a readout too. Both change on a
     # scale of seconds, not hundredths, so they are re-solved a few times a
     # second and the demand is held in between, as the real box does.
-    if state.ap_approach or state.ap_nav:
+    if state.ap_approach or state.ap_nav or state.ap_descent:
         sim._ap_clock = getattr(sim, "_ap_clock", 0.0) + dt
         if sim._ap_clock >= APPROACH_UPDATE_S or getattr(sim, "_ap_readout", None) is None:
             sim._ap_clock = 0.0
             sim._ap_readout = sim.readout()
 
+    idle_descent = False
     if state.ap_approach:
         _fly_approach(sim, sim._ap_readout)
     else:
-        if state.ap_altitude_ft is not None:
+        if state.ap_descent:
+            idle_descent = _fly_descent(sim, sim._ap_readout)
+        elif state.ap_altitude_ft is not None:
             _hold_altitude(sim)
         elif state.ap_vs_fpm is not None:
             _hold_vertical_speed(sim, state.ap_vs_fpm)
@@ -133,7 +144,7 @@ def update(sim, dt):
         elif state.ap_heading_deg is not None:
             state.cmd_heading_deg = state.ap_heading_deg
 
-    if state.ap_speed_kt is not None:
+    if state.ap_speed_kt is not None and not idle_descent:
         _hold_speed(sim)
 
 
@@ -150,10 +161,18 @@ def _hold_altitude(sim):
     _hold_vertical_speed(sim, target_vs)
 
 
-def _hold_vertical_speed(sim, target_fpm):
-    """Pitch for a vertical speed, trimmed around the level-flight attitude."""
+def _hold_vertical_speed(sim, target_fpm, limit_fpm=None):
+    """Pitch for a vertical speed, trimmed around the level-flight attitude.
+
+    `limit_fpm` exists for the managed descent, which runs at some 2,400 feet a
+    minute from cruise: clamped to the 2,000 the altitude channel is held to,
+    the profile would be cut off at the knees and the aeroplane would sit
+    permanently behind its own path while the annunciator claimed otherwise.
+    Every other caller takes the default and is unchanged.
+    """
     state = sim.state
-    target_fpm = max(-MAX_AP_VS_FPM, min(MAX_AP_VS_FPM, target_fpm))
+    limit_fpm = MAX_AP_VS_FPM if limit_fpm is None else limit_fpm
+    target_fpm = max(-limit_fpm, min(limit_fpm, target_fpm))
     speed_ms = max(state.tas_ms, 20.0)
     ratio = max(-0.35, min(0.35, (target_fpm / atm.FPM_PER_MS) / speed_ms))
     gamma_target = math.degrees(math.asin(ratio))
@@ -210,6 +229,65 @@ def _fly_leg(sim, readout):
     if leg is None:
         return
     state.cmd_heading_deg = (leg.bearing_deg - readout.drift_deg) % 360.0
+
+
+# How steeply a managed descent may be flown. A descent from cruise runs at
+# two to two and a half thousand feet a minute, so the 2,000 the altitude
+# channel is held to would cap the profile rather than follow it.
+MAX_DESCENT_VS_FPM = 3200.0
+
+
+def _fly_descent(sim, readout):
+    """Fly the idle descent the flight plan was priced on.
+
+    Two halves, and the aeroplane sits in the first of them for most of the
+    cruise. Before the top of descent this is simply a level hold -- which is
+    what ALT CRZ *is* -- with the mode armed and waiting on the distance to
+    run. After it, the thrust comes back to idle and the path is flown on
+    pitch, which is both what a real managed descent does and what makes the
+    fuel match: `navigation.plan` costed this descent at idle, so flying it on
+    the throttle would burn fuel the plan said would not be burned.
+
+    Returns whether the aeroplane is actually descending at idle, because that
+    is what decides whether the speed channel may have the throttle back.
+    """
+    state = sim.state
+    guidance = sim.descent_guidance()
+    if guidance is None:
+        # The route went away underneath the mode -- cleared, or flown to the
+        # end. Hold the present level rather than pitch at nothing, and give
+        # the mode up rather than pretend to still have a path.
+        state.ap_descent = False
+        if state.ap_altitude_ft is None and state.ap_vs_fpm is None:
+            state.ap_altitude_ft = state.altitude_ft
+        return False
+
+    if not guidance.active:
+        # Still short of the top of descent: hold the cruise level.
+        if state.ap_altitude_ft is not None:
+            _hold_altitude(sim)
+        else:
+            _hold_vertical_speed(sim, 0.0)
+        return False
+
+    # On the path, the sink rate is the profile's own gradient carried along at
+    # the speed the aeroplane is making good -- so a headwind makes the descent
+    # shallower in feet per minute without moving where it has to start, which
+    # is the right way round.
+    ground_speed_kt = max(readout.ground_speed_kt, 1.0) if readout is not None else 1.0
+    nominal_fpm = -guidance.gradient_ft_per_nm * ground_speed_kt / 60.0
+    target_fpm = nominal_fpm - guidance.deviation_ft * nav.DESCENT_PATH_TO_VS
+    _hold_vertical_speed(sim, target_fpm, limit_fpm=MAX_DESCENT_VS_FPM)
+
+    # Below the path the aeroplane needs to stretch the glide, and idle will
+    # not do it -- so the throttle is left to the speed channel, which is the
+    # one case where a managed descent is not an idle one.
+    at_or_above = guidance.deviation_ft >= -nav.DESCENT_ON_PATH_FT
+    if at_or_above:
+        # The levers, not the fan: the spool is the integrator's business, the
+        # same way `_hold_speed` moves the levers and lets N1 chase them.
+        state.throttle_pct = 0.0
+    return at_or_above
 
 
 def _fly_approach(sim, readout):
@@ -335,10 +413,17 @@ def _fma_columns(sim, readout=None):
     )
 
     # --- thrust ---
+    descent = sim.descent_guidance() if s.ap_descent else None
+    descending = bool(descent is not None and descent.active)
     if s.alpha_floor_latched:
         # A.FLOOR is the one mode the pilot did not ask for, so it says so
         # loudly and stays said until the protection is reset.
         thrust = ("A.FLOOR", AMBER)
+    elif descending and descent.deviation_ft >= -nav.DESCENT_ON_PATH_FT:
+        # In a managed descent the thrust is not holding a speed, it is at
+        # idle and the path is being flown on pitch -- which is what the real
+        # annunciator says here, and what the plan costed.
+        thrust = ("THR IDLE", GREEN)
     elif s.ap_speed_kt is not None:
         thrust = ("SPEED", GREEN)
     elif s.on_ground and s.throttle_pct > 80.0:
@@ -358,6 +443,16 @@ def _fma_columns(sim, readout=None):
         vertical = ("G/S", GREEN)
     elif s.ap_approach:
         vertical_armed = ("G/S", BLUE)
+    if vertical is None and on and s.ap_descent:
+        if descending:
+            vertical = ("DES", GREEN)
+        else:
+            # Armed and waiting on the distance to run. ALT CRZ rather than
+            # plain ALT, because the aeroplane is holding a cruise level it is
+            # going to leave on its own -- which is a different thing to be
+            # told than a level-off, and a real one distinguishes them.
+            vertical = ("ALT CRZ", GREEN)
+            vertical_armed = ("DES", BLUE)
     if vertical is None and on:
         if s.ap_altitude_ft is not None:
             # Three modes, not one, because that is what the aircraft is

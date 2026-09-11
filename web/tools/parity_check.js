@@ -128,6 +128,30 @@ const ROTOR_SWEEP = { x0: 300, y: 200, step: 0.3, count: 120, aglFt: 1500 };
    strongly weight-dependent and a planner that forgot the mass falls would
    still agree at one weight. The short route is the one that exercises the
    level search, and the long one the one that reaches a cruise at all. */
+/* The managed descent. The guidance is a pure function of the aeroplane, its
+   mass, where it is and what route it is flying -- so unlike a flown profile
+   it must agree *exactly*, and a top of descent that drifted between the two
+   builds would put the mark on the browser's navigation display somewhere the
+   text simulator never said to start down.
+
+   The aircraft sits on the first field of its route, so the distance to go is
+   the whole route and needs no trigonometry that could be got wrong twice.
+   High levels over short routes are already past the top of descent; the long
+   routes are still short of it, which is the case that exercises ALT CRZ. */
+const DESCENT_CASES = [
+  { key: 'a320neo',  route: ['ANFL', 'CROW'],                          alt: 37000, massT: 71.3 },
+  { key: 'a320neo',  route: ['ANFL', 'KEBR', 'CROW', 'HRWD'],          alt: 37000, massT: 64.6 },
+  { key: 'a320neo',  route: ['ANFL', 'KEBR'],                          alt: 8000,  massT: 71.3 },
+  { key: 'a350',     route: ['ANFL', 'VSPR', 'CROW', 'HRWD'],          alt: 37000, massT: 252.4 },
+  { key: 'a350',     route: ['ANFL', 'CROW'],                          alt: 41000, massT: 230.0 },
+  { key: 'a380',     route: ['ANFL', 'KEBR', 'CROW'],                  alt: 37000, massT: 497.0 },
+  { key: 'a330neo',  route: ['ANFL', 'HRWD'],                          alt: 31000, massT: 235.0 },
+  { key: 'belugaxl', route: ['ANFL', 'CROW'],                          alt: 25000, massT: 211.0 },
+  /* Below the destination's elevation: there is no descent left to fly, and a
+     build that inverted the test would invent a path that climbs. */
+  { key: 'a320neo',  route: ['ANFL', 'VSPR'],                          alt: 1000,  massT: 71.3 },
+];
+
 const PLAN_CASES = [
   { key: 'a320neo',  route: ['ANFL', 'KEBR'],                  alt: 4560, massT: 71.3, fuel: 12000 },
   { key: 'a320neo',  route: ['ANFL', 'KEBR', 'CROW', 'HRWD'],  alt: 4560, massT: 64.6, fuel: 9000 },
@@ -367,6 +391,44 @@ const DEBRIEF_CASES = [
     });
   }, PLAN_CASES);
 
+  const descents = await p.evaluate(cases => {
+    paused = true;
+    startMode = "airborne";
+    const fields = buildAuthored();
+    return cases.map(c => {
+      craft = FLEET_BY_KEY[c.key];
+      newFlight(true);
+      Object.assign(S, { alt: c.alt, mass: c.massT * 1000,
+                         gamma: 0, bank: 0, flaps: 0, gear: false,
+                         spoilers: false, beta: 0, rudder: 0,
+                         enginesFailed: [], enginesRunning: true,
+                         onGround: false, status: "flying" });
+      const home = fields.find(f => f.ident === c.route[0]);
+      S.x = home.x; S.y = home.y;
+      S.route = new Route(c.route.map(id =>
+        Waypoint.fromAirfield(fields.find(f => f.ident === id))));
+      S.ap.engaged = true; S.ap.altFt = c.alt; S.ap.des = true;
+      const g = descentGuidance(craft, S, true);
+      /* The annunciator words go with it: DES and ALT CRZ and THR IDLE are new
+         vocabulary, and two front ends must not disagree about which of them
+         the aeroplane is in. */
+      const cols = fmaColumns(craft, S);
+      const say = pair => (pair && pair[0]) ? pair[0][0] : null;
+      const armed = pair => (pair && pair[1]) ? pair[1][0] : null;
+      return {
+        topOfDescentNm: g.topOfDescentNm,
+        distanceToGoNm: g.distanceToGoNm,
+        targetAltitudeFt: g.targetAltitudeFt,
+        deviationFt: g.deviationFt,
+        gradientFtPerNm: g.gradientFtPerNm,
+        fieldElevationFt: g.fieldElevationFt,
+        active: g.active, onPath: g.onPath,
+        vertical: say(cols.vertical), verticalArmed: armed(cols.vertical),
+        thrust: say(cols.thrust)
+      };
+    });
+  }, DESCENT_CASES);
+
   const debriefs = await p.evaluate(cases => {
     paused = true;
     const fields = buildAuthored();
@@ -399,6 +461,7 @@ const DEBRIEF_CASES = [
     weatherCases: WEATHER_CASES, windHeights: WIND_HEIGHTS,
     rotorSweep: ROTOR_SWEEP, weather, gusts,
     planCases: PLAN_CASES, plans, debriefCases: DEBRIEF_CASES, debriefs,
+    descentCases: DESCENT_CASES, descents,
     minimumCruiseNm: MINIMUM_CRUISE_NM
   }, null, 1));
 })();

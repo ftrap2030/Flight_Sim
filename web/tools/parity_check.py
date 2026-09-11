@@ -417,6 +417,92 @@ def weather_failures(data):
     return out
 
 
+def descent_failures(data):
+    """The managed descent, which is a mark on the glass with nothing behind it.
+
+    The top of descent is a pure function of the aeroplane, its mass, where it
+    is and what route it is flying -- so unlike a flown profile it must agree
+    exactly, and there is no tolerance to hide behind. A T/D that drifted would
+    put the arrowhead on the browser's navigation display somewhere the text
+    simulator never said to start down, and the first the pilot would know of
+    it is arriving high.
+
+    The annunciator words go with it. DES, ALT CRZ and THR IDLE are new
+    vocabulary and both front ends have to use them at the same moment.
+    """
+    if "descents" not in data:
+        return ["the browser dump has no descent section -- re-run parity_check.js"]
+
+    out = []
+    numeric = ("topOfDescentNm", "distanceToGoNm", "targetAltitudeFt",
+               "deviationFt", "gradientFtPerNm", "fieldElevationFt")
+    python_name = {
+        "topOfDescentNm": "top_of_descent_nm",
+        "distanceToGoNm": "distance_to_go_nm",
+        "targetAltitudeFt": "target_altitude_ft",
+        "deviationFt": "deviation_ft",
+        "gradientFtPerNm": "gradient_ft_per_nm",
+        "fieldElevationFt": "field_elevation_ft",
+    }
+    active_seen = idle_seen = False
+    for case, theirs in zip(data["descentCases"], data["descents"]):
+        where = "{} / {} / FL{:03.0f}".format(
+            case["key"], " ".join(case["route"]), case["alt"] / 100.0)
+        session = Session.new(case["key"], "clear", seed=SEED)
+        sim = session.sim
+        state = sim.state
+        home = sim.airfields.by_ident(
+            case["route"][0], state.x_nm, state.y_nm, radius_nm=400.0
+        )
+        state.x_nm, state.y_nm = home.x_nm, home.y_nm
+        state.altitude_ft = case["alt"]
+        state.mass_kg = case["massT"] * 1000.0
+        session.execute("route " + " ".join(case["route"]))
+        state.ap_engaged = True
+        state.ap_altitude_ft = case["alt"]
+        state.ap_descent = True
+        mine = sim.descent_guidance(force=True)
+
+        for browser_name in numeric:
+            a = getattr(mine, python_name[browser_name])
+            b = theirs[browser_name]
+            if abs(a - b) > max(PLAN_TOLERANCE, abs(a) * PLAN_TOLERANCE):
+                out.append("{}: descent {} is {:,.6f} in Python and {:,.6f} in "
+                           "the browser".format(where, python_name[browser_name], a, b))
+        if mine.active != theirs["active"]:
+            out.append("{}: past the top of descent is {} in Python and {} in the "
+                       "browser -- one of them is about to start down and the "
+                       "other is not".format(where, mine.active, theirs["active"]))
+        if mine.on_path != theirs["onPath"]:
+            out.append("{}: on-path is {} in Python and {} in the browser"
+                       .format(where, mine.on_path, theirs["onPath"]))
+        active_seen = active_seen or mine.active
+
+        columns = autopilot._fma_columns(sim)
+        pairs = (
+            ("vertical", columns["vertical"][0], theirs["vertical"]),
+            ("verticalArmed", columns["vertical"][1], theirs["verticalArmed"]),
+            ("thrust", columns["thrust"][0], theirs["thrust"]),
+        )
+        for name, engaged, browser_text in pairs:
+            mine_text = engaged[0] if engaged else None
+            if mine_text != browser_text:
+                out.append("{}: the {} annunciator says {!r} in Python and {!r} "
+                           "in the browser".format(where, name, mine_text, browser_text))
+        idle_seen = idle_seen or (columns["thrust"][0] or ("",))[0] == "THR IDLE"
+
+    # The vacuity guards, and they are the same lesson as the plan section's:
+    # a descent section where nothing is ever past the top of descent compares
+    # two builds that are both merely holding a level.
+    if not active_seen:
+        out.append("no descent case is past the top of descent -- the section is "
+                   "comparing two aeroplanes that are both still in the cruise")
+    if not idle_seen:
+        out.append("no descent case reaches THR IDLE -- the thrust annunciator's "
+                   "new word is never exercised")
+    return out
+
+
 def main():
     if len(sys.argv) < 2:
         print("usage: parity_check.py <json from parity_check.js>", file=sys.stderr)
@@ -424,7 +510,8 @@ def main():
     data = json.load(open(sys.argv[1]))
     by_name = {c["name"]: c for c in data["cases"]}
 
-    failures = weather_failures(data) + plan_failures(data) + debrief_failures(data)
+    failures = (weather_failures(data) + plan_failures(data)
+                + debrief_failures(data) + descent_failures(data))
     for row in data["rows"]:
         case = by_name[row["case"]]
         where = "{} / {}".format(row["key"], row["case"])
@@ -510,10 +597,10 @@ def main():
             )
 
     print("{} states, {} types, {} weather cases, {} flight plans, "
-          "{} debriefs".format(
+          "{} debriefs, {} descents".format(
               len(data["rows"]), len({r["key"] for r in data["rows"]}),
               len(data.get("weather", ())), len(data.get("plans", ())),
-              len(data.get("debriefs", ()))))
+              len(data.get("debriefs", ())), len(data.get("descents", ()))))
     if failures:
         print("\nDISAGREEMENTS ({}):".format(len(failures)))
         for line in failures[:40]:
@@ -522,7 +609,7 @@ def main():
             print("  ... and {} more".format(len(failures) - 40))
         return 1
     print("the two builds agree on every speed, engine parameter, flight mode, "
-          "ECAM line,\nweather sample, flight-plan figure and debrief row -- "
+          "ECAM line,\nweather sample, flight-plan figure, debrief row and top of descent -- "
           "and on every gust, exactly")
     return 0
 

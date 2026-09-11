@@ -91,6 +91,18 @@ which is how the guard found that Python rounds halves to even and JavaScript
 rounds them away from zero — a touchdown at 140.5 knots printing 140 in one
 build and 141 in the other.
 
+It covers the **managed descent** too -- nine cases across five types, and
+exactly rather than within a tolerance: the top of descent is a pure function
+of the aeroplane, its mass, where it is and what route it is flying, so a T/D
+that drifted between the two builds would put the arrowhead on this display
+somewhere the text simulator never said to start down, and the first you would
+know of it is arriving high. The annunciator words go with it, because DES,
+ALT CRZ and THR IDLE are new vocabulary and both builds have to use them at the
+same moment. Breaking the browser on purpose -- a T/D five percent early, a
+gradient two percent out, ALT CRZ annunciated as plain ALT, a distance-to-go
+measured straight-line instead of along the route -- fails it four times out of
+four, each naming the right thing.
+
 It covers the weather too -- the evolved conditions, the wind through the
 friction layer, the rotor and the mountain wave over a hundred and twenty points
 of terrain, and the gusts, which agree exactly because both builds draw them

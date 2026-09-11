@@ -469,6 +469,137 @@ OUTCOME_TEXT = {
 #   mach   an airspeed and the Mach number at the same moment
 #   ratio  an airspeed and a percentage of Vref
 #   vs     what happened, against what was planned
+# --------------------------------------------------------------------------
+# The managed descent
+#
+# The flight plan already integrates an idle descent to price it. VNAV flies
+# that same descent, and reads it off the same integration -- `descent_profile`
+# in `physics` -- rather than computing a second one. Two descents would be two
+# aeroplanes, and the arc on the navigation display would stop being the
+# descent the fuel figure was based on.
+# --------------------------------------------------------------------------
+
+# How hard the path is recaptured, in feet per minute per foot high or low.
+# Gentler than the glideslope's 1.9, because a descent from cruise has tens of
+# miles to converge in and a passenger-carrying aeroplane should not chase it.
+DESCENT_PATH_TO_VS = 1.4
+# What counts as being on the path for the annunciator's purposes.
+DESCENT_ON_PATH_FT = 250.0
+
+
+@dataclass
+class DescentGuidance:
+    """Where the idle descent says the aeroplane should be, and where it is.
+
+    Model data in the sense CLAUDE.md means it: both front ends draw the top of
+    descent and neither may decide where it goes. Computed against the aircraft's
+    *current* altitude and mass rather than the filed plan's, because the plan is
+    what was intended and this is what is happening -- a flight that ended up
+    low, or heavier than it meant to be, has to descend on the profile it can
+    actually fly.
+    """
+
+    destination: object
+    distance_to_go_nm: float
+    top_of_descent_nm: float
+    target_altitude_ft: float
+    deviation_ft: float  # positive is high
+    gradient_ft_per_nm: float
+    field_elevation_ft: float
+
+    @property
+    def active(self):
+        """Whether the aeroplane has reached the point of starting down."""
+        return self.distance_to_go_nm <= self.top_of_descent_nm
+
+    @property
+    def on_path(self):
+        return abs(self.deviation_ft) <= DESCENT_ON_PATH_FT
+
+
+def route_distance_to_go_nm(sim):
+    """How far the destination is *along the route*, not across country.
+
+    A plan that doglegs through three waypoints is longer than the straight
+    line to the last of them, and descending on the straight line would put the
+    aeroplane at circuit height with a leg still to fly.
+    """
+    route = sim.route
+    if route is None or not route.waypoints:
+        return None
+    remaining = route.waypoints[route.active:]
+    if not remaining:
+        return None
+    state = sim.state
+    total = remaining[0].distance_nm(state.x_nm, state.y_nm)
+    for previous, following in zip(remaining, remaining[1:]):
+        total += following.distance_nm(previous.x_nm, previous.y_nm)
+    return total
+
+
+def _altitude_on_path(points, distance_to_go_nm, field_ft):
+    """Interpolate the profile, and take the local gradient with it.
+
+    Returns `(altitude_ft, ft_per_nm)`. Past the top of descent the path is
+    still level, so the gradient is zero and the target is the cruise level --
+    which is what leaves the aeroplane holding its level rather than easing
+    down early.
+    """
+    if distance_to_go_nm <= points[0][0]:
+        return (field_ft, 0.0)
+    for (near_nm, near_ft, _f0, _t0), (far_nm, far_ft, _f1, _t1) in zip(points, points[1:]):
+        if distance_to_go_nm <= far_nm:
+            span = far_nm - near_nm
+            if span <= 1e-9:
+                return (far_ft, 0.0)
+            gradient = (far_ft - near_ft) / span
+            return (near_ft + gradient * (distance_to_go_nm - near_nm), gradient)
+    return (points[-1][1], 0.0)
+
+
+def descent_guidance(sim):
+    """The descent path from where the aeroplane actually is, or None.
+
+    None when there is no route to descend along, which is the honest answer:
+    a managed descent without a destination is not a descent, it is a dive.
+    """
+    route = sim.route
+    destination = route.destination if route else None
+    if destination is None:
+        return None
+    distance_to_go = route_distance_to_go_nm(sim)
+    if distance_to_go is None:
+        return None
+
+    state = sim.state
+    field_ft = destination.elevation_ft or 0.0
+    points = sim.descent_profile(state.altitude_ft, field_ft, state.mass_kg)
+    if not points:
+        # At or below the field already: there is no descent left to fly, and
+        # saying so is better than inventing a path that goes upwards.
+        return DescentGuidance(
+            destination=destination,
+            distance_to_go_nm=distance_to_go,
+            top_of_descent_nm=0.0,
+            target_altitude_ft=field_ft,
+            deviation_ft=state.altitude_ft - field_ft,
+            gradient_ft_per_nm=0.0,
+            field_elevation_ft=field_ft,
+        )
+
+    target_ft, gradient = _altitude_on_path(points, distance_to_go, field_ft)
+    return DescentGuidance(
+        destination=destination,
+        distance_to_go_nm=distance_to_go,
+        top_of_descent_nm=points[-1][0],
+        target_altitude_ft=target_ft,
+        deviation_ft=state.altitude_ft - target_ft,
+        gradient_ft_per_nm=gradient,
+        field_elevation_ft=field_ft,
+    )
+
+
+
 ROW_KINDS = ("plain", "clock", "of", "mach", "ratio", "vs")
 
 

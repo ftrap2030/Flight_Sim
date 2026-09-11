@@ -191,6 +191,11 @@ class FlightState:
     ap_approach: bool = False
     # Managed lateral: steer to the route rather than to a selected heading.
     ap_nav: bool = False
+    # Managed vertical: fly the idle descent the flight plan was priced on,
+    # starting at the top of descent. Armed in the cruise and engaged by the
+    # distance to run, which is why it is a flag rather than a target -- the
+    # target is the profile, and the profile is recomputed as the mass falls.
+    ap_descent: bool = False
 
     # When each Flight Mode Annunciator column last changed, in elapsed seconds.
     # The box that appears round a column for ten seconds after a mode change is
@@ -659,22 +664,34 @@ class Simulator:
             altitude = top
         return (fuel, time_s, distance_m * atm.NM_PER_M)
 
-    def descent_segment(self, from_ft, to_ft, mass_kg, mach=None, step_ft=1000.0):
-        """Fuel, time and ground distance to descend at idle.
+    def descent_profile(self, from_ft, to_ft, mass_kg, mach=None, step_ft=1000.0):
+        """The idle descent as a *path*, not merely as a total.
 
-        The mirror of the climb and the same integration, except that the path
-        angle is what the aeroplane glides at rather than what the thrust can
-        buy: `idle_flight_path_deg` is the whole descent profile, and it is
-        steeper than most people expect.
+        Returns points ordered by distance from the bottom:
+        `(distance_to_go_nm, altitude_ft, fuel_kg, time_s)`, where
+        `distance_to_go_nm` is how far short of `to_ft` the aeroplane still is
+        when it passes that altitude, and the fuel and time are what remain to
+        be spent from there. The first point is the arrival, the last is the
+        top of descent, and the last point's figures are therefore the totals.
+
+        This exists because the planner and VNAV want the same descent read two
+        different ways: the planner wants what it costs, and the autopilot
+        wants where to be at each mile. Integrating it twice would be two
+        copies of the same physics, and they would drift -- which is why
+        `descent_segment` below reads its answer off this rather than doing the
+        arithmetic again.
         """
         craft = self.aircraft
         mach = craft.cruise_mach if mach is None else mach
         if to_ft >= from_ft:
-            return (0.0, 0.0, 0.0)
+            return []
 
+        # Integrated from the top down, because that is the direction the
+        # aeroplane flies it and the mass falls as it goes.
         fuel = time_s = distance_m = 0.0
         mass = mass_kg
         altitude = from_ft
+        steps = [(0.0, from_ft, 0.0, 0.0)]
         while altitude > to_ft:
             bottom = max(altitude - step_ft, to_ft)
             middle = (altitude + bottom) / 2.0
@@ -704,7 +721,57 @@ class Simulator:
             time_s += step_s
             distance_m += v * step_s
             altitude = bottom
-        return (fuel, time_s, distance_m * atm.NM_PER_M)
+            steps.append((distance_m * atm.NM_PER_M, altitude, fuel, time_s))
+
+        # Turned round into distance *to go*, so a caller with a range to the
+        # destination can read the altitude straight off without knowing how
+        # long the descent turned out to be.
+        total_nm, _alt, total_fuel, total_time = steps[-1]
+        return [
+            (total_nm - run_nm, alt, total_fuel - spent_kg, total_time - spent_s)
+            for run_nm, alt, spent_kg, spent_s in reversed(steps)
+        ]
+
+    def descent_segment(self, from_ft, to_ft, mass_kg, mach=None, step_ft=1000.0):
+        """Fuel, time and ground distance to descend at idle.
+
+        The mirror of the climb and the same integration, except that the path
+        angle is what the aeroplane glides at rather than what the thrust can
+        buy: `idle_flight_path_deg` is the whole descent profile, and it is
+        steeper than most people expect.
+
+        The totals of `descent_profile`, which is the one integration both this
+        and VNAV read.
+        """
+        points = self.descent_profile(from_ft, to_ft, mass_kg, mach, step_ft)
+        if not points:
+            return (0.0, 0.0, 0.0)
+        distance_nm, _alt, fuel, time_s = points[-1]
+        return (fuel, time_s, distance_nm)
+
+    # Re-solving a descent costs about twice what a whole instrument readout
+    # does, and the answer changes on a scale of miles rather than of substeps
+    # -- the same trade `_refresh_terrain_effects` already makes for the rotor
+    # and the mountain wave. So it is cached against the clock and *shared*:
+    # the autopilot flying the descent, the annunciator naming it and the
+    # navigation display drawing it must read one answer rather than solve
+    # three, or the arc on the screen stops being the path being flown.
+    DESCENT_GUIDANCE_INTERVAL_S = 2.0
+
+    def descent_guidance(self, force=False):
+        """The managed descent path, cached against the clock.
+
+        `force` re-solves it now, for a state that was placed rather than flown
+        into -- a test, or a parity sample, where the clock has not moved but
+        the aeroplane has.
+        """
+        now = self.state.elapsed_s
+        last = getattr(self, "_descent_guidance_s", None)
+        if force or last is None or abs(now - last) >= self.DESCENT_GUIDANCE_INTERVAL_S:
+            self._descent_guidance = navigation.descent_guidance(self)
+            self._descent_guidance_s = now
+        return getattr(self, "_descent_guidance", None)
+
 
     def _idle_path_at(self, altitude_ft, tas_ms, mass_kg):
         """The glide angle, in degrees, at a condition we are not in."""

@@ -614,13 +614,29 @@ that the measured peak lands on the blade-passing frequency the published fan
 data implies — and that the energy sits where a turbofan's does rather than
 where a propeller's does.
 
+**The aeroplane flies the plan it filed.** Arm the managed descent and it holds
+its cruise level — **ALT CRZ**, with **DES** armed under it — until the top of
+descent, then brings the thrust to idle and flies the profile down on pitch.
+The top of descent is not a rule of thumb: it is the idle descent integrated
+from the aircraft's *current* altitude and mass, and it is the same integration
+the flight plan priced the descent with, so the T/D arrowhead on the navigation
+display marks the descent the fuel figure was based on. An A320neo at 71 tonnes
+leaving FL370 for Crowmarsh starts down 106 miles out, tracks the path inside
+about 120 feet the whole way, and arrives where a three-degree slope would put
+it — which is exactly where the ILS takes over.
+
+The descent gradient is the drag polar read out loud rather than a number
+anybody chose. "Three miles per thousand feet" turns out to be a narrowbody
+rule: the A320 family manages 2.9 to 3.3, the widebodies 3.6, and the BelugaXL
+— draggy enough that its L/D is 12.9 — is the steepest of the fleet at 2.6.
+
 ## Tests
 
 ```bash
 python -m unittest discover -s tests -t .
 ```
 
-549 tests, no dependencies. They check the atmosphere against published ISA
+562 tests, no dependencies. They check the atmosphere against published ISA
 tables, stall speed against its closed form, cruise fuel flow and service
 ceiling against published figures for every type, terrain determinism,
 save/load fidelity, that every prose template renders against a live context,

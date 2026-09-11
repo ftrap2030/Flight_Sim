@@ -5,6 +5,9 @@ import os
 import tempfile
 import unittest
 
+from flight_sim import aircraft as fleet
+from flight_sim import atmosphere as atm
+from flight_sim import autopilot
 from flight_sim import commands as cmd
 from flight_sim import dashboard
 from flight_sim import mapview
@@ -749,3 +752,247 @@ class TestPersistence(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDescentGuidance(unittest.TestCase):
+    """The managed descent path: VNAV's half of the descent integration."""
+
+    def _cruising_at(self, key, distance_nm, altitude_ft=37000.0, ident="CROW"):
+        sim = physics.Simulator.new_flight(key, "clear")
+        field = sim.airfields.by_ident(ident)
+        state = sim.state
+        heading = 215.0
+        state.altitude_ft = altitude_ft
+        state.x_nm = field.x_nm - math.sin(math.radians(heading)) * distance_nm
+        state.y_nm = field.y_nm - math.cos(math.radians(heading)) * distance_nm
+        state.heading_deg = heading
+        state.tas_ms = sim.profile_tas_ms(altitude_ft)
+        state.throttle_pct = sim.throttle_for_level_flight()
+        sim.settle_engines()
+        sim.route.direct_to(navigation.Waypoint.from_airfield(field))
+        sim.sync_route()
+        return sim, field
+
+    def test_the_descent_is_one_integration_read_two_ways(self):
+        """`descent_segment` must be the totals of `descent_profile`.
+
+        Two integrations of the same descent would drift apart exactly as two
+        copies of the friction model would, and the visible symptom would be an
+        arc on the navigation display that is not the descent the flight plan
+        was priced on.
+        """
+        sim = physics.Simulator.new_flight("a350", "clear")
+        mass = sim.state.mass_kg
+        for top, bottom in ((37000.0, 500.0), (29000.0, 3000.0), (11000.0, 900.0)):
+            fuel, time_s, distance_nm = sim.descent_segment(top, bottom, mass)
+            points = sim.descent_profile(top, bottom, mass)
+            self.assertEqual(points[-1][0], distance_nm)
+            self.assertEqual(points[-1][2], fuel)
+            self.assertEqual(points[-1][3], time_s)
+
+    def test_the_profile_runs_from_the_field_up_to_the_top_of_descent(self):
+        sim = physics.Simulator.new_flight("a320neo", "clear")
+        points = sim.descent_profile(37000.0, 500.0, sim.state.mass_kg)
+        self.assertEqual(points[0][0], 0.0)  # at the field, nothing left to run
+        self.assertAlmostEqual(points[0][1], 500.0, places=6)
+        self.assertAlmostEqual(points[-1][1], 37000.0, places=6)
+        # Ordered by distance to go, and descending in altitude as it closes.
+        distances = [p[0] for p in points]
+        altitudes = [p[1] for p in points]
+        self.assertEqual(distances, sorted(distances))
+        self.assertEqual(altitudes, sorted(altitudes))
+
+    def test_the_glide_ratio_sits_just_above_each_types_cruise_l_over_d(self):
+        """The descent gradient is not a number to be picked, it is the drag
+        polar read out loud -- so it is asserted against each type's own L/D
+        rather than against a band somebody chose.
+
+        Just *above* L/D, and that margin is the acceleration factor: at a
+        constant indicated speed the aeroplane is slowing down all the way
+        and that energy comes back as height, so the descent stretches. Which
+        is the whole point of the test -- written the other way round the
+        factor put the glide ratio *below* L/D, at 14:1 for a wing whose polar
+        says 18, and the fleet covered 2.3 nm per thousand feet instead of
+        three. That looked entirely plausible.
+
+        "Three miles per thousand feet" turns out to be a narrowbody rule: the
+        A320 family manages 2.9 to 3.3, the widebodies 3.6, and the BelugaXL --
+        draggy enough that its L/D is 12.9 -- the steepest of the lot at 2.6.
+        """
+        for craft in fleet.FLEET:
+            sim = physics.Simulator.new_flight(craft.key, "clear")
+            _fuel, _time, distance_nm = sim.descent_segment(
+                37000.0, 2000.0, sim.state.mass_kg)
+            aero = sim._aero_state()
+            lift_over_drag = aero.lift / aero.drag
+            glide_ratio = distance_nm * atm.M_PER_NM / atm.M_PER_FT / 35000.0
+            self.assertGreater(
+                glide_ratio, lift_over_drag,
+                "{}: glides at {:.1f}:1 on an L/D of {:.1f} -- shallower than "
+                "its own wing, which is the acceleration factor inverted"
+                .format(craft.key, glide_ratio, lift_over_drag),
+            )
+            self.assertLess(
+                glide_ratio, lift_over_drag * 1.30,
+                "{}: glides at {:.1f}:1 on an L/D of {:.1f}"
+                .format(craft.key, glide_ratio, lift_over_drag),
+            )
+
+    def test_no_route_means_no_descent_to_manage(self):
+        sim = physics.Simulator.new_flight("a320neo", "clear")
+        sim.route.clear()
+        sim.sync_route()
+        self.assertIsNone(navigation.descent_guidance(sim))
+
+    def test_the_top_of_descent_is_where_the_profile_says_it_is(self):
+        sim, _field = self._cruising_at("a320neo", 160.0)
+        guidance = navigation.descent_guidance(sim)
+        _fuel, _time, distance_nm = sim.descent_segment(
+            sim.state.altitude_ft, guidance.field_elevation_ft, sim.state.mass_kg)
+        self.assertAlmostEqual(guidance.top_of_descent_nm, distance_nm, places=6)
+        # A hundred and sixty miles out, an A320neo is nowhere near it.
+        self.assertFalse(guidance.active)
+        self.assertAlmostEqual(guidance.target_altitude_ft, 37000.0, places=6)
+        self.assertAlmostEqual(guidance.deviation_ft, 0.0, places=6)
+
+    def test_distance_to_go_follows_the_route_and_not_the_crow(self):
+        """A dogleg is longer than the straight line to its last waypoint, and
+        descending on the straight line arrives at circuit height with a leg
+        still to fly."""
+        sim, field = self._cruising_at("a320neo", 120.0)
+        far = sim.airfields.by_ident("VSPR")
+        sim.route.waypoints.insert(0, navigation.Waypoint.from_airfield(far))
+        sim.sync_route()
+        direct = field.distance_nm(sim.state.x_nm, sim.state.y_nm)
+        along = navigation.route_distance_to_go_nm(sim)
+        self.assertGreater(along, direct)
+
+    def test_past_the_top_of_descent_the_path_slopes_down(self):
+        sim, _field = self._cruising_at("a320neo", 60.0)
+        guidance = navigation.descent_guidance(sim)
+        self.assertTrue(guidance.active)
+        self.assertLess(guidance.target_altitude_ft, 37000.0)
+        self.assertGreater(guidance.gradient_ft_per_nm, 0.0)
+        # High, because it should have started down forty miles ago.
+        self.assertGreater(guidance.deviation_ft, 0.0)
+
+
+class TestManagedDescent(unittest.TestCase):
+    """VNAV flown, rather than merely computed."""
+
+    def test_it_holds_the_level_then_flies_the_profile_down(self):
+        sim = physics.Simulator.new_flight("a320neo", "clear")
+        field = sim.airfields.by_ident("CROW")
+        state = sim.state
+        heading = 215.0
+        state.altitude_ft = 37000.0
+        state.x_nm = field.x_nm - math.sin(math.radians(heading)) * 150.0
+        state.y_nm = field.y_nm - math.cos(math.radians(heading)) * 150.0
+        state.heading_deg = heading
+        state.tas_ms = sim.profile_tas_ms(37000.0)
+        state.throttle_pct = sim.throttle_for_level_flight()
+        sim.settle_engines()
+        sim.route.direct_to(navigation.Waypoint.from_airfield(field))
+        sim.sync_route()
+        state.ap_engaged = True
+        state.ap_altitude_ft = 37000.0
+        state.ap_nav = True
+        state.ap_descent = True
+
+        top_nm = sim.descent_guidance(force=True).top_of_descent_nm
+        levels, descending = [], []
+        for _ in range(200):
+            sim.step_tick()
+            guidance = sim.descent_guidance()
+            if guidance is None:
+                break
+            if guidance.distance_to_go_nm > top_nm + 5.0:
+                levels.append(state.altitude_ft)
+            elif guidance.active:
+                descending.append(guidance.deviation_ft)
+            if guidance.distance_to_go_nm < 4.0:
+                break
+
+        # It stayed at its level until the top of descent...
+        self.assertTrue(levels)
+        self.assertLess(max(levels) - min(levels), 200.0)
+        # ...then flew the path down, tracking it closely the whole way.
+        self.assertTrue(descending)
+        self.assertLess(max(abs(d) for d in descending), 600.0)
+        # ...and arrived near the field rather than above or under it.
+        self.assertLess(state.altitude_ft, 6000.0)
+        self.assertGreater(state.altitude_ft, field.elevation_ft)
+
+    def test_the_descent_is_flown_at_idle(self):
+        """The plan costed this descent at idle, so flying it on the throttle
+        would burn fuel the flight plan promised would not be burned."""
+        sim = physics.Simulator.new_flight("a320neo", "clear")
+        field = sim.airfields.by_ident("CROW")
+        state = sim.state
+        state.altitude_ft = 20000.0
+        state.x_nm, state.y_nm = field.x_nm - 12.0, field.y_nm - 12.0
+        state.tas_ms = sim.profile_tas_ms(20000.0)
+        sim.route.direct_to(navigation.Waypoint.from_airfield(field))
+        sim.sync_route()
+        state.ap_engaged = True
+        state.ap_descent = True
+        state.ap_speed_kt = 280.0  # A/THR set, and it must not win
+
+        guidance = sim.descent_guidance(force=True)
+        self.assertTrue(guidance.active)
+        autopilot.update(sim, 0.1)
+        self.assertEqual(state.throttle_pct, 0.0)
+
+    def test_losing_the_route_gives_the_mode_up_rather_than_diving(self):
+        sim = physics.Simulator.new_flight("a320neo", "clear")
+        state = sim.state
+        state.ap_engaged = True
+        state.ap_descent = True
+        sim.route.clear()
+        sim.sync_route()
+        autopilot.update(sim, 0.1)
+        self.assertFalse(state.ap_descent)
+        self.assertIsNotNone(state.ap_altitude_ft)
+
+    def test_a_pitch_command_takes_the_descent_back(self):
+        sim = physics.Simulator.new_flight("a320neo", "clear")
+        state = sim.state
+        state.ap_engaged = True
+        state.ap_descent = True
+        autopilot.disengage_for(state, "pitch_delta")
+        self.assertFalse(state.ap_descent)
+
+    def test_the_annunciator_names_the_three_states(self):
+        sim, field = TestDescentGuidance()._cruising_at("a320neo", 160.0)
+        state = sim.state
+        state.ap_engaged = True
+        state.ap_altitude_ft = 37000.0
+        state.ap_descent = True
+        columns = autopilot._fma_columns(sim)
+        self.assertEqual(columns["vertical"][0][0], "ALT CRZ")
+        self.assertEqual(columns["vertical"][1][0], "DES")
+
+        sim2, _ = TestDescentGuidance()._cruising_at("a320neo", 60.0)
+        sim2.state.ap_engaged = True
+        sim2.state.ap_descent = True
+        columns = autopilot._fma_columns(sim2)
+        self.assertEqual(columns["vertical"][0][0], "DES")
+        self.assertEqual(columns["thrust"][0][0], "THR IDLE")
+
+    def test_the_descent_may_exceed_the_altitude_channels_vs_limit(self):
+        """A descent from cruise runs at some 2,400 feet a minute. Clamped to
+        the 2,000 the altitude channel is held to, the aeroplane would sit
+        permanently behind its own path while the annunciator said otherwise.
+        """
+        sim, _field = TestDescentGuidance()._cruising_at("a320neo", 60.0)
+        state = sim.state
+        state.ap_engaged = True
+        state.ap_descent = True
+        state.ap_nav = True
+        rates = []
+        for _ in range(30):
+            sim.step_tick()
+            rates.append(
+                state.tas_ms * math.sin(math.radians(state.gamma_deg)) * atm.FPM_PER_MS)
+        self.assertLess(min(rates), -autopilot.MAX_AP_VS_FPM)
+

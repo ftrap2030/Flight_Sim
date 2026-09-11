@@ -446,6 +446,7 @@
       <button class="fcu-btn" id="fcu-ap">AP1</button>
       <button class="fcu-btn" id="fcu-athr">A/THR</button>
       <button class="fcu-btn" id="fcu-nav">NAV</button>
+      <button class="fcu-btn" id="fcu-des">DES</button>
       <button class="fcu-btn" id="fcu-appr">APPR</button>
     </div>
     <div class="fcu-win" data-ch="dest" style="cursor:default">
@@ -1841,10 +1842,21 @@ function idlePathDegAt(a, s, altFt, tasMs, massKg) {
   }
 }
 
-function descentSegment(a, s, fromFt, toFt, massKg, mach, stepFt = 1000) {
+/* The idle descent as a *path*, not merely as a total (physics.descent_profile).
+
+   Points run from the bottom up: [distanceToGoNm, altFt, fuelKg, timeS], where
+   distanceToGo is how far short of `toFt` the aeroplane still is when it passes
+   that altitude. The last point is the top of descent and carries the totals.
+
+   It exists because the planner and VNAV want the same descent read two ways --
+   what it costs, and where to be at each mile. Integrating it twice would be
+   two aeroplanes, and the arc drawn on the ND would stop being the descent the
+   fuel figure was based on. */
+function descentProfile(a, s, fromFt, toFt, massKg, mach, stepFt = 1000) {
   mach = mach === undefined ? a.cruiseMach : mach;
-  if (toFt >= fromFt) return [0, 0, 0];
+  if (toFt >= fromFt) return [];
   let fuel = 0, timeS = 0, distanceM = 0, mass = massKg, alt = fromFt;
+  const steps = [[0, fromFt, 0, 0]];
   while (alt > toFt) {
     const bottom = Math.max(alt - stepFt, toFt), middle = (alt + bottom) / 2;
     const v = profileTasMs(a, middle, mach);
@@ -1862,8 +1874,27 @@ function descentSegment(a, s, fromFt, toFt, massKg, mach, stepFt = 1000) {
     const burn = a.tsfc * aero.thrust * stepS;
     fuel += burn; mass -= burn; timeS += stepS; distanceM += v * stepS;
     alt = bottom;
+    steps.push([distanceM * NM_PER_M, alt, fuel, timeS]);
   }
-  return [fuel, timeS, distanceM * NM_PER_M];
+  /* Turned round into distance *to go*, so a caller with a range to run can
+     read the altitude off without knowing how long the descent came out. */
+  const last = steps[steps.length - 1];
+  const totalNm = last[0], totalFuel = last[2], totalTime = last[3];
+  const out = [];
+  for (let i = steps.length - 1; i >= 0; i--) {
+    out.push([totalNm - steps[i][0], steps[i][1],
+              totalFuel - steps[i][2], totalTime - steps[i][3]]);
+  }
+  return out;
+}
+
+/* The totals of the profile above, which is the one integration this and VNAV
+   both read. (physics.descent_segment) */
+function descentSegment(a, s, fromFt, toFt, massKg, mach, stepFt = 1000) {
+  const points = descentProfile(a, s, fromFt, toFt, massKg, mach, stepFt);
+  if (!points.length) return [0, 0, 0];
+  const top = points[points.length - 1];
+  return [top[2], top[3], top[0]];
 }
 
 /* A reserve is spent holding at green dot, which `characteristicSpeeds` owns --
@@ -1994,6 +2025,97 @@ function planRoute(a, s, cruiseFtWanted) {
     get enough() { return this.fuelOnBoardKg >= this.requiredKg; },
     get spareKg() { return this.fuelOnBoardKg - this.requiredKg; }
   };
+}
+
+/* ---------- the managed descent (navigation.descent_guidance) ----------
+   Model data, like the speed tape and the FMA: the ND draws the top of descent
+   and must not decide where it goes. Computed against the aeroplane's *current*
+   altitude and mass rather than the filed plan's, because the plan is what was
+   intended and this is what is happening. */
+const DESCENT_PATH_TO_VS = 1.4;
+const DESCENT_ON_PATH_FT = 250;
+/* Re-solving a descent costs about twice what a whole readout does and the
+   answer changes on a scale of miles, so it is cached against the clock and
+   shared -- the autopilot flying it, the annunciator naming it and the ND
+   drawing it read one answer rather than solving three. The browser's frame
+   loop would otherwise pay for it sixty times a second.
+   (physics.Simulator.DESCENT_GUIDANCE_INTERVAL_S) */
+const DESCENT_GUIDANCE_INTERVAL_S = 2.0;
+
+/* How far the destination is *along the route*, not across country: a plan that
+   doglegs is longer than the straight line to its last waypoint, and descending
+   on the straight line arrives at circuit height with a leg still to fly. */
+function routeDistanceToGoNm(s) {
+  const route = s.route;
+  if (!route || !route.waypoints.length) return null;
+  const remaining = route.waypoints.slice(route.active);
+  if (!remaining.length) return null;
+  let total = remaining[0].distanceNm(s.x, s.y);
+  for (let i = 0; i < remaining.length - 1; i++) {
+    total += remaining[i + 1].distanceNm(remaining[i].x, remaining[i].y);
+  }
+  return total;
+}
+
+/* Interpolate the profile, and take the local gradient with it. Past the top of
+   descent the path is still level, so the gradient is zero and the target is the
+   cruise level -- which is what leaves the aeroplane holding rather than easing
+   down early. */
+function altitudeOnPath(points, distanceToGoNm, fieldFt) {
+  if (distanceToGoNm <= points[0][0]) return [fieldFt, 0];
+  for (let i = 0; i < points.length - 1; i++) {
+    const near = points[i], far = points[i + 1];
+    if (distanceToGoNm <= far[0]) {
+      const span = far[0] - near[0];
+      if (span <= 1e-9) return [far[1], 0];
+      const gradient = (far[1] - near[1]) / span;
+      return [near[1] + gradient * (distanceToGoNm - near[0]), gradient];
+    }
+  }
+  return [points[points.length - 1][1], 0];
+}
+
+function computeDescentGuidance(a, s) {
+  const route = s.route;
+  const destination = route ? route.destination : null;
+  if (!destination) return null;
+  const distanceToGo = routeDistanceToGoNm(s);
+  if (distanceToGo === null) return null;
+  const fieldFt = destination.elevationFt || 0;
+  const points = descentProfile(a, s, s.alt, fieldFt, s.mass);
+  if (!points.length) {
+    /* At or below the field already: there is no descent left to fly, and
+       saying so beats inventing a path that goes upwards. */
+    const below = s.alt - fieldFt;
+    return { destination, distanceToGoNm: distanceToGo, topOfDescentNm: 0,
+             targetAltitudeFt: fieldFt, deviationFt: below,
+             gradientFtPerNm: 0, fieldElevationFt: fieldFt,
+             active: distanceToGo <= 0,
+             /* Derived, not asserted: this branch had `true` written into it,
+                and an aeroplane three thousand feet under a high field is not
+                on its path by any reading. The parity guard caught it on the
+                first run, which is the whole argument for the guard. */
+             onPath: Math.abs(below) <= DESCENT_ON_PATH_FT };
+  }
+  const [targetFt, gradient] = altitudeOnPath(points, distanceToGo, fieldFt);
+  const topNm = points[points.length - 1][0];
+  const deviation = s.alt - targetFt;
+  return {
+    destination, distanceToGoNm: distanceToGo, topOfDescentNm: topNm,
+    targetAltitudeFt: targetFt, deviationFt: deviation,
+    gradientFtPerNm: gradient, fieldElevationFt: fieldFt,
+    active: distanceToGo <= topNm,
+    onPath: Math.abs(deviation) <= DESCENT_ON_PATH_FT
+  };
+}
+
+let descentCache = { at: null, value: null };
+function descentGuidance(a, s, force) {
+  if (force || descentCache.at === null
+      || Math.abs(s.t - descentCache.at) >= DESCENT_GUIDANCE_INTERVAL_S) {
+    descentCache = { at: s.t, value: computeDescentGuidance(a, s) };
+  }
+  return descentCache.value;
 }
 
 /* ---------- session state ---------- */
@@ -2201,7 +2323,7 @@ function characteristicSpeeds(a, s) {
 /* S.ap maps to the ap_* fields on the Python's FlightState:
    engaged/altFt/vsFpm/hdgDeg/spdKt/appr/nav. */
 const AP_ALT = "ALT", AP_VS = "V/S", AP_HDG = "HDG", AP_SPD = "SPD",
-      AP_APPR = "APPR", AP_NAV = "NAV";
+      AP_APPR = "APPR", AP_NAV = "NAV", AP_DES = "DES";
 
 const MAX_AP_VS_FPM = 2000, MAX_AP_BANK_DEG = 25, MAX_AP_PITCH_TRIM_DEG = 3;
 const ALTITUDE_TO_VS = 2.4, VS_TO_PITCH = 1 / 600, HEADING_TO_BANK = 1.5;
@@ -2212,7 +2334,7 @@ const FMA_BOX_S = 10, ALT_HOLD_FT = 120, ALT_CAPTURE_FT = 900;
 
 function freshAutopilot() {
   return { engaged: false, altFt: null, vsFpm: null, hdgDeg: null,
-           spdKt: null, appr: false, nav: false };
+           spdKt: null, appr: false, nav: false, des: false };
 }
 
 function apChannels(s) {
@@ -2220,7 +2342,11 @@ function apChannels(s) {
   const out = [];
   if (s.ap.appr) out.push(AP_APPR);
   else {
-    if (s.ap.altFt !== null) out.push(AP_ALT);
+    /* Managed vertical outranks a selected level for the same reason managed
+       lateral outranks a selected heading: asking for the descent is asking
+       the aeroplane to fly its own profile. */
+    if (s.ap.des) out.push(AP_DES);
+    else if (s.ap.altFt !== null) out.push(AP_ALT);
     else if (s.ap.vsFpm !== null) out.push(AP_VS);
     /* Managed lateral wins over selected, which is what pushing the heading
        knob in means: hand the aeroplane back to the route. */
@@ -2233,7 +2359,8 @@ function apChannels(s) {
 
 /* The pilot taking a control wins, immediately and without argument. */
 function apDisengageFor(s, kind) {
-  if (kind === "pitch") { s.ap.altFt = null; s.ap.vsFpm = null; s.ap.appr = false; }
+  if (kind === "pitch") { s.ap.altFt = null; s.ap.vsFpm = null; s.ap.appr = false;
+                          s.ap.des = false; }
   else if (kind === "roll") { s.ap.hdgDeg = null; s.ap.nav = false; s.ap.appr = false; }
   else if (kind === "throttle") s.ap.spdKt = null;
 }
@@ -2316,6 +2443,52 @@ function apFlyLeg(a, s, readout) {
   s.cmdHdg = wrap360(leg.bearingDeg - readout.driftDeg);
 }
 
+/* How steeply a managed descent may be flown. A descent from cruise runs at
+   some 2,400 feet a minute. (autopilot.MAX_DESCENT_VS_FPM) */
+const MAX_DESCENT_VS_FPM = 3200;
+
+/* Fly the idle descent the flight plan was priced on (autopilot._fly_descent).
+
+   Two halves, and the aeroplane sits in the first for most of the cruise.
+   Before the top of descent this is a level hold -- which is what ALT CRZ *is*
+   -- with the mode armed and waiting on the distance to run. After it, the
+   thrust comes back to idle and the path is flown on pitch, which is what a
+   real managed descent does and what makes the fuel match: `planRoute` costed
+   this descent at idle, so flying it on the throttle would burn fuel the plan
+   said would not be burned.
+
+   Returns whether the aeroplane is actually descending at idle, because that
+   decides whether the speed channel may have the throttle back. */
+function apFlyDescent(a, s, readout) {
+  const g = descentGuidance(a, s);
+  if (!g) {
+    /* The route went away underneath the mode. Hold the present level rather
+       than pitch at nothing, and give the mode up rather than pretend. */
+    s.ap.des = false;
+    if (s.ap.altFt === null && s.ap.vsFpm === null) s.ap.altFt = s.alt;
+    return false;
+  }
+  if (!g.active) {
+    if (s.ap.altFt !== null) apHoldAltitude(a, s);
+    else apHoldVerticalSpeed(a, s, 0);
+    return false;
+  }
+  /* On the path the sink rate is the profile's own gradient carried along at
+     the speed the aeroplane is making good -- so a headwind makes the descent
+     shallower in feet per minute without moving where it has to start. */
+  const gsKt = Math.max(readout ? readout.gsKt : 1, 1);
+  const nominalFpm = -g.gradientFtPerNm * gsKt / 60;
+  const targetFpm = clamp(nominalFpm - g.deviationFt * DESCENT_PATH_TO_VS,
+                          -MAX_DESCENT_VS_FPM, MAX_DESCENT_VS_FPM);
+  apHoldVerticalSpeed(a, s, targetFpm);
+  /* Below the path the aeroplane needs to stretch the glide and idle will not
+     do it, so the throttle is left to the speed channel -- the one case where
+     a managed descent is not an idle one. */
+  const atOrAbove = g.deviationFt >= -DESCENT_ON_PATH_FT;
+  if (atOrAbove) s.throttle = 0;
+  return atOrAbove;
+}
+
 function apFlyApproach(a, s, readout) {
   const app = s.approach;
   /* Handover is decided on height above the *runway*, not above whatever is
@@ -2352,17 +2525,19 @@ function apFlyApproach(a, s, readout) {
 
 function apUpdate(a, s, readout, dt) {
   if (!s.ap.engaged || s.onGround) return;
+  let idleDescent = false;
   if (s.ap.appr) {
     apFlyApproach(a, s, readout);
   } else {
-    if (s.ap.altFt !== null) apHoldAltitude(a, s);
+    if (s.ap.des) idleDescent = apFlyDescent(a, s, readout);
+    else if (s.ap.altFt !== null) apHoldAltitude(a, s);
     else if (s.ap.vsFpm !== null) apHoldVerticalSpeed(a, s);
     /* Managed lateral first, so a selected heading left behind does not
        quietly fight the route. */
     if (s.ap.nav) apFlyLeg(a, s, readout);
     else if (s.ap.hdgDeg !== null) s.cmdHdg = s.ap.hdgDeg;
   }
-  if (s.ap.spdKt !== null) apHoldSpeed(a, s);
+  if (s.ap.spdKt !== null && !idleDescent) apHoldSpeed(a, s);
 
   /* The heading channel flies a bank, and it is gentler than the pilot: a
      passenger-carrying autopilot does not use sixty degrees of it. */
@@ -2388,8 +2563,17 @@ function fmaColumns(a, s) {
   const on = s.ap.engaged;
   const captured = !!(s.ap.appr && s.approach && s.approach.onApproach);
 
+  const descent = s.ap.des ? descentGuidance(a, s) : null;
+  const descending = !!(descent && descent.active);
+
   let thrust;
   if (s.alphaFloorLatched) thrust = ["A.FLOOR", FMA_AMBER];
+  else if (descending && descent.deviationFt >= -DESCENT_ON_PATH_FT) {
+    /* In a managed descent the thrust is not holding a speed, it is at idle
+       and the path is flown on pitch -- which is what the real annunciator
+       says here, and what the plan costed. */
+    thrust = ["THR IDLE", FMA_GREEN];
+  }
   else if (s.ap.spdKt !== null) thrust = ["SPEED", FMA_GREEN];
   else if (s.onGround && s.throttle > 80) thrust = ["MAN TOGA", FMA_WHITE];
   else thrust = ["MAN THR", FMA_WHITE];
@@ -2402,6 +2586,16 @@ function fmaColumns(a, s) {
   let vertical = null, verticalArmed = null;
   if (captured) vertical = ["G/S", FMA_GREEN];
   else if (s.ap.appr) verticalArmed = ["G/S", FMA_BLUE];
+  if (!vertical && on && s.ap.des) {
+    if (descending) vertical = ["DES", FMA_GREEN];
+    else {
+      /* Armed and waiting on the distance to run. ALT CRZ rather than plain
+         ALT, because the aeroplane is holding a cruise level it is going to
+         leave on its own -- a different thing to be told than a level-off. */
+      vertical = ["ALT CRZ", FMA_GREEN];
+      if (!verticalArmed) verticalArmed = ["DES", FMA_BLUE];
+    }
+  }
   if (!vertical && on) {
     if (s.ap.altFt !== null) {
       const errorFt = s.ap.altFt - s.alt;
@@ -5307,6 +5501,45 @@ function drawNd(c, x, y, d, a, s, readout) {
       line(c, px, py, qx, qy, C_MAGENTA, d * 0.006);
     }
     c.restore();
+
+    /* The top of descent, where the real one puts it: a white arrowhead on the
+       flight plan track at the point the aeroplane has to start down. It is
+       drawn from `descentGuidance`, which is the same profile `planRoute`
+       priced the descent with and the same one VNAV flies -- so the mark on
+       the glass, the figure in the fuel plan and the path the autopilot takes
+       are one answer rather than three. */
+    const g = descentGuidance(a, s);
+    if (g && !g.active && g.topOfDescentNm > 0) {
+      /* Walk back along the remaining legs from the destination to find where
+         the descent starts, because on a dogleg it is not on the active leg. */
+      const legs = s.route.waypoints.slice(s.route.active);
+      let remaining = g.topOfDescentNm;
+      let tx = null, ty = null;
+      for (let i = legs.length - 1; i >= 0 && tx === null; i--) {
+        const from = i === 0 ? { x: s.x, y: s.y } : legs[i - 1];
+        const to = legs[i];
+        const legNm = to.distanceNm(from.x, from.y);
+        if (remaining <= legNm) {
+          const f = legNm > 1e-9 ? remaining / legNm : 0;
+          tx = to.x + (from.x - to.x) * f;
+          ty = to.y + (from.y - to.y) * f;
+        } else remaining -= legNm;
+      }
+      if (tx !== null) {
+        const [px, py] = project(tx, ty);
+        c.save();
+        c.translate(px, py);
+        c.rotate(rad(wrap180(g.destination.bearingFrom(tx, ty) - track)));
+        c.strokeStyle = C_WHITE; c.lineWidth = d * 0.005;
+        c.beginPath();
+        c.moveTo(-d * 0.016, d * 0.013);
+        c.lineTo(0, -d * 0.013);
+        c.lineTo(d * 0.016, d * 0.013);
+        c.stroke();
+        c.restore();
+        txt(c, "T/D", px + d * 0.026, py - d * 0.014, d * 0.028, C_WHITE, "left");
+      }
+    }
   }
   c.restore();
 
@@ -5652,6 +5885,8 @@ function updateFcu() {
   set("fcu-ap", S.ap.engaged);
   set("fcu-athr", S.ap.spdKt !== null);
   set("fcu-nav", S.ap.nav, !!activeWaypoint(S));
+  const des = S.ap.des ? descentGuidance(craft, S) : null;
+  set("fcu-des", !!(des && des.active), S.ap.des);
   set("fcu-appr", captured, S.ap.appr);
   const dest = destinationOf(S);
   el("fcu-dest").textContent = dest ? dest.label : "---";
@@ -5695,6 +5930,22 @@ el("fcu-nav").addEventListener("click", () => {
   if (S.ap.nav) { S.ap.nav = false; S.ap.hdgDeg = wrap360(S.hdg); }
   else if (activeWaypoint(S)) { S.ap.nav = true; S.ap.hdgDeg = null; S.ap.engaged = true;
                      if (S.ap.altFt === null && S.ap.vsFpm === null) S.ap.altFt = S.alt; }
+  updateFcu();
+});
+el("fcu-des").addEventListener("click", () => {
+  if (S.ap.des) {
+    S.ap.des = false;
+    if (S.ap.altFt === null && S.ap.vsFpm === null) S.ap.altFt = S.alt;
+  } else if (destinationOf(S)) {
+    /* A managed descent needs a level to leave and the aeroplane is at one, so
+       arming it holds what it has until the top of descent rather than
+       demanding a number the pilot has not given. */
+    S.ap.des = true;
+    S.ap.engaged = true;
+    if (S.ap.altFt === null && S.ap.vsFpm === null) S.ap.altFt = S.alt;
+    S.ap.vsFpm = null;
+    S.ap.appr = false;
+  }
   updateFcu();
 });
 el("fcu-appr").addEventListener("click", () => {
