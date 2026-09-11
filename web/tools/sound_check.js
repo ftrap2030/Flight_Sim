@@ -30,14 +30,27 @@ const { chromium } = require(PW);
 const TYPES = ['a320', 'a320neo', 'a350', 'a380', 'belugaxl'];
 const N1S = [0.22, 0.60, 1.00];
 
+/* Seconds rendered per case. The first is discarded, and the rest is what the
+   averaged spectrum is taken over -- four seconds gives twenty half-overlapping
+   16k windows, which is the whole reason these figures repeat from one machine
+   to the next. An OfflineAudioContext renders far faster than real time, so the
+   extra seconds cost about a second across all fifteen cases. */
+const RENDER_S = 5;
+
 /* At full power a turbofan must put most of its energy above this. A propeller
    puts nearly all of its below. */
 const HIGH_BAND_HZ = 300;
 const MIN_HIGH_FRACTION = 0.45;
 /* How far a band under 300 Hz may stand above its own two neighbours. Broadband
-   noise and filter skirts are smooth and sit near 1; a propeller's harmonic
-   series is not. Measured against the synthesis this replaced, which ran to
-   two hundred times on the same statistic. */
+   noise and filter skirts are smooth; a propeller's harmonic series is not.
+
+   Once the spectrum is averaged rather than sampled, the turbofan reads 1.8-1.9
+   on every one of the fifteen cases and the synthesis this replaced reads 82 to
+   861. The threshold sits between them with three times of headroom below and
+   forty-three above, which is what a threshold should look like. It was set at
+   6.0 when the figure still scattered from 2 to 6.7 run to run -- that is to
+   say, tuned to the noise in the measurement, and it duly failed CI on a build
+   that was fine. Left at 6.0 because it is now nowhere near either side. */
 const MAX_LOW_PEAKINESS = 6.0;
 /* And the fan tone must stand this far above the median band, or there is a
    roar with no aeroplane in it. */
@@ -60,15 +73,38 @@ const TONE_TOLERANCE = 0.13;
   await p.goto('file://' + page);
   await p.waitForTimeout(6000);
 
-  const rows = await p.evaluate(async ([types, n1s]) => {
+  const rows = await p.evaluate(async ([types, n1s, RENDER_S]) => {
     const out = [];
     for (const key of types) {
       const a = FLEET_BY_KEY[key];
       for (const n1 of n1s) {
-        const ctx = new OfflineAudioContext(1, 44100 * 2, 44100);
+        /* Seeded noise, and the reason it has to be seeded.
+
+           This was `Math.random()`, and one FFT of the result -- so the guard
+           was measuring a single random realisation of a noise spectrum. At
+           100 Hz a sixth-octave band is 11.6 Hz wide against a 2.7 Hz bin:
+           four bins, which is a chi-squared with eight degrees of freedom and
+           some fifty percent of scatter. Low-end peakiness is a *ratio* of two
+           such bands, so it read 4.4x on one machine and 6.7x on another
+           against a 6.0 threshold, and CI failed a build that was fine. The
+           two machines were not disagreeing about the sound; it was one random
+           variable sampled twice.
+
+           Seeding makes a run reproducible everywhere. Averaging the spectrum
+           below over overlapping windows is what makes the number an estimate
+           rather than a sample -- seeding alone would only freeze an arbitrary
+           realisation, and a threshold tuned to it would still mean nothing. */
+        let seed = 0x9e3779b9;
+        const rand = () => {
+          seed = (seed + 0x6d2b79f5) | 0;
+          let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+        const ctx = new OfflineAudioContext(1, 44100 * RENDER_S, 44100);
         const buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
         const d = buf.getChannelData(0);
-        for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+        for (let i = 0; i < d.length; i++) d[i] = rand() * 2 - 1;
         const noiseSource = () => { const s = ctx.createBufferSource();
           s.buffer = buf; s.loop = true; s.start(); return s; };
 
@@ -133,39 +169,53 @@ const TONE_TOLERANCE = 0.13;
            and reads as silence while broadband noise reads at every one. It
            said the engine had no high-frequency content when what it had was
            no high-frequency *probe*. Bands, summed over every bin they cover,
-           see a tone wherever it lands. */
-        const N = 16384, sr = 44100;
-        const re = new Float64Array(N), im = new Float64Array(N);
-        for (let i = 0; i < N; i++) {
-          re[i] = pcm[i] * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / N));
-        }
-        /* Iterative radix-2 Cooley-Tukey. */
-        for (let i = 1, j = 0; i < N; i++) {
-          let bit = N >> 1;
-          for (; j & bit; bit >>= 1) j ^= bit;
-          j ^= bit;
-          if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t;
-                       t = im[i]; im[i] = im[j]; im[j] = t; }
-        }
-        for (let len = 2; len <= N; len <<= 1) {
-          const ang = -2 * Math.PI / len;
-          const wr = Math.cos(ang), wi = Math.sin(ang);
-          for (let i = 0; i < N; i += len) {
-            let cr = 1, ci = 0;
-            for (let k = 0; k < len / 2; k++) {
-              const ur = re[i + k], ui = im[i + k];
-              const vr = re[i + k + len / 2] * cr - im[i + k + len / 2] * ci;
-              const vi = re[i + k + len / 2] * ci + im[i + k + len / 2] * cr;
-              re[i + k] = ur + vr; im[i + k] = ui + vi;
-              re[i + k + len / 2] = ur - vr; im[i + k + len / 2] = ui - vi;
-              const ncr = cr * wr - ci * wi;
-              ci = cr * wi + ci * wr; cr = ncr;
-            }
-          }
-        }
+           see a tone wherever it lands.
+
+           Averaged over half-overlapping windows -- Welch's method -- rather
+           than taken from one. A single periodogram bin is an exponential
+           random variable whatever the sample rate, so a band a few bins wide
+           scatters by tens of percent; averaging N windows divides that
+           variance by N. That is what turns these figures into something a
+           fixed threshold can be compared against, and it is what the
+           seeded noise above is only half of. */
+        const N = 16384, sr = 44100, HOP = N / 2;
         const binHz = sr / N;
         const power = new Float64Array(N / 2);
-        for (let k = 0; k < N / 2; k++) power[k] = re[k] * re[k] + im[k] * im[k];
+        const re = new Float64Array(N), im = new Float64Array(N);
+        let windows = 0;
+        for (let start = 0; start + N <= pcm.length; start += HOP) {
+          im.fill(0);
+          for (let i = 0; i < N; i++) {
+            re[i] = pcm[start + i] * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / N));
+          }
+          /* Iterative radix-2 Cooley-Tukey. */
+          for (let i = 1, j = 0; i < N; i++) {
+            let bit = N >> 1;
+            for (; j & bit; bit >>= 1) j ^= bit;
+            j ^= bit;
+            if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t;
+                         t = im[i]; im[i] = im[j]; im[j] = t; }
+          }
+          for (let len = 2; len <= N; len <<= 1) {
+            const ang = -2 * Math.PI / len;
+            const wr = Math.cos(ang), wi = Math.sin(ang);
+            for (let i = 0; i < N; i += len) {
+              let cr = 1, ci = 0;
+              for (let k = 0; k < len / 2; k++) {
+                const ur = re[i + k], ui = im[i + k];
+                const vr = re[i + k + len / 2] * cr - im[i + k + len / 2] * ci;
+                const vi = re[i + k + len / 2] * ci + im[i + k + len / 2] * cr;
+                re[i + k] = ur + vr; im[i + k] = ui + vi;
+                re[i + k + len / 2] = ur - vr; im[i + k + len / 2] = ui - vi;
+                const ncr = cr * wr - ci * wi;
+                ci = cr * wi + ci * wr; cr = ncr;
+              }
+            }
+          }
+          for (let k = 0; k < N / 2; k++) power[k] += re[k] * re[k] + im[k] * im[k];
+          windows++;
+        }
+        for (let k = 0; k < N / 2; k++) power[k] /= windows || 1;
 
         /* Sixth-octave bands, each the sum of the bins inside it. */
         const bands = [];
@@ -215,11 +265,11 @@ const TONE_TOLERANCE = 0.13;
         const medianAll = allE[Math.floor(allE.length / 2)] || 1e-30;
         out.push({ key: key, n1: n1, fanHz: fanHz, peakHz: peak[0],
                    highFraction: high / all, lowPeakiness: lowPeakiness,
-                   toneProminence: peak[1] / medianAll });
+                   toneProminence: peak[1] / medianAll, windows: windows });
       }
     }
     return out;
-  }, [TYPES, N1S]);
+  }, [TYPES, N1S, RENDER_S]);
 
   await browser.close();
   if (errs.length) { console.error('page errors:', errs.slice(0, 3)); process.exit(1); }
@@ -248,6 +298,9 @@ const TONE_TOLERANCE = 0.13;
 
   /* And the point of doing it per type: two fans must not sound alike. The
      A320ceo's CFM56 and the A320neo's LEAP are the same airframe. */
+  console.log(`\n  each figure averaged over ${rows[0].windows} overlapping ` +
+              `${(16384 / 44100).toFixed(2)} s windows`);
+
   const tone = (k, n1) => rows.find(r => r.key === k && r.n1 === n1).fanHz;
   const ratio = tone('a320', 1) / tone('a320neo', 1);
   const spread = tone('a320', 1) / tone('a350', 1);
