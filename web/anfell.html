@@ -519,17 +519,17 @@ const wrap180 = d => ((d + 180) % 360 + 360) % 360 - 180;
 
 /* ---------- the fleet (aircraft.py, exported verbatim) ---------- */
 const FLEET = [
-{key:"a319neo",name:"A319neo",icao:"A19N",engines:"2 × CFM LEAP-1A24",wingArea:122.6,span:35.8,length:33.84,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,oew:42600,mtow:75500,payload:12000,startFuel:10000,fuelCap:19182.6,thrust:215200,tsfc:1.43e-5,idleFrac:.05,cd0:.019,e:.82,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.795,waveK:18,vmo:350,mmo:.82,ceiling:39800,cruiseMach:.78,rollRate:16,pitchRate:3.4,arms:[-5.75,5.75],rudderPower:.0022,dirStab:.0035,dihedral:.62,yawTau:1.9,maxRudder:30},
-{key:"a320",name:"A320-200",icao:"A320",engines:"2 × CFM56-5B4",wingArea:122.6,span:34.1,length:37.57,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,oew:42600,mtow:78000,payload:15000,startFuel:12000,fuelCap:19182.6,thrust:240200,tsfc:1.66e-5,idleFrac:.05,cd0:.0199,e:.82,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.79,waveK:18,vmo:350,mmo:.82,ceiling:39000,cruiseMach:.78,rollRate:15,pitchRate:3.2,arms:[-5.75,5.75],rudderPower:.0022,dirStab:.0035,dihedral:.6,yawTau:2,maxRudder:30},
-{key:"a320neo",name:"A320neo",icao:"A20N",engines:"2 × CFM LEAP-1A26",wingArea:122.6,span:35.8,length:37.57,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,oew:44300,mtow:79000,payload:15000,startFuel:12000,fuelCap:19182.6,thrust:241200,tsfc:1.43e-5,idleFrac:.05,cd0:.0195,e:.82,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.795,waveK:18,vmo:350,mmo:.82,ceiling:39800,cruiseMach:.78,rollRate:15,pitchRate:3.2,arms:[-5.75,5.75],rudderPower:.0022,dirStab:.0035,dihedral:.6,yawTau:2,maxRudder:30},
-{key:"a321",name:"A321neo",icao:"A21N",engines:"2 × CFM LEAP-1A32",wingArea:122.6,span:35.8,length:44.51,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,oew:50100,mtow:97000,payload:20000,startFuel:15000,fuelCap:19054.8,thrust:286200,tsfc:1.43e-5,idleFrac:.05,cd0:.02,e:.82,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.792,waveK:18,vmo:350,mmo:.82,ceiling:39800,cruiseMach:.78,rollRate:12,pitchRate:2.7,arms:[-5.75,5.75],rudderPower:.0022,dirStab:.0035,dihedral:.55,yawTau:2.2,maxRudder:30},
-{key:"a321xlr",name:"A321XLR",icao:"A21N",engines:"2 × CFM LEAP-1A35",wingArea:122.6,span:35.8,length:44.51,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,oew:52300,mtow:101000,payload:20000,startFuel:22000,fuelCap:29426.4,thrust:286200,tsfc:1.43e-5,idleFrac:.05,cd0:.0202,e:.82,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.792,waveK:18,vmo:350,mmo:.82,ceiling:39800,cruiseMach:.78,rollRate:11.5,pitchRate:2.6,arms:[-5.75,5.75],rudderPower:.0022,dirStab:.0035,dihedral:.55,yawTau:2.3,maxRudder:30},
-{key:"a330-800",name:"A330-800neo",icao:"A338",engines:"2 × Rolls-Royce Trent 7000",wingArea:361.6,span:64.0,length:58.82,height:17.39,fusW:5.64,fusH:5.64,sweep:30.0,decks:1,oew:132000,mtow:251000,payload:36000,startFuel:56000,fuelCap:111828.4,thrust:648000,tsfc:1.42e-5,idleFrac:.05,cd0:0.01834,e:0.82,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:0.835,waveK:18,vmo:330,mmo:0.86,ceiling:41450,cruiseMach:0.82,rollRate:10.6,pitchRate:2.45,arms:[-10,10],rudderPower:0.0024,dirStab:0.0035,dihedral:0.5,yawTau:2.65,maxRudder:30},
-{key:"a330neo",name:"A330-900neo",icao:"A339",engines:"2 × Rolls-Royce Trent 7000",wingArea:361.6,span:64,length:63.66,height:16.79,fusW:5.64,fusH:5.64,sweep:30,decks:1,oew:137000,mtow:251000,payload:40000,startFuel:58000,fuelCap:111828.4,thrust:648000,tsfc:1.42e-5,idleFrac:.05,cd0:.019,e:.82,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.835,waveK:18,vmo:330,mmo:.86,ceiling:41450,cruiseMach:.82,rollRate:10.2,pitchRate:2.35,arms:[-10,10],rudderPower:.0024,dirStab:.0035,dihedral:.5,yawTau:2.75,maxRudder:30},
-{key:"a350",name:"A350-900",icao:"A359",engines:"2 × Rolls-Royce Trent XWB-84",wingArea:442,span:64.75,length:66.8,height:17.08,fusW:5.96,fusH:6.09,sweep:31.9,decks:1,oew:142400,mtow:280000,payload:40000,startFuel:70000,fuelCap:110952,thrust:749000,tsfc:1.23e-5,idleFrac:.05,cd0:.0167,e:.85,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.86,waveK:18,vmo:340,mmo:.89,ceiling:43100,cruiseMach:.85,rollRate:10,pitchRate:2.3,arms:[-10.6,10.6],rudderPower:.0024,dirStab:.0035,dihedral:.5,yawTau:2.8,maxRudder:30},
-{key:"a350k",name:"A350-1000",icao:"A35K",engines:"2 × Rolls-Royce Trent XWB-97",wingArea:464.3,span:64.75,length:73.79,height:17.08,fusW:5.96,fusH:6.09,sweep:31.9,decks:1,oew:155000,mtow:319000,payload:45000,startFuel:85000,fuelCap:127668,thrust:863000,tsfc:1.23e-5,idleFrac:.05,cd0:.017,e:.85,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.858,waveK:18,vmo:340,mmo:.89,ceiling:43100,cruiseMach:.85,rollRate:9,pitchRate:2.1,arms:[-10.6,10.6],rudderPower:.0024,dirStab:.0035,dihedral:.48,yawTau:3,maxRudder:30},
-{key:"a380",name:"A380-800",icao:"A388",engines:"4 × Rolls-Royce Trent 970",wingArea:845,span:79.75,length:72.72,height:24.09,fusW:7.14,fusH:8.41,sweep:33.5,decks:2,oew:277000,mtow:575000,payload:60000,startFuel:160000,fuelCap:257280,thrust:1242800,tsfc:1.21e-5,idleFrac:.05,cd0:.0145,e:.84,cl0:.2,clMax:1.45,alphaCrit:15,machCrit:.858,waveK:18,vmo:340,mmo:.89,ceiling:43100,cruiseMach:.85,rollRate:7,pitchRate:1.8,arms:[-21.6,-12.4,12.4,21.6],rudderPower:.002,dirStab:.0038,dihedral:.4,yawTau:3.5,maxRudder:30},
-{key:"belugaxl",name:"BelugaXL",icao:"A337",engines:"2 × Rolls-Royce Trent 700",wingArea:361.6,span:60.3,length:63.1,height:18.9,fusW:5.64,fusH:8.8,sweep:30,decks:1,oew:130000,mtow:227000,payload:51000,startFuel:30000,fuelCap:67536,thrust:632000,tsfc:1.5919e-05,idleFrac:0.05,cd0:0.02797,e:0.78,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.72,waveK:18,vmo:300,mmo:0.78,ceiling:35000,cruiseMach:0.69,rollRate:8.5,pitchRate:2,arms:[-10,10],rudderPower:0.0024,dirStab:0.003,dihedral:0.45,yawTau:3.2,maxRudder:30}
+{key:"a319neo",name:"A319neo",icao:"A19N",engines:"2 × CFM LEAP-1A24",wingArea:122.6,span:35.8,length:33.84,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,fanDia:1.98,fanBlades:18,oew:42600,mtow:75500,payload:12000,startFuel:10000,fuelCap:19182.636000000002,thrust:215200,tsfc:1.43e-05,idleFrac:0.05,cd0:0.019,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.795,waveK:18,vmo:350,mmo:0.82,ceiling:39800,cruiseMach:0.78,rollRate:16,pitchRate:3.4,arms:[-5.75,5.75],rudderPower:0.0022,dirStab:0.0035,dihedral:0.62,yawTau:1.9,maxRudder:30},
+{key:"a320",name:"A320-200",icao:"A320",engines:"2 × CFM56-5B4",wingArea:122.6,span:34.1,length:37.57,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,fanDia:1.735,fanBlades:36,oew:42600,mtow:78000,payload:15000,startFuel:12000,fuelCap:19182.636000000002,thrust:240200,tsfc:1.66e-05,idleFrac:0.05,cd0:0.0199,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.79,waveK:18,vmo:350,mmo:0.82,ceiling:39000,cruiseMach:0.78,rollRate:15,pitchRate:3.2,arms:[-5.75,5.75],rudderPower:0.0022,dirStab:0.0035,dihedral:0.6,yawTau:2,maxRudder:30},
+{key:"a320neo",name:"A320neo",icao:"A20N",engines:"2 × CFM LEAP-1A26",wingArea:122.6,span:35.8,length:37.57,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,fanDia:1.98,fanBlades:18,oew:44300,mtow:79000,payload:15000,startFuel:12000,fuelCap:19182.636000000002,thrust:241200,tsfc:1.43e-05,idleFrac:0.05,cd0:0.0195,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.795,waveK:18,vmo:350,mmo:0.82,ceiling:39800,cruiseMach:0.78,rollRate:15,pitchRate:3.2,arms:[-5.75,5.75],rudderPower:0.0022,dirStab:0.0035,dihedral:0.6,yawTau:2,maxRudder:30},
+{key:"a321",name:"A321neo",icao:"A21N",engines:"2 × CFM LEAP-1A32",wingArea:122.6,span:35.8,length:44.51,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,fanDia:1.98,fanBlades:18,oew:50100,mtow:97000,payload:20000,startFuel:15000,fuelCap:19054.800000000003,thrust:286200,tsfc:1.43e-05,idleFrac:0.05,cd0:0.02,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.792,waveK:18,vmo:350,mmo:0.82,ceiling:39800,cruiseMach:0.78,rollRate:12,pitchRate:2.7,arms:[-5.75,5.75],rudderPower:0.0022,dirStab:0.0035,dihedral:0.55,yawTau:2.2,maxRudder:30},
+{key:"a321xlr",name:"A321XLR",icao:"A21N",engines:"2 × CFM LEAP-1A35",wingArea:122.6,span:35.8,length:44.51,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,fanDia:1.98,fanBlades:18,oew:52300,mtow:101000,payload:20000,startFuel:22000,fuelCap:29426.4,thrust:286200,tsfc:1.43e-05,idleFrac:0.05,cd0:0.0202,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.792,waveK:18,vmo:350,mmo:0.82,ceiling:39800,cruiseMach:0.78,rollRate:11.5,pitchRate:2.6,arms:[-5.75,5.75],rudderPower:0.0022,dirStab:0.0035,dihedral:0.55,yawTau:2.3,maxRudder:30},
+{key:"a330-800",name:"A330-800neo",icao:"A338",engines:"2 × Rolls-Royce Trent 7000",wingArea:361.6,span:64,length:58.82,height:17.39,fusW:5.64,fusH:5.64,sweep:30,decks:1,fanDia:2.85,fanBlades:26,oew:132000,mtow:251000,payload:36000,startFuel:56000,fuelCap:111828.36,thrust:648000,tsfc:1.42e-05,idleFrac:0.05,cd0:0.01834,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.835,waveK:18,vmo:330,mmo:0.86,ceiling:41450,cruiseMach:0.82,rollRate:10.6,pitchRate:2.45,arms:[-10,10],rudderPower:0.0024,dirStab:0.0035,dihedral:0.5,yawTau:2.65,maxRudder:30},
+{key:"a330neo",name:"A330-900neo",icao:"A339",engines:"2 × Rolls-Royce Trent 7000",wingArea:361.6,span:64,length:63.66,height:16.79,fusW:5.64,fusH:5.64,sweep:30,decks:1,fanDia:2.85,fanBlades:26,oew:137000,mtow:251000,payload:40000,startFuel:58000,fuelCap:111828.36,thrust:648000,tsfc:1.42e-05,idleFrac:0.05,cd0:0.019,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.835,waveK:18,vmo:330,mmo:0.86,ceiling:41450,cruiseMach:0.82,rollRate:10.2,pitchRate:2.35,arms:[-10,10],rudderPower:0.0024,dirStab:0.0035,dihedral:0.5,yawTau:2.75,maxRudder:30},
+{key:"a350",name:"A350-900",icao:"A359",engines:"2 × Rolls-Royce Trent XWB-84",wingArea:442,span:64.75,length:66.8,height:17.08,fusW:5.96,fusH:6.09,sweep:31.9,decks:1,fanDia:3,fanBlades:22,oew:142400,mtow:280000,payload:40000,startFuel:70000,fuelCap:110952,thrust:749000,tsfc:1.23e-05,idleFrac:0.05,cd0:0.0167,e:0.85,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.86,waveK:18,vmo:340,mmo:0.89,ceiling:43100,cruiseMach:0.85,rollRate:10,pitchRate:2.3,arms:[-10.6,10.6],rudderPower:0.0024,dirStab:0.0035,dihedral:0.5,yawTau:2.8,maxRudder:30},
+{key:"a350k",name:"A350-1000",icao:"A35K",engines:"2 × Rolls-Royce Trent XWB-97",wingArea:464.3,span:64.75,length:73.79,height:17.08,fusW:5.96,fusH:6.09,sweep:31.9,decks:1,fanDia:3,fanBlades:22,oew:155000,mtow:319000,payload:45000,startFuel:85000,fuelCap:127667.964,thrust:863000,tsfc:1.23e-05,idleFrac:0.05,cd0:0.017,e:0.85,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.858,waveK:18,vmo:340,mmo:0.89,ceiling:43100,cruiseMach:0.85,rollRate:9,pitchRate:2.1,arms:[-10.6,10.6],rudderPower:0.0024,dirStab:0.0035,dihedral:0.48,yawTau:3,maxRudder:30},
+{key:"a380",name:"A380-800",icao:"A388",engines:"4 × Rolls-Royce Trent 970",wingArea:845,span:79.75,length:72.72,height:24.09,fusW:7.14,fusH:8.41,sweep:33.5,decks:2,fanDia:2.95,fanBlades:24,oew:277000,mtow:575000,payload:60000,startFuel:160000,fuelCap:257280.00000000003,thrust:1242800,tsfc:1.21e-05,idleFrac:0.05,cd0:0.0145,e:0.84,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.858,waveK:18,vmo:340,mmo:0.89,ceiling:43100,cruiseMach:0.85,rollRate:7,pitchRate:1.8,arms:[-21.6,-12.4,12.4,21.6],rudderPower:0.002,dirStab:0.0038,dihedral:0.4,yawTau:3.5,maxRudder:30},
+{key:"belugaxl",name:"BelugaXL",icao:"A337",engines:"2 × Rolls-Royce Trent 700",wingArea:361.6,span:60.3,length:63.1,height:18.9,fusW:5.64,fusH:8.8,sweep:30,decks:1,fanDia:2.47,fanBlades:26,oew:130000,mtow:227000,payload:51000,startFuel:30000,fuelCap:67536,thrust:632000,tsfc:1.5919e-05,idleFrac:0.05,cd0:0.02797,e:0.78,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.72,waveK:18,vmo:300,mmo:0.78,ceiling:35000,cruiseMach:0.69,rollRate:8.5,pitchRate:2,arms:[-10,10],rudderPower:0.0024,dirStab:0.003,dihedral:0.45,yawTau:3.2,maxRudder:30}
 ];
 const FLEET_BY_KEY = Object.fromEntries(FLEET.map(a => [a.key, a]));
 
@@ -542,6 +542,18 @@ const FLAP_VFE  = [999, 230, 200, 185, 177];
    on the runway is not drag -- it is to put the weight onto the wheels so the
    brakes have something to work against. (aircraft.GROUND_SPOILER_LIFT_FACTOR) */
 const GROUND_SPOILER_LIFT_FACTOR = 0.35;
+
+/* Fan tip speed at 100% N1, m/s (aircraft.FAN_TIP_SPEED_MS). One constant for
+   the whole fleet: what limits a fan's speed is the tip going transonic, so
+   every big turbofan lands within a few percent of this whatever its diameter.
+   With the published `fanDia` it gives the shaft speed, and with `fanBlades`
+   the note the aeroplane actually makes. */
+const FAN_TIP_SPEED_MS = 425.0;
+/* The high-pressure spool: how many times it turns per fan revolution, and
+   roughly how many blades its first compressor stage carries. Together they
+   put the core's whine a couple of kilohertz up, above the fan's, which is
+   where it is on a real engine. */
+const HP_SPOOL_RATIO = 3.2, HP_STAGE_BLADES = 14;
 
 const aspectRatio = a => a.span * a.span / a.wingArea;
 const clAlpha = a => { const ar = aspectRatio(a); return 2 * Math.PI * ar / (2 + Math.sqrt(ar * ar + 4)); };
@@ -2642,28 +2654,82 @@ function initAudio() {
     return s;
   };
 
-  /* --- engines: a fan tone plus its harmonics, over a broadband core --- */
-  const engGain = ctx.createGain(); engGain.gain.value = 0; engGain.connect(master);
-  const engFilter = ctx.createBiquadFilter();
-  engFilter.type = "lowpass"; engFilter.frequency.value = 900; engFilter.Q.value = 0.7;
-  engFilter.connect(engGain);
+  /* --- engines: a turbofan has four voices, and this used to have one ---
 
-  const oscs = [];
-  /* Detuned pairs beat against each other, which is what gives a turbofan its
-     characteristic slow throb rather than a pure electronic tone. */
-  for (const [mult, detune, level] of [[1, 0, .55], [1, 7, .45], [2, -5, .22], [3, 4, .10]]) {
-    const o = ctx.createOscillator();
-    o.type = mult === 1 ? "sawtooth" : "triangle";
-    o.detune.value = detune;
-    const g = ctx.createGain(); g.gain.value = level;
-    o.connect(g); g.connect(engFilter); o.start();
-    oscs.push({ o, mult });
-  }
-  const core = noiseSource();
-  const coreFilter = ctx.createBiquadFilter();
-  coreFilter.type = "bandpass"; coreFilter.frequency.value = 260; coreFilter.Q.value = 0.9;
-  const coreGain = ctx.createGain(); coreGain.gain.value = 0.5;
-  core.connect(coreFilter); coreFilter.connect(coreGain); coreGain.connect(engGain);
+     What was here was a sawtooth at 46 + N1x128 Hz with harmonics at two and
+     three times it, through a lowpass. That is 174 Hz at full power with
+     integer harmonics, which is a *propeller*: a four-blade prop at 2,600 rpm
+     has a blade-passing frequency of 173 Hz. Ninety-nine percent of the energy
+     sat below 300 Hz and there was nothing at all above 1.5 kHz. Every type in
+     the fleet made the same noise, because nothing about the sound came from
+     the aeroplane.
+
+     A turbofan is close to the opposite, and it is four things at once:
+
+       fan     the blade-passing tone, N1 x blades. Kilohertz, and tonal --
+               the whine you hear on an approach. It comes from the published
+               fan diameter and blade count (aircraft.fan_tone_hz), so a
+               CFM56's thirty-six narrow blades scream at 2.8 kHz where a
+               Trent XWB's twenty-two sit at 990 Hz.
+       buzz    the rasp when the fan tips go supersonic near full power. It is
+               at *shaft* order rather than blade order -- the blades are not
+               quite identical, so each one sounds slightly differently -- which
+               is why a heavy takeoff sounds ragged rather than pure.
+       core    the high-pressure spool, driven by the N2 the model already
+               computes. Higher and quieter than the fan.
+       jet     the exhaust shear layer: broadband, weighted low, and the thing
+               that actually gets loud with thrust.                          */
+
+  const engGain = ctx.createGain(); engGain.gain.value = 0; engGain.connect(master);
+
+  /* The fan tone. A sine, not a sawtooth: a fan tone is close to pure, and its
+     harmonics are what a sawtooth has too much of. A little second harmonic is
+     added separately so it has some edge without becoming a buzz. */
+  const fanGain = ctx.createGain(); fanGain.gain.value = 0.30; fanGain.connect(engGain);
+  const fan = ctx.createOscillator(); fan.type = "sine"; fan.connect(fanGain); fan.start();
+  const fan2Gain = ctx.createGain(); fan2Gain.gain.value = 0.10; fan2Gain.connect(engGain);
+  const fan2 = ctx.createOscillator(); fan2.type = "sine";
+  fan2.connect(fan2Gain); fan2.start();
+
+  /* The buzz-saw, at shaft order. Sawtooth here on purpose: the real thing is
+     a train of shock waves off the blade tips, which is what a sawtooth is. */
+  const buzzGain = ctx.createGain(); buzzGain.gain.value = 0; buzzGain.connect(engGain);
+  const buzzFilter = ctx.createBiquadFilter();
+  buzzFilter.type = "bandpass"; buzzFilter.frequency.value = 1200; buzzFilter.Q.value = 1.1;
+  buzzFilter.connect(buzzGain);
+  /* A sawtooth at shaft order has enormous low-order energy, and a single
+     bandpass at Q 1.1 has too shallow a skirt to hold it back -- it leaked a
+     harmonic series into the bass, which is a propeller's signature and the
+     one thing this whole rebuild is here to be rid of. The buzz-saw you
+     actually hear is a rasp around the fan tone; the low shaft orders do not
+     radiate. So they are cut before the bandpass rather than after. */
+  const buzzCut = ctx.createBiquadFilter();
+  buzzCut.type = "highpass"; buzzCut.frequency.value = 260; buzzCut.Q.value = 0.7;
+  buzzCut.connect(buzzFilter);
+  const buzz = ctx.createOscillator(); buzz.type = "sawtooth";
+  buzz.connect(buzzCut); buzz.start();
+
+  /* The core, from N2. */
+  const coreGain = ctx.createGain(); coreGain.gain.value = 0.06; coreGain.connect(engGain);
+  const core = ctx.createOscillator(); core.type = "triangle";
+  core.connect(coreGain); core.start();
+
+  /* The jet. Broadband, not the narrow 260 Hz band that was here -- exhaust
+     noise is a shear layer tearing itself apart and has energy everywhere. A
+     lowpass with a gentle Q over white noise is the shape of it. */
+  const jetGain = ctx.createGain(); jetGain.gain.value = 0.16; jetGain.connect(engGain);
+  const jetFilter = ctx.createBiquadFilter();
+  jetFilter.type = "lowpass"; jetFilter.frequency.value = 900; jetFilter.Q.value = 0.5;
+  /* Two poles of highpass, not one: white noise through a gentle 90 Hz
+     shelf still piles up under 150 Hz, and it buried the fan tone the whole
+     point of this was to expose. The airframe has its own broadband channel
+     for the low hush; this one is the engine. */
+  const jetTilt = ctx.createBiquadFilter();
+  jetTilt.type = "highpass"; jetTilt.frequency.value = 120; jetTilt.Q.value = 0.7;
+  const jetTilt2 = ctx.createBiquadFilter();
+  jetTilt2.type = "highpass"; jetTilt2.frequency.value = 120; jetTilt2.Q.value = 0.7;
+  jetFilter.connect(jetTilt); jetTilt.connect(jetTilt2); jetTilt2.connect(jetGain);
+  noiseSource().connect(jetFilter);
 
   /* --- wind over the airframe --- */
   const windGain = ctx.createGain(); windGain.gain.value = 0; windGain.connect(master);
@@ -2690,7 +2756,9 @@ function initAudio() {
   rollFilter.connect(rollGain);
   noiseSource().connect(rollFilter);
 
-  audio.nodes = { engGain, engFilter, oscs, coreFilter, windGain, windFilter,
+  audio.nodes = { engGain, fan, fanGain, fan2, fan2Gain, buzz, buzzGain,
+                  buzzFilter, core, coreGain, jetGain, jetFilter,
+                  windGain, windFilter,
                   buffetGain, buffetFilter, rollGain, rollFilter };
   audio.ready = true;
 }
@@ -2762,13 +2830,59 @@ function updateAudio(a, s, readout, dt) {
     ? live.reduce((t, v) => t + v, 0) / live.length / 100
     : 0;
 
-  /* Fan tone rises with N1; the whole engine quietens with altitude because
-     there is less air to carry the sound. */
+  /* The whole engine quietens with altitude because there is less air to carry
+     the sound. Everything below is per *type*: the fan tone comes out of the
+     published fan diameter and blade count, so an A320ceo and an A320neo --
+     the same airframe, and identical in every other number here -- sound like
+     two completely different aeroplanes, which they are. */
   const density = densityRatio(s.alt);
-  const fanHz = 46 + audio.n1 * 128;
-  for (const { o, mult } of n.oscs) o.frequency.setTargetAtTime(fanHz * mult, t, glide);
-  n.engFilter.frequency.setTargetAtTime(420 + audio.n1 * 2100, t, glide);
-  n.coreFilter.frequency.setTargetAtTime(180 + audio.n1 * 300, t, glide);
+
+  /* Fan blade-passing frequency (aircraft.fan_tone_hz). The shaft speed comes
+     from the diameter, because a big fan cannot turn fast without its tips
+     going supersonic; the tone is that times the blade count. */
+  const shaftHz = 60 * FAN_TIP_SPEED_MS / (Math.PI * a.fanDia) / 60;
+  const fanHz = clamp(audio.n1 * shaftHz * a.fanBlades, 20, 16000);
+  n.fan.frequency.setTargetAtTime(fanHz, t, glide);
+  n.fan2.frequency.setTargetAtTime(Math.min(fanHz * 2, 18000), t, glide);
+
+  /* The buzz-saw appears when the tips go supersonic, which is up near the
+     takeoff rating and not before -- so it arrives as you push the levers up
+     and is gone again in the cruise, which is exactly when you hear it. */
+  const tipMach = audio.n1 * FAN_TIP_SPEED_MS / soundMs(s.alt);
+  const buzzing = clamp((tipMach - 0.95) / 0.35, 0, 1);
+  n.buzz.frequency.setTargetAtTime(Math.max(20, audio.n1 * shaftHz), t, glide);
+  n.buzzFilter.frequency.setTargetAtTime(clamp(fanHz * 0.8, 200, 6000), t, glide);
+  n.buzzGain.gain.setTargetAtTime(buzzing * 0.16, t, 0.25);
+
+  /* The core, on the N2 the model already computes. N2 is a percentage of a
+     spool that idles near sixty, so it moves far less than N1 -- which is why
+     the core whine barely changes while the fan sweeps through two octaves.
+
+     It sits *above* the fan tone. The high-pressure spool turns about 3.2
+     times per fan revolution and its first compressor stage has of the order
+     of fourteen blades, so its blade-passing frequency is some forty-five
+     times the fan shaft's -- a couple of kilohertz, the sizzle behind the
+     whine. Set at 2.4x instead it landed on 130-190 Hz, which is a propeller,
+     and it was the last piece of one left in here. */
+  const motors = engineReadouts(a, s).filter(m => !m.failed);
+  const n2 = motors.length
+    ? motors.reduce((sum, m) => sum + m.n2, 0) / motors.length / 100 : 0;
+  n.core.frequency.setTargetAtTime(
+    clamp(n2 * shaftHz * HP_SPOOL_RATIO * HP_STAGE_BLADES, 200, 11000), t, glide);
+  n.coreGain.gain.setTargetAtTime(running ? 0.05 * n2 : 0, t, glide);
+
+  /* The jet: broadband, and the voice that actually grows with thrust. It
+     climbs in pitch as well as level, because a faster exhaust makes a
+     higher-frequency roar. */
+  n.jetFilter.frequency.setTargetAtTime(320 + audio.n1 * 2600, t, glide);
+  n.jetGain.gain.setTargetAtTime(0.20 + audio.n1 * 0.50, t, glide);
+
+  /* The fan tone carries further than the roar and dominates from outside, so
+     the chase view hears more whine and the cockpit more rumble. */
+  const outside = view === "cockpit" ? 0 : 1;
+  n.fanGain.gain.setTargetAtTime(0.26 + audio.n1 * 0.40 + outside * 0.16, t, glide);
+  n.fan2Gain.gain.setTargetAtTime(0.09 + audio.n1 * 0.14, t, glide);
+
   const engLevel = (0.030 + audio.n1 * 0.115) * (0.45 + 0.55 * density)
                  * (view === "cockpit" ? 1 : 1.35);
   n.engGain.gain.setTargetAtTime(running ? engLevel : 0.004, t, glide);

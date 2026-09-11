@@ -38,6 +38,74 @@ class TestFleetData(unittest.TestCase):
             self.assertLess(craft.mlw_kg, craft.mtow_kg)
             self.assertLess(craft.mzfw_kg, craft.mlw_kg)
 
+    def test_every_type_publishes_its_fan(self):
+        for craft in fleet.FLEET:
+            self.assertGreater(craft.fan_diameter_m, 1.0, craft.name)
+            self.assertLess(craft.fan_diameter_m, 3.5, craft.name)
+            self.assertGreaterEqual(craft.fan_blades, 16, craft.name)
+            self.assertLessEqual(craft.fan_blades, 40, craft.name)
+
+    def test_a_bigger_fan_turns_more_slowly(self):
+        """The physical fact the whole derivation rests on.
+
+        A three-metre fan cannot turn as fast as a 1.7-metre one without its
+        tips going supersonic, so shaft speed must fall as diameter rises --
+        across the whole fleet, with no exceptions, or the constant is wrong.
+        """
+        by_size = sorted(fleet.FLEET, key=lambda c: c.fan_diameter_m)
+        speeds = [c.fan_rpm_100 for c in by_size]
+        self.assertEqual(speeds, sorted(speeds, reverse=True))
+
+    def test_the_derived_shaft_speeds_are_real_engine_speeds(self):
+        """The check that the published diameters are not nonsense.
+
+        Nothing in the derivation knows what a turbofan's shaft speed is; it
+        comes out of one tip-speed constant and a diameter. If a diameter were
+        mistyped the speed would leave the band real engines run in, which is
+        roughly 2,500 rpm for the largest fans and 5,000 for the smallest.
+        """
+        for craft in fleet.FLEET:
+            self.assertTrue(
+                2500.0 < craft.fan_rpm_100 < 5200.0,
+                "{}: {:,.0f} rpm at 100% N1".format(craft.name, craft.fan_rpm_100),
+            )
+
+    def test_the_fan_sounds_like_a_turbofan_and_not_a_propeller(self):
+        """A propeller's blade-passing tone is a hundred-odd hertz.
+
+        A turbofan's is a couple of kilohertz, and that one fact is most of
+        what makes them sound like different machines. The browser's audio is
+        built on this, so it is asserted here rather than left to the ear.
+        """
+        for craft in fleet.FLEET:
+            tone = craft.fan_tone_hz(1.0)
+            self.assertTrue(
+                900.0 < tone < 3200.0,
+                "{}: {:,.0f} Hz at full power".format(craft.name, tone),
+            )
+            # And at idle it must still be well clear of a propeller's range.
+            self.assertGreater(craft.fan_tone_hz(0.22), 200.0, craft.name)
+
+    def test_the_two_a320s_sound_completely_different(self):
+        """Same airframe, same wing area, and the one difference you can hear.
+
+        The ceo's CFM56 has thirty-six narrow blades on a 1.7 m fan; the neo's
+        LEAP has eighteen wide ones on a 2 m fan. The ceo screams at nearly
+        three kilohertz and the neo does not, which is exactly why the neo is
+        the quieter aeroplane on approach.
+        """
+        ceo, neo = fleet.A320, fleet.A320NEO
+        self.assertEqual(ceo.wing_area_m2, neo.wing_area_m2)
+        self.assertGreater(ceo.fan_tone_hz(1.0), 2.0 * neo.fan_tone_hz(1.0))
+        self.assertGreater(neo.fan_diameter_m, ceo.fan_diameter_m)
+        self.assertLess(neo.fan_blades, ceo.fan_blades)
+
+    def test_the_fan_tone_is_linear_in_n1_and_zero_when_stopped(self):
+        craft = fleet.A350
+        self.assertEqual(craft.fan_tone_hz(0.0), 0.0)
+        self.assertAlmostEqual(craft.fan_tone_hz(0.5) * 2.0, craft.fan_tone_hz(1.0))
+        self.assertEqual(craft.fan_tone_hz(-0.3), 0.0)
+
     def test_published_dimensions_are_present_and_plausible(self):
         for craft in fleet.FLEET:
             self.assertTrue(craft.icao_type, "{} has no type code".format(craft.name))

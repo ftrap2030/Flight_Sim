@@ -7,7 +7,7 @@ and one freighter.
 
 ```bash
 python main.py                                  # play it
-python -m unittest discover -s tests -t .       # 543 tests, ~120 s
+python -m unittest discover -s tests -t .       # 549 tests, ~120 s
 python main.py --list                           # fleet and weather menus
 python main.py --spec a350-1000                 # one type's card and drawing
 open web/anfell.html                            # the browser build
@@ -41,7 +41,8 @@ flight_sim/
   game.py          Session: setup, the loop, persistence.
 web/
   anfell.html      The whole browser build. One file, no build step.
-  tools/           Playwright checks: cruise flow, model parity, screenshots.
+  tools/           Playwright checks: cruise flow, model parity, the engines'
+                   spectrum, screenshots.
 ```
 
 ## Conventions
@@ -158,6 +159,63 @@ glazing and no window rows. Three fleet-wide assertions turned out to be about
 row per deck, and the roll-rate-follows-mass monotonicity — and each is now
 scoped rather than weakened.
 
+## The sound is derived from the fan, the same way the drawing is
+
+Only the browser makes a noise, but the numbers it makes it from are the
+model's, for the reason everything else here is: the fleet had one sound for
+eleven types because nothing about it came from the aeroplane.
+
+What was in `initAudio` was a sawtooth at `46 + N1×128` Hz with harmonics at two
+and three times it, through a lowpass. That is 174 Hz at full power with integer
+harmonics, and it is not a metaphor: **a four-blade propeller at 2,600 rpm has a
+blade-passing frequency of 173 Hz.** Ninety-nine percent of the energy sat below
+300 Hz and there was nothing above 1.5 kHz.
+
+So `fan_diameter_m` and `fan_blades` are published data, in `aircraft.py`, and
+`fan_tone_hz` derives the note from them. **`FAN_TIP_SPEED_MS = 425.0` is the
+load-bearing part and it is physics, not a fudge factor**: what limits a fan is
+its tip going transonic, so a big fan is a *slow* one and every large turbofan
+lands within a few percent of the same tip speed whatever its diameter. That one
+constant turns a published diameter into a shaft speed, and the blade count
+turns the shaft speed into the tone. The check that the diameters are not
+mistyped is that the derived shaft speeds have to land in the band real engines
+run in — 2,700 rpm for the largest fans, 4,700 for the smallest — which
+`tests/test_aircraft.py` asserts, along with the monotonicity the whole
+derivation rests on: sort the fleet by diameter and the speeds must fall.
+
+The payoff is the A320ceo and the A320neo, which are the same airframe with the
+same wing and differ *audibly* in exactly one place. Thirty-six narrow CFM56
+blades on a 1.74 m fan scream at 2,807 Hz; eighteen wide LEAP ones on a 1.98 m
+fan sit at 1,230 Hz. That is 2.28× apart, and it is why the neo is the quieter
+aeroplane on approach.
+
+Three things in the browser's synthesis were each wrong once, and each would
+sound plausible again:
+
+- **The core sits *above* the fan, not below it.** The high-pressure spool turns
+  about 3.2 times per fan revolution and its first stage has of the order of
+  fourteen blades, so `HP_SPOOL_RATIO × HP_STAGE_BLADES` puts its tone some
+  forty-five times the fan shaft — a couple of kilohertz, the sizzle behind the
+  whine. Set at `×2.4` it landed on 130–190 Hz, which is a propeller, and it was
+  the last piece of one left in there.
+- **The buzz-saw's highpass goes *before* its bandpass.** The buzz is a sawtooth
+  at *shaft* order, which has enormous low-order energy, and a single bandpass at
+  Q 1.1 has too shallow a skirt to hold it back — it leaked a harmonic series
+  into the bass, which is the exact signature the rebuild exists to be rid of.
+- **The jet needs two poles of highpass, not one.** White noise through a single
+  gentle shelf still piles up under 150 Hz and buries the fan tone the whole
+  thing was for. The airframe has its own broadband channel for the low hush.
+
+**`web/tools/sound_check.js` is the guard**, and sound needed one more than
+anything else here does: it is the only output with no number on the screen to
+check it against, which is how a propeller survived in it for five phases. It
+renders the engine graph into an `OfflineAudioContext`, FFTs it, integrates
+sixth-octave bands, and asserts that the measured peak lands on `fan_tone_hz`,
+that most of the energy is above 300 Hz at takeoff power, that no band under
+300 Hz stands far above its neighbours, and that two types with different fans
+come out on measurably different tones. Splicing the old synthesis back in fails
+all fifteen cases.
+
 ## Bug families that have bitten more than once
 
 **Float truncation in displayed times.** A ten-second tick accumulates to
@@ -221,7 +279,7 @@ has an owner.
 
 ## Testing patterns
 
-- One test file per module, named for it. 543 tests, ~120 s.
+- One test file per module, named for it. 549 tests, ~120 s.
 - Assert against **published figures** where they exist: ISA density tables,
   cruise fuel flow, service ceilings, Vmca. These catch calibration drift that
   self-consistent tests never would.
@@ -470,8 +528,9 @@ went through the first eight of them unnoticed. The Python end asserts that at
 least one case genuinely cruises, which is the rotor sweep's vacuity guard
 again and was needed for the same reason.
 
-Only rendering exists solely in the browser now. Nothing in `flight_sim/` may
-import from or depend on `web/`.
+Only rendering and sound exist solely in the browser now — and the sound is
+made from the model's published fan data, with `web/tools/sound_check.js` as
+its guard. Nothing in `flight_sim/` may import from or depend on `web/`.
 
 Two places the picture and the physics deliberately disagree, both rendering
 only and both bounded: sub-kilometre relief is *carved down* into the height

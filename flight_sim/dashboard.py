@@ -601,11 +601,18 @@ def spec_card(craft, artwork_first=True):
          "Operating empty", "{} kg".format(_thousands(craft.oew_kg))),
         ("Total thrust", "{:,.0f} kN".format(craft.thrust_sl_n / 1000.0),
          "Max take-off", "{} kg".format(_thousands(craft.mtow_kg))),
-        ("Cruise SFC", "{:.3f} lb/(lbf·hr)".format(craft.tsfc_lb_per_lbf_hr),
+        # The fan is what the aeroplane sounds like, so the card quotes the
+        # note it makes at full power alongside the two published figures it
+        # comes from -- a 1.7 m fan with 36 blades screams and a 3 m fan with
+        # 22 does not, and that is the difference you can hear.
+        ("Fan", "{:.2f} m, {:d} blades ({:,.0f} Hz at 100% N1)".format(
+            craft.fan_diameter_m, craft.fan_blades, craft.fan_tone_hz(1.0)),
          "Max landing", "{} kg".format(_thousands(craft.mlw_kg))),
+        ("Cruise SFC", "{:.3f} lb/(lbf·hr)".format(craft.tsfc_lb_per_lbf_hr),
+         "Max zero-fuel", "{} kg".format(_thousands(craft.mzfw_kg))),
         ("Fuel capacity", "{} L ({} kg)".format(
             _thousands(craft.fuel_capacity_l), _thousands(craft.fuel_capacity_kg)),
-         "Max zero-fuel", "{} kg".format(_thousands(craft.mzfw_kg))),
+         "Payload", "{} kg".format(_thousands(craft.payload_kg))),
         # A freighter is published by its hold, not by seats it does not have.
         # "0 typical, 0 max" is not a fact about an aeroplane, it is a field
         # that was never filled in.

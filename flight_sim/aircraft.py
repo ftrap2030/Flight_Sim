@@ -35,6 +35,14 @@ from dataclasses import dataclass, field
 # and every flight plan is in kilograms.
 JET_A1_KG_PER_L = 0.804
 
+# Fan tip speed at 100% N1, in m/s. One constant for the whole fleet, and it is
+# physics rather than a fudge: what limits a fan's speed is the tip going
+# transonic, so every big turbofan lands within a few percent of this whatever
+# its diameter. That is what lets the *published* fan diameter give the shaft
+# speed, and the shaft speed with the *published* blade count give the tone the
+# aeroplane actually makes. `tests/test_aircraft.py` holds the fleet to it.
+FAN_TIP_SPEED_MS = 425.0
+
 
 @dataclass(frozen=True)
 class Aircraft:
@@ -70,6 +78,13 @@ class Aircraft:
     wing_sweep_deg: float = 25.0  # quarter-chord
     wingtip: str = "sharklets"  # the device on the tip, as fitted
     cabin_decks: int = 1
+    # The fan, which is what an airliner sounds like. Published data, and it is
+    # *shown* -- but the browser's audio also derives the blade-passing tone
+    # from it, the way `artwork.py` derives the drawing from `length_m`. A big
+    # slow fan and a small fast one are different aeroplanes to listen to, and
+    # the A320ceo and the A320neo differ here and nowhere else audible.
+    fan_diameter_m: float = 0.0
+    fan_blades: int = 0
     # A bulged belly fairing over an extra centre tank. Only the XLR has one,
     # and it is the single external feature that tells it from an A321neo.
     belly_fairing: bool = False
@@ -119,6 +134,33 @@ class Aircraft:
     max_rudder_deg: float = 30.0
 
     handling: str = ""
+
+    @property
+    def fan_rpm_100(self):
+        """Fan shaft speed at 100% N1, from the published fan diameter.
+
+        A three-metre fan cannot turn as fast as a 1.7-metre one without its
+        tips going supersonic, so a big engine is a slow one -- which is why a
+        Trent sounds so much deeper than a CFM56 and not merely louder.
+        """
+        if self.fan_diameter_m <= 0.0:
+            return 0.0
+        return 60.0 * FAN_TIP_SPEED_MS / (math.pi * self.fan_diameter_m)
+
+    def fan_tone_hz(self, n1_fraction):
+        """Blade-passing frequency: the note the fan is actually sounding.
+
+        One blade past your ear per blade per revolution. This is the whine you
+        hear on an approach, and it is the single thing that most distinguishes
+        a turbofan from a propeller -- a prop's blade passing frequency is a
+        hundred and something hertz, a turbofan's is a couple of kilohertz.
+
+        Only the browser makes a noise, so only the browser reads this. It lives
+        here because it is derived from published data and is therefore the
+        model's to define, the way `artwork.py` takes the drawing from
+        `length_m` rather than deciding for itself how long an A380 is.
+        """
+        return max(0.0, n1_fraction) * self.fan_rpm_100 * self.fan_blades / 60.0
 
     @property
     def carries_passengers(self):
@@ -272,6 +314,8 @@ A319NEO = Aircraft(
     fuselage_width_m=3.95,
     fuselage_height_m=4.14,
     wing_sweep_deg=25.0,
+    fan_diameter_m=1.98,
+    fan_blades=18,
     wingtip="sharklets",
     oew_kg=42600.0,
     mtow_kg=75500.0,
@@ -320,6 +364,8 @@ A320 = Aircraft(
     fuselage_width_m=3.95,
     fuselage_height_m=4.14,
     wing_sweep_deg=25.0,
+    fan_diameter_m=1.735,
+    fan_blades=36,
     wingtip="wingtip fences",
     oew_kg=42600.0,
     mtow_kg=78000.0,
@@ -367,6 +413,8 @@ A320NEO = Aircraft(
     fuselage_width_m=3.95,
     fuselage_height_m=4.14,
     wing_sweep_deg=25.0,
+    fan_diameter_m=1.98,
+    fan_blades=18,
     wingtip="sharklets",
     oew_kg=44300.0,
     mtow_kg=79000.0,
@@ -414,6 +462,8 @@ A321 = Aircraft(
     fuselage_width_m=3.95,
     fuselage_height_m=4.14,
     wing_sweep_deg=25.0,
+    fan_diameter_m=1.98,
+    fan_blades=18,
     wingtip="sharklets",
     oew_kg=50100.0,
     mtow_kg=97000.0,
@@ -465,6 +515,8 @@ A321XLR = Aircraft(
     fuselage_width_m=3.95,
     fuselage_height_m=4.14,
     wing_sweep_deg=25.0,
+    fan_diameter_m=1.98,
+    fan_blades=18,
     wingtip="sharklets",
     belly_fairing=True,  # the rear centre tank's fairing, aft of the wing box
     oew_kg=52300.0,  # the rear centre tank and the strengthening it needs
@@ -518,6 +570,8 @@ A330_800 = Aircraft(
     fuselage_width_m=5.64,
     fuselage_height_m=5.64,
     wing_sweep_deg=30.0,
+    fan_diameter_m=2.85,
+    fan_blades=26,
     wingtip="composite sharklets",
     oew_kg=132000.0,
     mtow_kg=251000.0,
@@ -574,6 +628,8 @@ A330NEO = Aircraft(
     fuselage_width_m=5.64,
     fuselage_height_m=5.64,
     wing_sweep_deg=30.0,
+    fan_diameter_m=2.85,
+    fan_blades=26,
     wingtip="composite sharklets",
     oew_kg=137000.0,
     mtow_kg=251000.0,
@@ -625,6 +681,8 @@ A350 = Aircraft(
     fuselage_width_m=5.96,
     fuselage_height_m=6.09,
     wing_sweep_deg=31.9,
+    fan_diameter_m=3.0,
+    fan_blades=22,
     wingtip="curved sabre tips",
     oew_kg=142400.0,
     mtow_kg=280000.0,
@@ -672,6 +730,8 @@ A350K = Aircraft(
     fuselage_width_m=5.96,
     fuselage_height_m=6.09,
     wing_sweep_deg=31.9,
+    fan_diameter_m=3.0,
+    fan_blades=22,
     wingtip="curved sabre tips",
     oew_kg=155000.0,
     mtow_kg=319000.0,
@@ -722,6 +782,8 @@ A380 = Aircraft(
     fuselage_width_m=7.14,
     fuselage_height_m=8.41,  # two full decks, and it shows
     wing_sweep_deg=33.5,
+    fan_diameter_m=2.95,
+    fan_blades=24,
     wingtip="upswept winglets",
     cabin_decks=2,
     oew_kg=277000.0,
@@ -778,6 +840,8 @@ BELUGA_XL = Aircraft(
     # number the drawing takes its shape from.
     fuselage_height_m=8.80,
     wing_sweep_deg=30.0,
+    fan_diameter_m=2.47,
+    fan_blades=26,
     wingtip="none -- the A330ceo wing",
     cargo_lobe=True,
     oew_kg=130000.0,

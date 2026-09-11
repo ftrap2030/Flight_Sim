@@ -227,6 +227,18 @@ keystroke. Steady-state thrust is unchanged, so the calibrated cruise figures
 above are exactly as they were; only the transient moved. A standing start with
 the levers slammed forward costs an A320neo about 150 feet more runway.
 
+**And each type sounds like its own engine**, because the fan is published data
+too. What limits a turbofan's speed is its tip going transonic, so a big fan is
+a *slow* fan — which means the published diameter gives the shaft speed, and the
+published blade count turns that into the note the aeroplane actually makes. A
+CFM56 turns thirty-six narrow blades on a 1.74 m fan and screams at 2,807 Hz; a
+Trent XWB turns twenty-two on a 3.00 m fan and sits at 992 Hz. The A320-200 and
+the A320neo are the same airframe with the same wing, and this is the one place
+they differ audibly — 2.28× apart, which is why the neo is the quieter aeroplane
+on approach. Before this the whole fleet shared a sawtooth at 174 Hz, which is
+the blade-passing frequency of a four-blade *propeller*; now a Playwright tool
+renders the spectrum offline and measures it.
+
 **Integration** — one command advances ten seconds, integrated semi-implicitly
 at 0.1 s substeps. The substepping matters: turn rate and flight path angle are
 coupled through airspeed, and a single ten-second Euler step on that coupling
@@ -583,14 +595,24 @@ JavaScript, because a browser cannot import Python. An A350-900 trimmed at FL370
 and M0.85 at 252.4 tonnes burns 5,793 kg/h in both, and a seed grows the same
 mountains in both, down to the 32-bit lattice hash.
 
-Two Playwright tools in `web/tools/` are what hold that claim up.
-`cruise_check.js` puts the browser build against the same published fuel flows
-the Python is tested on. `parity_check` compares what the glass actually shows —
-every speed mark, the V-speeds, all five Flight Mode Annunciator columns, the
-per-engine N1, N2, EGT and fuel flow, and every ECAM line with its colour —
-across a hundred states and four types, and it runs in CI. That is the easier
-half to get wrong: a speed tape with its marks in the wrong place still looks
-exactly like a speed tape.
+Three Playwright tools in `web/tools/` are what hold that claim up, and all
+three run in CI. `cruise_check.js` puts the browser build against the same
+published fuel flows the Python is tested on. `parity_check` compares what the
+glass actually shows — every speed mark, the V-speeds, all five Flight Mode
+Annunciator columns, the per-engine N1, N2, EGT and fuel flow, every ECAM line
+with its colour, and the flight plan and the debrief — across a hundred and
+twenty-five states and five types. That is the easier half to get wrong: a
+speed tape with its marks in the wrong place still looks exactly like a speed
+tape, and a block fuel figure that is 6% out looks exactly like a block fuel
+figure.
+
+`sound_check.js` is the third, and sound needed a guard more than either of
+them: it is the only output with no number on screen to check it against, which
+is how a propeller synthesis survived in it for five phases. It renders the
+engine graph into an `OfflineAudioContext`, runs an FFT over it, and asserts
+that the measured peak lands on the blade-passing frequency the published fan
+data implies — and that the energy sits where a turbofan's does rather than
+where a propeller's does.
 
 ## Tests
 
@@ -598,7 +620,7 @@ exactly like a speed tape.
 python -m unittest discover -s tests -t .
 ```
 
-509 tests, no dependencies. They check the atmosphere against published ISA
+549 tests, no dependencies. They check the atmosphere against published ISA
 tables, stall speed against its closed form, cruise fuel flow and service
 ceiling against published figures for every type, terrain determinism,
 save/load fidelity, that every prose template renders against a live context,

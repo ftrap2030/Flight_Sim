@@ -21,8 +21,12 @@ takeoff, an ILS approach, a landing and synthesised sound.
 * **Height** — generated on the GPU into two RGBA8 textures, 24 bits of height
   packed across RGB. Coarse reaches 60 nm; fine follows the aircraft across 5 nm
   at 29.7 ft per texel and is re-baked every mile and a half.
-* **Sound** — oscillators and filtered noise. No audio files. Radio-altitude
-  callouts use the browser's own speech synthesiser.
+* **Sound** — oscillators and filtered noise, four voices per engine and no
+  audio files: the fan's blade-passing tone, the buzz-saw rasp when its tips go
+  supersonic near takeoff power, the high-pressure spool's whine above it, and
+  the broadband roar of the exhaust. The fan tone comes from the *published*
+  fan diameter and blade count in `aircraft.py`, so each type sounds like its
+  own engine. Radio-altitude callouts use the browser's speech synthesiser.
 * **Air** — the wind slows and backs near the ground, so a descent changes your
   drift; it breaks up in the lee of a ridge; and it goes up the windward face
   and down the other side, taking the aeroplane with it. Conditions drift over
@@ -91,6 +95,30 @@ It covers the weather too -- the evolved conditions, the wind through the
 friction layer, the rotor and the mountain wave over a hundred and twenty points
 of terrain, and the gusts, which agree exactly because both builds draw them
 from the same lattice hash.
+
+`tools/sound_check.js` is the third guard, and the sound needed one more than
+anything else here: it is the only output with no number on the screen to check
+it against, which is exactly how it came to be synthesising a propeller for
+eleven turbofans. The old graph was a sawtooth at `46 + N1×128` Hz with
+harmonics at two and three times it — 174 Hz at full power, which is the
+blade-passing frequency of a four-blade prop at 2,600 rpm.
+
+```bash
+node web/tools/sound_check.js "$PWD/web/anfell.html"
+```
+
+It rebuilds the engine graph in an `OfflineAudioContext`, renders two seconds,
+runs a radix-2 FFT and integrates sixth-octave bands, then checks four things
+across five types at idle, climb and takeoff power: the measured peak must land
+on the blade-passing frequency `aircraft.fan_tone_hz` derives from the published
+fan data; at takeoff power most of the energy must sit *above* 300 Hz, where a
+propeller's is nearly all below it; no band under 300 Hz may stand far above its
+own neighbours, which is what a harmonic series looks like; and two types with
+different fans must come out on measurably different tones.
+
+Splicing the old synthesis back in fails all fifteen cases, which is the only
+reason to believe the guard. The A320-200 measures 2,874 Hz against a derived
+2,807; the A350 1,016 against 992.
 
 `tools/shots.js` puts the aircraft at fixed places in the world and photographs
 them, which is how the renderer is checked:
