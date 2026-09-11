@@ -462,6 +462,8 @@ def _match_navigation(text, raw):
 
     if re.match(r"^(?:show |flight )?(?:plan|route|nav|destination)$", text):
         return Command("show_plan", text=raw, advances_time=False)
+    if text in ("traffic", "tcas", "contacts", "who else is up there"):
+        return Command("show_traffic", text=raw, advances_time=False)
     if re.match(r"^(?:debrief|summary|how did i do)$", text):
         return Command("debrief", text=raw, advances_time=False)
     return None
@@ -597,7 +599,7 @@ def apply(sim, command):
             s.alpha_floor_latched = False
     elif kind in ("hold", "status", "map", "airfields", "help", "quit",
                   "direct_to", "set_route", "add_waypoint", "remove_waypoint",
-                  "show_plan", "clear_route", "debrief",
+                  "show_plan", "show_traffic", "clear_route", "debrief",
                   "spec", "fleet", "show_law", "show_failures"):
         pass
     elif kind == "time_of_day":
@@ -677,7 +679,7 @@ HELP_TEXT = """\
 | **Failures** | `failures`, `fail engine 3 fire`, `fail fuel leak`, `arm engine failure`, `fix all` |
 | **Autopilot** | `autopilot on/off`, `set altitude 12000`, `set speed 280`, `vertical speed 1500`, `nav`, `descent`, `approach mode` |
 | **Time of day** | `time 0530`, `dawn`, `midday`, `dusk`, `night` |
-| **Navigation** | `route ANFL KEBR CROW`, `add HRWD`, `remove KEBR`, `direct to KEBR` |
+| **Navigation** | `route ANFL KEBR CROW`, `add HRWD`, `remove KEBR`, `direct to KEBR`, `traffic` |
 | **Navigation** | `show plan`, `clear route`, `airfields`, `debrief` |
 | **Flight controls** | `law` (what is protecting you), `direct law`, `alternate law`, `normal law` |
 | **Reference** | `spec` (your aircraft's card), `spec a380`, `fleet` |

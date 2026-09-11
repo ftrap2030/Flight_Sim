@@ -630,13 +630,37 @@ anybody chose. "Three miles per thousand feet" turns out to be a narrowbody
 rule: the A320 family manages 2.9 to 3.3, the widebodies 3.6, and the BelugaXL
 — draggy enough that its L/D is 12.9 — is the steepest of the fleet at 2.6.
 
+## You are not alone up there
+
+Fourteen scheduled services work between the five home airfields, and they are
+*evaluated* rather than simulated: every aeroplane's position is a pure function
+of the seed, its route and the clock, read off the same flight planner that
+costs your own plan. So a contact climbs at the rate the model says that type
+climbs at, cruises where the planner would have put it, and costs a single
+interpolation to place rather than a second flight model to run.
+
+They appear as TCAS symbols on the navigation display — a hollow diamond out
+there, filled as it closes, an amber circle for a conflict and a red square for
+something inside a mile and a half — with its height above or below in hundreds
+of feet, and an arrow if it is climbing or descending. `traffic` in the text
+simulator lists the same contacts from the same model.
+
+And within fifteen miles you can see them out of the window.
+
+The timetable has to be flyable, so what runway a type needs is worked out from
+its own published figures: lift off at 1.15 times the stall speed in the
+take-off configuration, having accelerated at what its thrust-to-weight buys.
+Nothing is scheduled out of a field it could not leave — which is why Anfell
+International sees the A380 and Harrow Deep's 5,400 feet sees the A319neo, and
+why the type is picked before the pair of airfields rather than after.
+
 ## Tests
 
 ```bash
 python -m unittest discover -s tests -t .
 ```
 
-562 tests, no dependencies. They check the atmosphere against published ISA
+583 tests, no dependencies. They check the atmosphere against published ISA
 tables, stall speed against its closed form, cruise fuel flow and service
 ceiling against published figures for every type, terrain determinism,
 save/load fidelity, that every prose template renders against a live context,

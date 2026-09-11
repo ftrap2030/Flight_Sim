@@ -21,6 +21,7 @@ from . import failures
 from . import fbw
 from . import landing
 from . import navigation
+from . import traffic as traffic_module
 from . import weather as wx
 from . import airfield
 from .airfield import Airfields
@@ -320,9 +321,57 @@ def world_for_seed(seed):
     return _WORLDS[seed]
 
 
+_TRAFFIC = {}
+
+
+def traffic_for_seed(seed):
+    """The timetable and every flight's profile for a seed, costed once.
+
+    Per-seed rather than per-session for exactly the reason the world is:
+    the schedule is a pure function of the seed, and costing a dozen flights
+    means a dozen climb-cruise-descent integrations. Done lazily, so a session
+    that never looks out of the window never pays for it.
+
+    Each flight is planned by a throwaway Simulator of its own type. That is
+    what keeps a traffic aeroplane honest: it climbs at the rate the model says
+    that type climbs at and cruises at the level the flight planner would have
+    charged it for, rather than at numbers invented for scenery.
+    """
+    if seed not in _TRAFFIC:
+        terrain, airfields = world_for_seed(seed)
+        flights = traffic_module.schedule(seed, airfields)
+
+        def plan_for(aircraft_key, waypoints):
+            other = Simulator.new_flight(aircraft_key, "clear", seed=seed)
+            # On the departure runway, not wherever a new flight happens to
+            # begin. Left where `new_flight` puts it, the plan carried a
+            # spurious ferry leg out to the origin *and* started its climb from
+            # five thousand feet -- so the level search fitted a different
+            # profile and the browser, which does put it on the field, chose
+            # cruise levels six thousand feet lower. The schedules matched
+            # exactly and the flights did not, which is the parity comparison
+            # earning its keep.
+            origin = waypoints[0]
+            other.state.x_nm = origin.x_nm
+            other.state.y_nm = origin.y_nm
+            other.state.altitude_ft = origin.elevation_ft or 0.0
+            other.route = navigation.Route(list(waypoints))
+            other.sync_route()
+            try:
+                return navigation.plan(other)
+            except (ValueError, ZeroDivisionError):
+                # A pairing the aeroplane cannot actually make. Dropping it
+                # beats putting a flight in the sky that could not be flown.
+                return None
+
+        _TRAFFIC[seed] = traffic_module.build_profiles(flights, plan_for)
+    return _TRAFFIC[seed]
+
+
 def forget_worlds():
     """Drop the cached worlds. For tests that need a pristine terrain."""
     _WORLDS.clear()
+    _TRAFFIC.clear()
 
 
 class Simulator:
@@ -757,6 +806,18 @@ class Simulator:
     # navigation display drawing it must read one answer rather than solve
     # three, or the arc on the screen stops being the path being flown.
     DESCENT_GUIDANCE_INTERVAL_S = 2.0
+
+    def traffic_near(self, radius_nm=40.0):
+        """The other aeroplanes around this one, closest first.
+
+        Evaluated rather than simulated, so this is a handful of interpolations
+        and can be called as often as anything wants it -- there is no cadence
+        to respect and nothing to keep in step.
+        """
+        state = self.state
+        return traffic_module.near(
+            traffic_for_seed(state.seed), state.elapsed_s,
+            state.x_nm, state.y_nm, state.altitude_ft, radius_nm)
 
     def descent_guidance(self, force=False):
         """The managed descent path, cached against the clock.

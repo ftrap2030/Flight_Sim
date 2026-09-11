@@ -2118,6 +2118,191 @@ function descentGuidance(a, s, force) {
   return descentCache.value;
 }
 
+/* ==========================================================================
+   OTHER AEROPLANES  (traffic.py)
+
+   Traffic is not simulated here, it is *evaluated*: every aircraft's position
+   is a pure function of the seed, its route and the clock, read off the same
+   `planRoute` profile the player's own flight plan is costed with. Nothing is
+   integrated and nothing accumulates.
+
+   That is what lets the browser and the Python put the same aeroplanes in the
+   same places to the metre -- `parity_check` compares them exactly -- and it
+   is why a dozen of them cost a dozen interpolations a frame rather than a
+   dozen more flight models.
+   ========================================================================== */
+const TRAFFIC_CYCLE_S = 3600.0;
+const SCHEDULED_FLIGHTS = 14;
+const TRAFFIC_PROXIMATE_NM = 6.0, TRAFFIC_PROXIMATE_FT = 1200;
+const TRAFFIC_TRAFFIC_NM = 3.5, TRAFFIC_TRAFFIC_FT = 900;
+const TRAFFIC_THREAT_NM = 1.5, TRAFFIC_THREAT_FT = 400;
+/* One, because takeoffLengthFt already carries the factor that turns a ground
+   roll into a field length; a second 25% on top double-counted and left only
+   four of eleven types able to work between two of these five runways. */
+const RUNWAY_MARGIN_FT = 1.0;
+const TAKEOFF_FIELD_FACTOR = 2.1;
+const AIRLINES = ["ANF", "KBR", "CRW", "HRW", "VSP", "NLD"];
+
+function trafficCallsign(seed, index) {
+  const airline = AIRLINES[Math.floor(hash01(index, 11, seed + 7717) * AIRLINES.length)];
+  return airline + (100 + Math.floor(hash01(index, 13, seed + 9127) * 800));
+}
+
+/* Roughly the runway a type needs at the weight it flies at here -- lift off
+   at 1.15 times the stall speed, having accelerated at what thrust-to-weight
+   buys against rolling friction. (traffic.takeoff_length_ft) */
+function takeoffLengthFt(a, flaps = 2) {
+  const mass = a.oew + a.payload + a.startFuel;
+  const stallMs = stallIasKt(a, mass, 1, flaps) * MS_PER_KT;
+  const liftOffMs = 1.15 * stallMs;
+  const thrustToWeight = a.thrust / (mass * G0);
+  const accel = G0 * Math.max(thrustToWeight - 0.02, 0.02);
+  return liftOffMs * liftOffMs / (2 * accel) / M_PER_FT * TAKEOFF_FIELD_FACTOR;
+}
+
+/* The timetable. The type is chosen first and the airfields second, or the
+   sky comes out as a dozen A319neos because two of the five fields are short
+   enough to take only the smallest. Departures are evenly spaced with a hashed
+   jitter, because fourteen random ones in an hour leave the sky empty for
+   minutes at a time. (traffic.schedule) */
+function trafficSchedule(seed, fields) {
+  if (fields.length < 2) return [];
+  const byLength = fields.slice().sort((p, q) => q.lengthFt - p.lengthFt);
+  const airliners = FLEET.filter(a => a.key !== "belugaxl");
+  const out = [], slotS = TRAFFIC_CYCLE_S / SCHEDULED_FLIGHTS;
+  for (let i = 0; i < SCHEDULED_FLIGHTS; i++) {
+    /* Step through the fleet from the hashed start until a type turns up with
+       two fields it can actually work between. Falling back to "the two
+       longest runways" is not the same thing -- the second longest is only the
+       second longest, and it put an A321XLR needing 8,983 ft into Crowmarsh's
+       8,800. Changing the type keeps every service flyable. */
+    const first = Math.floor(hash01(i, 7, seed + 3041) * airliners.length);
+    let a = null, usable = [];
+    for (let k = 0; k < airliners.length; k++) {
+      const candidate = airliners[(first + k) % airliners.length];
+      const fits = fields.filter(f => f.lengthFt >= takeoffLengthFt(candidate) * RUNWAY_MARGIN_FT);
+      if (fits.length >= 2) { a = candidate; usable = fits; break; }
+    }
+    if (!a) continue;
+    const origin = usable[Math.floor(hash01(i, 3, seed + 1013) * usable.length)];
+    const step = 1 + Math.floor(hash01(i, 5, seed + 2027) * (usable.length - 1));
+    const destination = usable[(usable.indexOf(origin) + step) % usable.length];
+    out.push({ callsign: trafficCallsign(seed, i), key: a.key,
+               origin, destination,
+               departureS: (i + hash01(i, 17, seed + 4051)) * slotS });
+  }
+  return out;
+}
+
+/* Each service costed once, by a throwaway state of its own type -- so a
+   traffic aeroplane climbs at the rate the model says that type climbs at and
+   cruises where the flight planner would have put it. */
+function buildTrafficProfiles(seed, fields) {
+  const profiles = [];
+  for (const flight of trafficSchedule(seed, fields)) {
+    const a = FLEET_BY_KEY[flight.key];
+    const waypoints = [Waypoint.fromAirfield(flight.origin),
+                       Waypoint.fromAirfield(flight.destination)];
+    const probeState = {
+      x: flight.origin.x, y: flight.origin.y, alt: flight.origin.elev,
+      mass: a.oew + a.payload + a.startFuel, fuel: a.startFuel,
+      tas: profileTasMs(a, flight.origin.elev), gamma: 0, bank: 0, pitch: 0,
+      cmdPitch: 0, flaps: 0, gear: false, spoilers: false, beta: 0, rudder: 0,
+      throttle: 60, onGround: false, n1: [], enginesFailed: [],
+      enginesRunning: true, route: new Route(waypoints)
+    };
+    settleEngines(a, probeState);
+    const plan = planRoute(a, probeState);
+    if (!plan) continue;
+    const from = waypoints[0], to = waypoints[1];
+    const legNm = to.distanceNm(from.x, from.y);
+    if (!(legNm > 0)) continue;
+    profiles.push({
+      flight,
+      legs: [[from.x, from.y, to.x, to.y, legNm, to.bearingFrom(from.x, from.y)]],
+      totalNm: legNm,
+      originFt: flight.origin.elev, fieldFt: flight.destination.elev,
+      cruiseFt: plan.cruiseFt,
+      climbS: plan.climbTimeS, cruiseS: plan.cruiseTimeS, descentS: plan.descentTimeS,
+      durationS: plan.climbTimeS + plan.cruiseTimeS + plan.descentTimeS,
+      climbNm: plan.climbDistanceNm, descentNm: plan.descentDistanceNm,
+      cruiseNm: Math.max(0, legNm - plan.climbDistanceNm - plan.descentDistanceNm)
+    });
+  }
+  return profiles;
+}
+
+function trafficAlong(profile, distanceNm) {
+  let remaining = distanceNm;
+  for (const [x0, y0, x1, y1, legNm, track] of profile.legs) {
+    if (remaining <= legNm || legNm <= 0) {
+      const f = legNm <= 0 ? 0 : remaining / legNm;
+      return [x0 + (x1 - x0) * f, y0 + (y1 - y0) * f, track];
+    }
+    remaining -= legNm;
+  }
+  const last = profile.legs[profile.legs.length - 1];
+  return [last[2], last[3], last[5]];
+}
+
+/* Where a flight is `ageS` after it rolled, or null before and after -- an
+   aeroplane on a stand is not traffic. (traffic.FlightProfile.at) */
+function trafficAt(profile, ageS) {
+  if (ageS < 0 || ageS > profile.durationS) return null;
+  let distance, altitude, phase;
+  if (ageS <= profile.climbS && profile.climbS > 0) {
+    const f = ageS / profile.climbS;
+    distance = profile.climbNm * f;
+    altitude = profile.originFt + (profile.cruiseFt - profile.originFt) * f;
+    phase = "climb";
+  } else if (ageS <= profile.climbS + profile.cruiseS) {
+    const f = profile.cruiseS > 0 ? (ageS - profile.climbS) / profile.cruiseS : 0;
+    distance = profile.climbNm + profile.cruiseNm * f;
+    altitude = profile.cruiseFt;
+    phase = "cruise";
+  } else {
+    const f = profile.descentS > 0
+      ? (ageS - profile.climbS - profile.cruiseS) / profile.descentS : 1;
+    distance = profile.climbNm + profile.cruiseNm + profile.descentNm * f;
+    altitude = profile.cruiseFt + (profile.fieldFt - profile.cruiseFt) * f;
+    phase = "descent";
+  }
+  const [x, y, track] = trafficAlong(profile, distance);
+  return { callsign: profile.flight.callsign, key: profile.flight.key,
+           x, y, alt: altitude, hdg: track, phase,
+           destination: profile.flight.destination.ident };
+}
+
+/* How much a contact matters. Model data with one owner, so neither build
+   decides for itself what counts as close. (traffic.band_for) */
+function trafficBand(rangeNm, relativeFt) {
+  const height = Math.abs(relativeFt);
+  if (rangeNm <= TRAFFIC_THREAT_NM && height <= TRAFFIC_THREAT_FT) return "threat";
+  if (rangeNm <= TRAFFIC_TRAFFIC_NM && height <= TRAFFIC_TRAFFIC_FT) return "traffic";
+  if (rangeNm <= TRAFFIC_PROXIMATE_NM && height <= TRAFFIC_PROXIMATE_FT) return "proximate";
+  return "distant";
+}
+
+let trafficProfiles = null;
+function trafficNear(s, radiusNm = 40) {
+  if (trafficProfiles === null) trafficProfiles = buildTrafficProfiles(WORLD_SEED, buildAuthored());
+  const out = [];
+  for (const profile of trafficProfiles) {
+    const age = ((s.t - profile.flight.departureS) % TRAFFIC_CYCLE_S
+                 + TRAFFIC_CYCLE_S) % TRAFFIC_CYCLE_S;
+    const c = trafficAt(profile, age);
+    if (!c) continue;
+    c.rangeNm = Math.hypot(c.x - s.x, c.y - s.y);
+    if (c.rangeNm > radiusNm) continue;
+    c.bearingDeg = wrap360(deg(Math.atan2(c.x - s.x, c.y - s.y)));
+    c.relativeFt = c.alt - s.alt;
+    c.band = trafficBand(c.rangeNm, c.relativeFt);
+    out.push(c);
+  }
+  out.sort((p, q) => p.rangeNm - q.rangeNm);
+  return out;
+}
+
 /* ---------- session state ---------- */
 let craft = FLEET_BY_KEY["a350"];
 let weather = new WeatherState(WEATHER_BY_KEY["clear"], WORLD_SEED);
@@ -4305,6 +4490,50 @@ function render() {
     gl.drawArrays(gl.TRIANGLES, 0, m.count);
   }
 
+  /* The other aeroplanes, out of the window.
+
+     This is what the whole traffic model is for: a diamond on the navigation
+     display is information, and an A380 crossing two miles ahead at the same
+     level is an experience. They cost almost nothing to draw -- the per-type
+     vertex buffers already exist for the chase view, so a contact is a model
+     matrix and a draw call.
+
+     Only within fifteen miles: past that an airliner is well under a pixel,
+     and drawing it would be a twinkle with nothing behind it. */
+  const seen = trafficNear(s, 15);
+  if (seen.length) {
+    gl.useProgram(progModel);
+    gl.uniformMatrix4fv(progModel.u.uVP, false, VP);
+    gl.uniform3fv(progModel.u.uCam, cam);
+    gl.uniform3fv(progModel.u.uSun, sun);
+    gl.uniform3fv(progModel.u.uHaze, haze);
+    gl.uniform1f(progModel.u.uFogDist, fogDist);
+    gl.uniform1f(progModel.u.uDay, day);
+    gl.uniform3fv(progModel.u.uSunTint, tint);
+    for (const t of seen) {
+      const other = FLEET_BY_KEY[t.key];
+      if (!other) continue;
+      /* Wings level and pitched where its own flight path is: traffic is
+         evaluated rather than flown, so it has no attitude of its own and
+         inventing a roll would be inventing a manoeuvre. The climb and
+         descent angles are real -- they come out of the profile. */
+      const pitch = t.phase === "climb" ? 6 : (t.phase === "descent" ? -3 : 2);
+      const ab = basis(t.hdg, pitch, 0);
+      MODELM[0] = ab.R[0]; MODELM[1] = ab.R[1]; MODELM[2]  = ab.R[2];  MODELM[3]  = 0;
+      MODELM[4] = ab.F[0]; MODELM[5] = ab.F[1]; MODELM[6]  = ab.F[2];  MODELM[7]  = 0;
+      MODELM[8] = ab.U[0]; MODELM[9] = ab.U[1]; MODELM[10] = ab.U[2];  MODELM[11] = 0;
+      MODELM[12] = t.x * 1852; MODELM[13] = t.y * 1852;
+      MODELM[14] = t.alt * M_PER_FT; MODELM[15] = 1;
+      NORMALM.set([MODELM[0], MODELM[1], MODELM[2], MODELM[4], MODELM[5], MODELM[6],
+                   MODELM[8], MODELM[9], MODELM[10]]);
+      const mesh = modelBuffers(other);
+      gl.bindVertexArray(mesh.vao);
+      gl.uniformMatrix4fv(progModel.u.uModel, false, MODELM);
+      gl.uniformMatrix3fv(progModel.u.uNormalM, false, NORMALM);
+      gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
+    }
+  }
+
   hctx.clearRect(0, 0, VW, VH);
   drawPrecipitation(hctx, VW, VH, s);
   if (view === "cockpit") drawHud(hctx, VW, VH, s, a);
@@ -5541,6 +5770,44 @@ function drawNd(c, x, y, d, a, s, readout) {
       }
     }
   }
+  /* Traffic. The Airbus symbology: a hollow diamond for something out there,
+     filled once it is close, an amber circle for a proper conflict and a red
+     square for one inside a mile and a half. Which of those it is comes from
+     `trafficBand` in the model, so the text simulator calls the same contact
+     the same thing. Relative altitude in hundreds of feet above or below, and
+     an arrow if it is climbing or descending. */
+  for (const t of trafficNear(s, range * 1.15)) {
+    const [tx, ty] = project(t.x, t.y);
+    const r = d * 0.016;
+    const colour = t.band === "threat" ? C_RED
+                 : t.band === "traffic" ? C_AMBER
+                 : C_WHITE;
+    c.save();
+    c.strokeStyle = colour; c.fillStyle = colour; c.lineWidth = d * 0.004;
+    c.beginPath();
+    if (t.band === "threat") {
+      c.rect(tx - r * 0.8, ty - r * 0.8, r * 1.6, r * 1.6);
+      c.fill();
+    } else if (t.band === "traffic") {
+      c.arc(tx, ty, r * 0.8, 0, Math.PI * 2);
+      c.fill();
+    } else {
+      c.moveTo(tx, ty - r); c.lineTo(tx + r, ty);
+      c.lineTo(tx, ty + r); c.lineTo(tx - r, ty);
+      c.closePath();
+      t.band === "proximate" ? c.fill() : c.stroke();
+    }
+    c.restore();
+    const hundreds = Math.min(Math.abs(Math.round(t.relativeFt / 100)), 99);
+    const label = (t.relativeFt >= 0 ? "+" : "-") + String(hundreds).padStart(2, "0");
+    txt(c, label, tx, ty + (t.relativeFt >= 0 ? -r * 1.9 : r * 1.9),
+        d * 0.026, colour);
+    if (t.phase !== "cruise") {
+      txt(c, t.phase === "climb" ? "\u2191" : "\u2193",
+          tx + r * 1.5, ty, d * 0.028, colour);
+    }
+  }
+
   c.restore();
 
   /* The compass arc: ninety degrees of it, ticked every ten. */

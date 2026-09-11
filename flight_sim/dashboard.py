@@ -11,6 +11,8 @@ from . import atmosphere as atm
 from . import engines
 from . import failures
 from . import fbw
+from . import navigation
+from . import traffic
 
 HORIZON_WIDTH = 33
 
@@ -767,4 +769,58 @@ def weather_menu():
     for index, profile in enumerate(wx.WEATHER_OPTIONS, start=1):
         lines.append("**{}. {}** — {}".format(index, profile.name, profile.summary))
         lines.append("")
+    return "\n".join(lines)
+
+
+def traffic_block(sim, radius_nm=40.0):
+    """What else is in the sky, as a text TCAS.
+
+    The same `traffic.near` the browser's navigation display draws its diamonds
+    from, so the two front ends cannot disagree about who is out there -- and
+    the band that decides how urgent a contact is comes from the model, not
+    from this table deciding for itself what counts as close.
+    """
+    contacts = sim.traffic_near(radius_nm)
+    if not contacts:
+        return (
+            "### Traffic\n\nNothing within {:.0f} nm. The sky is your own."
+            .format(radius_nm)
+        )
+
+    marks = {
+        traffic.THREAT: "!!",
+        traffic.TRAFFIC: "!",
+        traffic.PROXIMATE: "·",
+        traffic.DISTANT: "",
+    }
+    lines = [
+        "### Traffic",
+        "",
+        "| | Callsign | Type | Bearing | Range | Relative | Going to |",
+        "| --- | --- | --- | ---: | ---: | ---: | --- |",
+    ]
+    for contact in contacts:
+        craft = fleet.FLEET_BY_KEY.get(contact.aircraft_key)
+        # Feet above or below in hundreds, the way a TCAS writes it -- and
+        # capped at two digits, because the real display has two digits and
+        # anything past ninety-nine hundred feet is not traffic, it is scenery.
+        hundreds = navigation.round_half_up(contact.relative_altitude_ft / 100.0)
+        capped = min(abs(hundreds), 99.0)
+        relative = "{}{:02.0f}".format("+" if hundreds >= 0 else "-", capped)
+        lines.append(
+            "| {} | {} | {} | {:03.0f}° | {:.1f} nm | {} | {} |".format(
+                marks[contact.band],
+                contact.callsign,
+                craft.name if craft else contact.aircraft_key,
+                contact.bearing_deg,
+                contact.range_nm,
+                relative,
+                contact.destination,
+            )
+        )
+    closest = contacts[0]
+    if closest.band == traffic.THREAT:
+        lines.append("")
+        lines.append("**{} is inside a mile and a half and within four hundred "
+                     "feet.**".format(closest.callsign))
     return "\n".join(lines)

@@ -32,6 +32,7 @@ Exits non-zero on the first disagreement, and says which one.
 """
 
 import json
+import math
 import sys
 
 sys.path.insert(0, __file__.rsplit("/web/", 1)[0])
@@ -44,6 +45,7 @@ from flight_sim import failures as broken  # noqa: E402
 from flight_sim import fbw  # noqa: E402
 from flight_sim import navigation  # noqa: E402
 from flight_sim import physics  # noqa: E402
+from flight_sim import traffic  # noqa: E402
 from flight_sim import weather as wx  # noqa: E402
 from flight_sim.game import Session  # noqa: E402
 from flight_sim.terrain import Terrain  # noqa: E402
@@ -503,6 +505,113 @@ def descent_failures(data):
     return out
 
 
+def traffic_failures(data):
+    """The sky, which is the easiest thing here to let drift unnoticed.
+
+    Traffic is evaluated rather than simulated, so every contact's position is
+    a pure function of the seed and the clock and must agree *exactly*. And
+    unlike a speed mark or an ECAM line there is nothing on the screen to check
+    it against: if the two builds put different aeroplanes in different places,
+    nothing else in the simulator would ever notice.
+    """
+    if "traffic" not in data:
+        return ["the browser dump has no traffic section -- re-run parity_check.js"]
+
+    out = []
+    _terrain, airfields = physics.world_for_seed(SEED)
+    profiles = physics.traffic_for_seed(SEED)
+    theirs = data["traffic"]
+
+    mine_schedule = [
+        {
+            "callsign": p.flight.callsign, "key": p.flight.aircraft_key,
+            "origin": p.flight.origin.ident,
+            "destination": p.flight.destination.ident,
+            "departureS": p.flight.departure_s, "cruiseFt": p.cruise_ft,
+            "durationS": p.duration_s, "totalNm": p.total_nm,
+            "climbNm": p.climb_nm, "descentNm": p.descent_nm,
+        }
+        for p in profiles
+    ]
+    if len(mine_schedule) != len(theirs["schedule"]):
+        return ["the timetable has {} services in Python and {} in the browser"
+                .format(len(mine_schedule), len(theirs["schedule"]))]
+
+    for mine, browser in zip(mine_schedule, theirs["schedule"]):
+        where = "{} {}".format(mine["callsign"], mine["key"])
+        for field in ("callsign", "key", "origin", "destination"):
+            if mine[field] != browser[field]:
+                out.append("{}: {} is {!r} in Python and {!r} in the browser"
+                           .format(where, field, mine[field], browser[field]))
+        for field in ("departureS", "cruiseFt", "durationS", "totalNm",
+                      "climbNm", "descentNm"):
+            a, b = mine[field], browser[field]
+            if abs(a - b) > max(PLAN_TOLERANCE, abs(a) * PLAN_TOLERANCE):
+                out.append("{}: {} is {:,.6f} in Python and {:,.6f} in the "
+                           "browser".format(where, field, a, b))
+
+    home = airfields.authored.fields[0]
+    airborne_seen = 0
+    phases_seen = set()
+    for elapsed_s, browser_sky in zip(data["trafficTimes"], theirs["skies"]):
+        mine_sky = traffic.sky_at(profiles, elapsed_s)
+        airborne_seen += len(mine_sky)
+        if len(mine_sky) != len(browser_sky):
+            out.append("t={}s: {} aeroplanes airborne in Python and {} in the "
+                       "browser".format(elapsed_s, len(mine_sky), len(browser_sky)))
+            continue
+        for contact, browser_contact in zip(mine_sky, browser_sky):
+            where = "t={}s {}".format(elapsed_s, contact.callsign)
+            if contact.callsign != browser_contact["callsign"]:
+                out.append("{}: the browser has {} here instead"
+                           .format(where, browser_contact["callsign"]))
+                continue
+            if contact.phase != browser_contact["phase"]:
+                out.append("{}: phase is {} in Python and {} in the browser"
+                           .format(where, contact.phase, browser_contact["phase"]))
+            for name, a in (("x", contact.x_nm), ("y", contact.y_nm),
+                            ("alt", contact.altitude_ft),
+                            ("hdg", contact.heading_deg)):
+                b = browser_contact[name]
+                if abs(a - b) > max(PLAN_TOLERANCE, abs(a) * PLAN_TOLERANCE):
+                    out.append("{}: {} is {:,.6f} in Python and {:,.6f} in the "
+                               "browser".format(where, name, a, b))
+            phases_seen.add(contact.phase)
+            # The band on the *real* geometry too, so the pair really is what
+            # each build would paint for this contact.
+            range_nm = math.hypot(contact.x_nm - home.x_nm, contact.y_nm - home.y_nm)
+            band = traffic.band_for(range_nm, contact.altitude_ft - 20000.0)
+            if band != browser_contact["band"]:
+                out.append("{}: the TCAS band is {} in Python and {} in the "
+                           "browser".format(where, band, browser_contact["band"]))
+
+    # The TCAS band on a grid, because it is a pure function of range and
+    # height and real traffic almost never comes close enough to exercise the
+    # near thresholds: a band moved by half a mile went through ten sampled
+    # skies without a murmur.
+    for (range_nm, height_ft), browser_band in zip(data["bandCases"], theirs["bands"]):
+        band = traffic.band_for(range_nm, height_ft)
+        if band != browser_band:
+            out.append("{:.1f} nm / {:+,.0f} ft: the band is {} in Python and {} "
+                       "in the browser".format(range_nm, height_ft, band, browser_band))
+
+    # The vacuity guards, for the same reason the plan section has one. A sky
+    # with nothing in it compares two builds that both drew nothing -- and a
+    # sample where nobody is ever in cruise cannot see a cruise altitude that
+    # is two hundred feet out, which is exactly what it could not see.
+    if airborne_seen == 0:
+        out.append("no aeroplane is airborne at any sampled time -- the traffic "
+                   "section is comparing two empty skies")
+    missing = {"climb", "cruise", "descent"} - phases_seen
+    if missing:
+        out.append("no sampled sky has anybody in {} -- the traffic section "
+                   "cannot see a fault in that phase".format(
+                       " or ".join(sorted(missing))))
+    if len(set(traffic.band_for(r, h) for r, h in data["bandCases"])) < 4:
+        out.append("the band grid does not reach all four TCAS bands")
+    return out
+
+
 def main():
     if len(sys.argv) < 2:
         print("usage: parity_check.py <json from parity_check.js>", file=sys.stderr)
@@ -511,7 +620,8 @@ def main():
     by_name = {c["name"]: c for c in data["cases"]}
 
     failures = (weather_failures(data) + plan_failures(data)
-                + debrief_failures(data) + descent_failures(data))
+                + debrief_failures(data) + descent_failures(data)
+                + traffic_failures(data))
     for row in data["rows"]:
         case = by_name[row["case"]]
         where = "{} / {}".format(row["key"], row["case"])
@@ -597,10 +707,11 @@ def main():
             )
 
     print("{} states, {} types, {} weather cases, {} flight plans, "
-          "{} debriefs, {} descents".format(
+          "{} debriefs, {} descents, {} skies".format(
               len(data["rows"]), len({r["key"] for r in data["rows"]}),
               len(data.get("weather", ())), len(data.get("plans", ())),
-              len(data.get("debriefs", ())), len(data.get("descents", ()))))
+              len(data.get("debriefs", ())), len(data.get("descents", ())),
+              len(data.get("trafficTimes", ()))))
     if failures:
         print("\nDISAGREEMENTS ({}):".format(len(failures)))
         for line in failures[:40]:

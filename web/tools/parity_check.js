@@ -152,6 +152,32 @@ const DESCENT_CASES = [
   { key: 'a320neo',  route: ['ANFL', 'VSPR'],                          alt: 1000,  massT: 71.3 },
 ];
 
+/* The sky. Traffic is evaluated rather than simulated, so a contact's position
+   is a pure function of the seed and the clock and must agree *exactly* -- and
+   there is nothing on the screen to check it against, so if the two builds put
+   different aeroplanes in different places nothing else would ever notice.
+   Sampled across the timetable's cycle, including a moment in each phase. */
+/* Times chosen so that somebody is climbing, somebody is cruising and
+   somebody is descending across the sample. Without that the comparison is
+   vacuous in exactly the way the flight-plan section's was: a cruise altitude
+   deliberately broken by two hundred feet went through an eight-moment sample
+   unnoticed, because on these short sectors almost nothing is ever in cruise. */
+const TRAFFIC_TIMES = [0, 200, 440, 600, 920, 1200, 1440, 2100, 2880, 3300];
+
+/* The TCAS band is a pure function of range and height, so it is compared on a
+   grid rather than on wherever the timetable happens to put two aeroplanes --
+   real traffic on real routes almost never comes inside three and a half miles,
+   so a threshold moved by half a mile sailed through the sampled skies. The
+   pairs straddle every threshold by a whisker, which is the same reason four of
+   the EGT states sit one degree either side of theirs. */
+const BAND_CASES = [
+  [1.4, 390], [1.6, 390], [1.4, 410], [1.5, 400],
+  [3.4, 890], [3.6, 890], [3.4, 910], [3.5, 900],
+  [5.9, 1190], [6.1, 1190], [5.9, 1210], [6.0, 1200],
+  [0.2, 0], [0.2, -390], [0.2, -410], [2.0, -880], [2.0, -920],
+  [12.0, 100], [40.0, 0], [0.5, 5000], [0.5, -5000]
+];
+
 const PLAN_CASES = [
   { key: 'a320neo',  route: ['ANFL', 'KEBR'],                  alt: 4560, massT: 71.3, fuel: 12000 },
   { key: 'a320neo',  route: ['ANFL', 'KEBR', 'CROW', 'HRWD'],  alt: 4560, massT: 64.6, fuel: 9000 },
@@ -429,6 +455,37 @@ const DEBRIEF_CASES = [
     });
   }, DESCENT_CASES);
 
+  const traffic = await p.evaluate(([times, BAND_CASES]) => {
+    paused = true;
+    const fields = buildAuthored();
+    const profiles = buildTrafficProfiles(WORLD_SEED, fields);
+    return {
+      schedule: profiles.map(pr => ({
+        callsign: pr.flight.callsign, key: pr.flight.key,
+        origin: pr.flight.origin.ident, destination: pr.flight.destination.ident,
+        departureS: pr.flight.departureS, cruiseFt: pr.cruiseFt,
+        durationS: pr.durationS, totalNm: pr.totalNm,
+        climbNm: pr.climbNm, descentNm: pr.descentNm
+      })),
+      bands: BAND_CASES.map(([r, ft]) => trafficBand(r, ft)),
+      skies: times.map(t => {
+        const home = fields[0];
+        const out = [];
+        for (const pr of profiles) {
+          const age = ((t - pr.flight.departureS) % TRAFFIC_CYCLE_S
+                       + TRAFFIC_CYCLE_S) % TRAFFIC_CYCLE_S;
+          const c = trafficAt(pr, age);
+          if (!c) continue;
+          const rangeNm = Math.hypot(c.x - home.x, c.y - home.y);
+          out.push({ callsign: c.callsign, x: c.x, y: c.y, alt: c.alt,
+                     hdg: c.hdg, phase: c.phase, rangeNm: rangeNm,
+                     band: trafficBand(rangeNm, c.alt - 20000) });
+        }
+        return out;
+      })
+    };
+  }, [TRAFFIC_TIMES, BAND_CASES]);
+
   const debriefs = await p.evaluate(cases => {
     paused = true;
     const fields = buildAuthored();
@@ -462,6 +519,7 @@ const DEBRIEF_CASES = [
     rotorSweep: ROTOR_SWEEP, weather, gusts,
     planCases: PLAN_CASES, plans, debriefCases: DEBRIEF_CASES, debriefs,
     descentCases: DESCENT_CASES, descents,
+    trafficTimes: TRAFFIC_TIMES, bandCases: BAND_CASES, traffic,
     minimumCruiseNm: MINIMUM_CRUISE_NM
   }, null, 1));
 })();

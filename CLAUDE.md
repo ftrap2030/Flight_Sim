@@ -7,7 +7,7 @@ and one freighter.
 
 ```bash
 python main.py                                  # play it
-python -m unittest discover -s tests -t .       # 562 tests, ~155 s
+python -m unittest discover -s tests -t .       # 583 tests, ~155 s
 python main.py --list                           # fleet and weather menus
 python main.py --spec a350-1000                 # one type's card and drawing
 open web/anfell.html                            # the browser build
@@ -35,6 +35,7 @@ flight_sim/
   engines.py       N1 as state, the spool, and the E/WD's numbers.
   failures.py      Seven failures, the V1 cut, and the ECAM lines.
   physics.py       FlightState, Readout, Simulator. The integrator.
+  traffic.py       The timetable, evaluated rather than simulated.
   narrator.py      The 251-clause prose engine.
   dashboard.py     Markdown instrument panel, spec cards, the law card.
   mapview.py       Track-up ASCII terrain plan view.
@@ -280,7 +281,7 @@ has an owner.
 
 ## Testing patterns
 
-- One test file per module, named for it. 562 tests, ~155 s.
+- One test file per module, named for it. 583 tests, ~155 s.
 - Assert against **published figures** where they exist: ISA density tables,
   cruise fuel flow, service ceilings, Vmca. These catch calibration drift that
   self-consistent tests never would.
@@ -650,6 +651,91 @@ the acceleration factor. "Three miles per thousand feet" turns out to be a
 narrowbody rule — the A320 family manages 2.9 to 3.3, the widebodies 3.6, and
 the BelugaXL, draggy enough that its L/D is 12.9, is the steepest of the fleet
 at 2.6.
+
+## The sky is evaluated, not simulated
+
+There are other aeroplanes now, and none of them is a Simulator. Every contact's
+position is a pure function of the seed, its route and the clock, read off the
+same `navigation.plan` profile the player's own flight plan is costed with.
+Nothing is integrated, nothing accumulates, and there is no traffic state
+anywhere on `FlightState`.
+
+Three things follow, and they are the whole reason it is built this way:
+
+- **It costs nothing.** A dozen aeroplanes are a dozen interpolations along
+  profiles computed once for the seed. `traffic_near` runs in 0.011 ms.
+- **Both builds put the same aeroplanes in the same places**, to the metre, so
+  `parity_check` compares them exactly rather than within a tolerance.
+- **Saving, resuming and replaying work for free**, because there is nothing to
+  save: ask for the sky at T and you get the sky at T.
+
+What is given up is that traffic cannot react — nobody goes around because you
+are slow on final. That is the honest trade, and it is the same one `failures.py`
+makes: what is here changes numbers the model already reads, and what is not is
+absent rather than faked.
+
+`traffic_for_seed` caches per seed exactly as `world_for_seed` does, because
+costing fourteen services means fourteen climb-cruise-descent integrations —
+about 360 ms, done lazily, so a session that never looks out of the window never
+pays for it. Each flight is planned by a throwaway Simulator **of its own type,
+placed on its departure runway**; left where `new_flight` puts it the plan
+carried a spurious ferry leg *and* started its climb from five thousand feet, so
+the browser and the Python chose cruise levels six thousand feet apart while
+their timetables matched exactly.
+
+### The timetable has to be flyable, and that is a physics question
+
+`takeoff_length_ft` asks what runway a type needs at the weight it flies here:
+lift off at 1.15 × the stall speed in the take-off configuration, having
+accelerated at what thrust-to-weight buys against rolling friction. It is not a
+published field length — those depend on temperature, pressure altitude and
+which engine is assumed to fail — but it is derived from figures the fleet
+already publishes rather than invented, and it only has to rank the fleet.
+
+Two mistakes it is worth not making again:
+
+- **Thrust-to-weight alone does not separate airliners.** The first version
+  divided thrust by weight and added a constant, and gave the whole fleet
+  3,500 ft to within four percent — so every runway accepted every type and the
+  A380 was scheduled into a 5,400 ft strip. The missing term is the wing:
+  lift-off speed goes as the root of wing loading and the distance as its
+  square.
+- **Do not apply a margin to a number that already has one.** The estimate
+  carries a 2.1 factor turning a ground roll into a field length; multiplying by
+  a further 1.25 double-counted and left four of eleven types able to work
+  between any two of these five runways.
+
+The **type is chosen before the airfields**, which is the way round that matters.
+Picking the pair first and then something that could use it gave a sky that was
+twelve A319neos out of fourteen, because two of the five fields are short enough
+to take only the smallest. And when a type has no two fields it can work
+between, the fix is to **choose a different type, not a different runway** — the
+first fallback took "the two longest runways", which put an A321XLR needing
+8,983 ft into Crowmarsh's 8,800.
+
+Departures are evenly spaced across the cycle with a hashed jitter inside each
+slot. Fourteen scattered at random left the sky empty for minutes at a time and
+holding eight aeroplanes at others; an even flow with slop in it is also what a
+timetable *is*. The cycle repeats, so the sky is never empty however long a
+session runs.
+
+### The TCAS band has one owner, and is guarded on a grid
+
+`traffic.band_for` decides whether a contact is distant, proximate, traffic or a
+threat, and both front ends colour their symbol from it — the same reason
+`engines.egt_band` exists. It works in range and height where a real box works in
+time to the closest point of approach, which is an honest simplification and is
+why the bands are named for what they mean rather than claiming to be a TA or an
+RA.
+
+It is compared **on a grid straddling every threshold**, not on wherever the
+timetable happens to put two aeroplanes: real traffic on real routes almost
+never comes inside three and a half miles, so a threshold moved by half a mile
+sailed through ten sampled skies untouched. The same reason four of the EGT
+states sit one degree either side of theirs. The sampled times are likewise
+chosen so somebody is climbing, somebody cruising and somebody descending —
+a cruise altitude broken by two hundred feet went unnoticed until they were,
+because on these short sectors almost nothing is ever in cruise.
 
 ## Things deliberately not modelled
 

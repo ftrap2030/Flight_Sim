@@ -27,6 +27,11 @@ takeoff, an ILS approach, a landing and synthesised sound.
   the broadband roar of the exhaust. The fan tone comes from the *published*
   fan diameter and blade count in `aircraft.py`, so each type sounds like its
   own engine. Radio-altitude callouts use the browser's speech synthesiser.
+* **Traffic** — fourteen scheduled services between the five home airfields,
+  drawn as TCAS symbols on the navigation display and as aeroplanes out of the
+  window within fifteen miles. Evaluated rather than simulated: a contact is an
+  interpolation along a profile `planRoute` computed once, so a dozen of them
+  cost a dozen interpolations a frame.
 * **Air** — the wind slows and backs near the ground, so a descent changes your
   drift; it breaks up in the lee of a ridge; and it goes up the windward face
   and down the other side, taking the aeroplane with it. Conditions drift over
@@ -102,6 +107,20 @@ same moment. Breaking the browser on purpose -- a T/D five percent early, a
 gradient two percent out, ALT CRZ annunciated as plain ALT, a distance-to-go
 measured straight-line instead of along the route -- fails it four times out of
 four, each naming the right thing.
+
+It covers the **sky** too -- the whole timetable and ten moments of it, exactly
+rather than within a tolerance, because traffic is evaluated rather than
+simulated and a contact's position is a pure function of the seed and the clock.
+This is the easiest thing in the build to let drift: unlike a speed mark or an
+ECAM line there is nothing on the screen to check it against, so if the two
+builds put different aeroplanes in different places nothing else would ever
+notice. The sampled times are chosen so somebody is climbing, somebody cruising
+and somebody descending -- a cruise altitude broken by two hundred feet went
+through an earlier eight-moment sample unseen, because on these short sectors
+almost nothing is ever in cruise. And the TCAS band is compared on a grid
+straddling every threshold rather than on wherever the timetable happens to put
+two aeroplanes, because real traffic almost never comes inside three and a half
+miles; a threshold moved half a mile had sailed straight through.
 
 It covers the weather too -- the evolved conditions, the wind through the
 friction layer, the rotor and the mountain wave over a hundred and twenty points
