@@ -39,6 +39,7 @@ sys.path.insert(0, __file__.rsplit("/web/", 1)[0])
 
 from flight_sim import aircraft as fleet  # noqa: E402
 from flight_sim import atmosphere as atm  # noqa: E402
+from flight_sim import atc  # noqa: E402
 from flight_sim import autopilot  # noqa: E402
 from flight_sim import engines  # noqa: E402
 from flight_sim import failures as broken  # noqa: E402
@@ -612,6 +613,117 @@ def traffic_failures(data):
     return out
 
 
+def atc_failures(data):
+    """The controller, whose output is text with nothing to check it against.
+
+    Two builds could clear the same aeroplane to two different levels, or say
+    "number two" where the other says "number one", and nothing else in the
+    simulator would ever notice. So both the words and the clearance behind
+    them are compared, case for case.
+    """
+    if "atc" not in data:
+        return ["the browser dump has no ATC section -- re-run parity_check.js"]
+
+    out = []
+    theirs = data["atc"]
+    deviations, slacks = [], []
+
+    # The semicircular rule on a grid, straddling every boundary.
+    for (track, wanted), browser_level in zip(data["levelCases"], theirs["levels"]):
+        mine = atc.semicircular_level_ft(track, wanted)
+        if mine != browser_level:
+            out.append("{:.0f}deg wanting {:,.0f} ft: the legal level is {:,.0f} in "
+                       "Python and {:,.0f} in the browser"
+                       .format(track, wanted, mine, browser_level))
+
+    for case, browser in zip(data["atcCases"], theirs["cases"]):
+        where = "{} {} FL{:03.0f} hdg {:03.0f}".format(
+            case["key"], "-".join(case["route"]), case["alt"] / 100.0, case["hdg"])
+        session = Session.new(case["key"], "clear", seed=SEED)
+        sim = session.sim
+        state = sim.state
+        field = sim.airfields.by_ident(
+            case["route"][-1], state.x_nm, state.y_nm, radius_nm=400.0)
+        state.altitude_ft = case["alt"]
+        state.heading_deg = case["hdg"]
+        state.x_nm = field.x_nm - math.sin(math.radians(case["hdg"])) * case["distNm"]
+        state.y_nm = field.y_nm - math.cos(math.radians(case["hdg"])) * case["distNm"]
+        state.tas_ms = sim.profile_tas_ms(case["alt"])
+        session.execute("route " + " ".join(case["route"]))
+        # A case may start already established on a level and drifted off it,
+        # which is the only way to reach the branch that decides whether the
+        # aeroplane is on its clearance. Set after `execute`, which owns the
+        # route and nothing else.
+        state.atc_cleared_altitude_ft = case.get("clearedFt")
+        state.atc_level_reached = bool(case.get("levelReached", False))
+        state.atc_off_level_s = float(case.get("offLevelS", 0.0))
+        said = [m.text for m in atc.update(sim, tick_s=10.0)]
+        mine = atc.clearance(sim)
+        deviations.append(abs(mine["deviation_ft"]))
+        guidance = sim.descent_guidance()
+        if guidance is not None:
+            slacks.append(guidance.distance_to_go_nm - guidance.top_of_descent_nm)
+
+        # What the controller actually said, word for word. A clearance the two
+        # builds agree on but describe differently is still two controllers.
+        if said != browser["said"]:
+            out.append("{}: Python says {!r} and the browser says {!r}"
+                       .format(where, said, browser["said"]))
+
+        for name, browser_name in (("callsign", "callsign"),
+                                   ("level_text", "levelText")):
+            if mine[name] != browser[browser_name]:
+                out.append("{}: {} is {!r} in Python and {!r} in the browser"
+                           .format(where, name, mine[name], browser[browser_name]))
+        for name, browser_name in (("cleared_altitude_ft", "clearedAltitudeFt"),
+                                   ("deviation_ft", "deviationFt")):
+            a, b = mine[name], browser[browser_name]
+            if abs(a - b) > max(PLAN_TOLERANCE, abs(a) * PLAN_TOLERANCE):
+                out.append("{}: {} is {:,.6f} in Python and {:,.6f} in the browser"
+                           .format(where, name, a, b))
+        for name, browser_name in (("descent_cleared", "descentCleared"),
+                                   ("sequence", "sequence"),
+                                   ("on_clearance", "onClearance")):
+            if mine[name] != browser[browser_name]:
+                out.append("{}: {} is {} in Python and {} in the browser"
+                           .format(where, name, mine[name], browser[browser_name]))
+
+    # The vacuity guards, the same lesson a third time. A set of cases that
+    # never gets cleared to descend, or is always number one, compares two
+    # builds that both did the easy thing.
+    if not any(c["descentCleared"] for c in theirs["cases"]):
+        out.append("no ATC case is ever cleared to descend -- the section "
+                   "cannot see a descent clearance that differs")
+    if len({atc.semicircular_level_ft(t, w) % 2000.0
+            for t, w in data["levelCases"]}) < 2:
+        out.append("the level grid never reaches both sides of the "
+                   "semicircular rule")
+
+    # The two thresholds have to be *asked about*, and neither was. Every case
+    # sat either exactly on its level or a thousand feet off it, and none was
+    # within ten miles of needing its descent -- so widening the tolerance by
+    # fifty feet and bringing the descent clearance in by two miles both went
+    # through a passing run untouched. A guard that cannot see a constant move
+    # is not guarding it, which is the rotor sweep's lesson a fourth time.
+    near_ft = 0.1 * atc.LEVEL_TOLERANCE_FT
+    if not any(atc.LEVEL_TOLERANCE_FT - near_ft <= ft <= atc.LEVEL_TOLERANCE_FT
+               for ft in deviations):
+        out.append("no ATC case sits just inside the level tolerance -- a "
+                   "tolerance widened by fifty feet would not be seen")
+    if not any(atc.LEVEL_TOLERANCE_FT < ft <= atc.LEVEL_TOLERANCE_FT + near_ft
+               for ft in deviations):
+        out.append("no ATC case sits just outside the level tolerance -- a "
+                   "tolerance narrowed by fifty feet would not be seen")
+    margin = atc.DESCENT_CLEARANCE_MARGIN_NM
+    if not any(margin - 1.0 <= nm <= margin for nm in slacks):
+        out.append("no ATC case is just inside the descent clearance margin "
+                   "-- a margin brought in would not be seen")
+    if not any(margin < nm <= margin + 1.0 for nm in slacks):
+        out.append("no ATC case is just outside the descent clearance margin "
+                   "-- a margin pushed out would not be seen")
+    return out
+
+
 def main():
     if len(sys.argv) < 2:
         print("usage: parity_check.py <json from parity_check.js>", file=sys.stderr)
@@ -621,7 +733,7 @@ def main():
 
     failures = (weather_failures(data) + plan_failures(data)
                 + debrief_failures(data) + descent_failures(data)
-                + traffic_failures(data))
+                + traffic_failures(data) + atc_failures(data))
     for row in data["rows"]:
         case = by_name[row["case"]]
         where = "{} / {}".format(row["key"], row["case"])
@@ -707,11 +819,11 @@ def main():
             )
 
     print("{} states, {} types, {} weather cases, {} flight plans, "
-          "{} debriefs, {} descents, {} skies".format(
+          "{} debriefs, {} descents, {} skies, {} clearances".format(
               len(data["rows"]), len({r["key"] for r in data["rows"]}),
               len(data.get("weather", ())), len(data.get("plans", ())),
               len(data.get("debriefs", ())), len(data.get("descents", ())),
-              len(data.get("trafficTimes", ()))))
+              len(data.get("trafficTimes", ())), len(data.get("atcCases", ()))))
     if failures:
         print("\nDISAGREEMENTS ({}):".format(len(failures)))
         for line in failures[:40]:

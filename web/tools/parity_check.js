@@ -178,6 +178,53 @@ const BAND_CASES = [
   [12.0, 100], [40.0, 0], [0.5, 5000], [0.5, -5000]
 ];
 
+/* The controller. What it says is text on a screen with nothing to check it
+   against, so two builds could easily clear the same aeroplane to two
+   different levels and neither would ever notice. The levels straddle the
+   semicircular rule in both directions, and the distances straddle the
+   descent clearance. */
+const ATC_CASES = [
+  { key: 'a320neo', route: ['ANFL', 'CROW'], alt: 23000, hdg: 215, distNm: 150 },
+  { key: 'a320neo', route: ['ANFL', 'CROW'], alt: 23000, hdg: 35,  distNm: 150 },
+  { key: 'a350',    route: ['ANFL', 'CROW'], alt: 31000, hdg: 215, distNm: 200 },
+  { key: 'a350',    route: ['ANFL', 'CROW'], alt: 31000, hdg: 35,  distNm: 60  },
+  { key: 'a380',    route: ['ANFL', 'KEBR'], alt: 37000, hdg: 90,  distNm: 40  },
+  { key: 'a330neo', route: ['ANFL', 'CROW'], alt: 4000,  hdg: 270, distNm: 25  },
+  { key: 'a320neo', route: ['ANFL', 'CROW'], alt: 12000, hdg: 180, distNm: 300 },
+  /* The level tolerance, asked about from both sides and twice over. 290 ft
+     off the legal level is inside 300 and 310 is outside, so a tolerance moved
+     fifty feet either way changes what the controller says about one of these
+     four. The first pair is an aeroplane being given its level; the second is
+     already established on one and has drifted off it, which is the branch
+     that decides `onClearance` and is otherwise never reached here. Every
+     other case above is either exactly on its level or a thousand feet off,
+     and neither of those can tell 300 ft from 350. */
+  { key: 'a320neo', route: ['ANFL', 'CROW'], alt: 23290, hdg: 35, distNm: 150 },
+  { key: 'a320neo', route: ['ANFL', 'CROW'], alt: 23310, hdg: 35, distNm: 150 },
+  { key: 'a320neo', route: ['ANFL', 'CROW'], alt: 23290, hdg: 35, distNm: 150,
+    clearedFt: 23000, levelReached: true, offLevelS: 20 },
+  { key: 'a320neo', route: ['ANFL', 'CROW'], alt: 23310, hdg: 35, distNm: 150,
+    clearedFt: 23000, levelReached: true, offLevelS: 20 },
+  /* The descent clearance margin, straddled to half a mile: eighty miles out
+     this aeroplane is 11.9 nm short of needing its descent and at eighty-one
+     it is 12.4, so a margin moved in either direction flips exactly one of
+     them. Before these two the nearest case was five miles inside the margin
+     and the next a hundred outside, and moving the margin two miles changed
+     nothing anywhere. */
+  { key: 'a350', route: ['ANFL', 'CROW'], alt: 31000, hdg: 35, distNm: 80 },
+  { key: 'a350', route: ['ANFL', 'CROW'], alt: 31000, hdg: 35, distNm: 81 },
+];
+
+/* The semicircular rule on a grid, straddling every boundary -- the same
+   reason the TCAS bands are on a grid: a rule that only ever gets asked about
+   cruise levels an aeroplane happens to be at is barely asked at all. */
+const LEVEL_CASES = [
+  [10, 23400], [90, 23400], [170, 23400], [179, 23400], [181, 23400],
+  [190, 23400], [270, 23400], [350, 23400], [0, 23400], [359, 23400],
+  [90, 22600], [270, 22600], [90, 5200], [270, 5200],
+  [90, 3200], [270, 3200], [90, 4999], [90, 5001], [45, 40900], [225, 40900]
+];
+
 const PLAN_CASES = [
   { key: 'a320neo',  route: ['ANFL', 'KEBR'],                  alt: 4560, massT: 71.3, fuel: 12000 },
   { key: 'a320neo',  route: ['ANFL', 'KEBR', 'CROW', 'HRWD'],  alt: 4560, massT: 64.6, fuel: 9000 },
@@ -486,6 +533,46 @@ const DEBRIEF_CASES = [
     };
   }, [TRAFFIC_TIMES, BAND_CASES]);
 
+  const atcRows = await p.evaluate(([cases, levelCases]) => {
+    paused = true;
+    startMode = "airborne";
+    const fields = buildAuthored();
+    return {
+      levels: levelCases.map(([track, want]) => semicircularLevelFt(track, want)),
+      cases: cases.map(c => {
+        craft = FLEET_BY_KEY[c.key];
+        newFlight(true);
+        const field = fields.find(f => f.ident === c.route[c.route.length - 1]);
+        Object.assign(S, {
+          alt: c.alt, hdg: c.hdg, gamma: 0, bank: 0, flaps: 0, gear: false,
+          spoilers: false, beta: 0, rudder: 0, onGround: false, status: "flying",
+          x: field.x - Math.sin(rad(c.hdg)) * c.distNm,
+          y: field.y - Math.cos(rad(c.hdg)) * c.distNm,
+          atcClearedAltFt: c.clearedFt === undefined ? null : c.clearedFt,
+          atcDescentCleared: false, atcSequence: 0,
+          atcOffLevelS: c.offLevelS || 0, atcLevelReached: !!c.levelReached,
+          atcChases: 0, atcDeviationS: 0, atcMessages: []
+        });
+        S.tas = profileTasMs(craft, c.alt);
+        S.route = new Route(c.route.map(id =>
+          Waypoint.fromAirfield(fields.find(f => f.ident === id))));
+        /* Placed rather than flown into, and the clock has not moved
+           between cases -- so the guidance is forced, exactly as the Python
+           side passes force=True for a parity sample. */
+        descentGuidance(craft, S, true);
+        const said = atcUpdate(craft, S, 10).map(m => m.text);
+        const cl = atcClearance(craft, S);
+        return {
+          said,
+          callsign: cl.callsign, clearedAltitudeFt: cl.clearedAltitudeFt,
+          levelText: cl.levelText, descentCleared: cl.descentCleared,
+          sequence: cl.sequence, deviationFt: cl.deviationFt,
+          onClearance: cl.onClearance
+        };
+      })
+    };
+  }, [ATC_CASES, LEVEL_CASES]);
+
   const debriefs = await p.evaluate(cases => {
     paused = true;
     const fields = buildAuthored();
@@ -520,6 +607,7 @@ const DEBRIEF_CASES = [
     planCases: PLAN_CASES, plans, debriefCases: DEBRIEF_CASES, debriefs,
     descentCases: DESCENT_CASES, descents,
     trafficTimes: TRAFFIC_TIMES, bandCases: BAND_CASES, traffic,
+    atcCases: ATC_CASES, levelCases: LEVEL_CASES, atc: atcRows,
     minimumCruiseNm: MINIMUM_CRUISE_NM
   }, null, 1));
 })();

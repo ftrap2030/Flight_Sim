@@ -32,6 +32,10 @@ takeoff, an ILS approach, a landing and synthesised sound.
   window within fifteen miles. Evaluated rather than simulated: a contact is an
   interpolation along a profile `planRoute` computed once, so a dozen of them
   cost a dozen interpolations a frame.
+* **Radio** — a controller's strip down the side of the glass: the level you
+  are held to, whether descent is cleared, and where you are in the landing
+  sequence. The clearance is `atc.clearance`'s, not this display's, so the strip
+  and the text simulator's `atc` table cannot disagree about what you were told.
 * **Air** — the wind slows and backs near the ground, so a descent changes your
   drift; it breaks up in the lee of a ridge; and it goes up the windward face
   and down the other side, taking the aeroplane with it. Conditions drift over
@@ -121,6 +125,26 @@ almost nothing is ever in cruise. And the TCAS band is compared on a grid
 straddling every threshold rather than on wherever the timetable happens to put
 two aeroplanes, because real traffic almost never comes inside three and a half
 miles; a threshold moved half a mile had sailed straight through.
+
+It covers **the controller** too -- thirteen clearances and a grid of legal
+levels -- and that is the section with the least to check it against of
+anything here: a clearance is text on a screen, so two builds could hold the
+same aeroplane to two different levels, or one say "number one" where the other
+says "number two", and nothing else in the simulator would ever notice. So the
+words are compared verbatim alongside the clearance behind them.
+
+Its cases sit **on the thresholds**, which they did not at first. Seven of them
+passed while the level tolerance was widened by fifty feet and the descent
+clearance brought in by two miles, because every case was either exactly on its
+level or a thousand feet off it, and none was within ten miles of needing its
+descent -- neither constant was ever asked about. Four now sit 290 and 310 feet
+off a legal level, twice over; two sit eighty and eighty-one miles out, which is
+11.9 and 12.4 miles short of needing the descent. And the run fails if those
+windows are ever empty again, which is the same vacuity guard the rotor sweep
+and the cruising flight plans carry. Breaking the browser on purpose -- the
+semicircular rule inverted, the tolerance moved either way, the descent
+clearance moved either way, a clearance phrased differently, the sequence
+counting aeroplanes going somewhere else -- fails it seven times out of seven.
 
 It covers the weather too -- the evolved conditions, the wind through the
 friction layer, the rotor and the mountain wave over a hundred and twenty points

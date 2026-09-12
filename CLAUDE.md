@@ -7,7 +7,7 @@ and one freighter.
 
 ```bash
 python main.py                                  # play it
-python -m unittest discover -s tests -t .       # 583 tests, ~155 s
+python -m unittest discover -s tests -t .       # 606 tests, ~167 s
 python main.py --list                           # fleet and weather menus
 python main.py --spec a350-1000                 # one type's card and drawing
 open web/anfell.html                            # the browser build
@@ -36,6 +36,8 @@ flight_sim/
   failures.py      Seven failures, the V1 cut, and the ECAM lines.
   physics.py       FlightState, Readout, Simulator. The integrator.
   traffic.py       The timetable, evaluated rather than simulated.
+  atc.py           Clearances that are measured against, and the
+                   landing sequence read off the traffic.
   narrator.py      The 251-clause prose engine.
   dashboard.py     Markdown instrument panel, spec cards, the law card.
   mapview.py       Track-up ASCII terrain plan view.
@@ -281,7 +283,7 @@ has an owner.
 
 ## Testing patterns
 
-- One test file per module, named for it. 583 tests, ~155 s.
+- One test file per module, named for it. 606 tests, ~167 s.
 - Assert against **published figures** where they exist: ISA density tables,
   cruise fuel flow, service ceilings, Vmca. These catch calibration drift that
   self-consistent tests never would.
@@ -737,6 +739,67 @@ chosen so somebody is climbing, somebody cruising and somebody descending —
 a cruise altitude broken by two hundred feet went unnoticed until they were,
 because on these short sectors almost nothing is ever in cruise.
 
+## A clearance that only prints is a label
+
+`atc.py` is written against `failures.py`'s rule, one level up: *a failure whose
+only consequence is a message about itself is not a failure, it is a label*, and
+the same is true of a clearance. So nothing in it merely prints.
+
+- The assigned level is **measured against**. Drift off it and you are told, and
+  the seconds are counted onto `atc_deviation_s`, which is the debrief's last
+  row.
+- Descent is **withheld**. `autopilot._fly_descent` will not leave ALT CRZ until
+  `atc_descent_cleared`, so arming DES an hour early sits there with the
+  controller's reason for it rather than quietly ignoring the arm.
+- The sequence is read off the **traffic model**. "Number two, follow the
+  A330-800neo" is a real aeroplane that is really closer to the field than you
+  are, and looking out of the window finds it.
+
+The controller is **state, not a pure function** — it answers you, so it has to
+remember what it last said — and that state lives on `FlightState` alongside the
+turbulence filter and the route, for the reason everything there does: a session
+resumed from disk must not have forgotten it was told to maintain FL230.
+
+`atc.clearance` is the display owner, like `fbw.characteristic_speeds` and
+`autopilot.fma` before it. A front end renders the strip; it does not work out
+what the controller must have meant.
+
+Three things in it were each wrong once:
+
+- **The descent clearance is a floor, not a target.** "Descend at your
+  discretion" means anywhere between your level and the field is legal, and only
+  going *below* it is a deviation. Compared as a target, an aeroplane flying its
+  profile exactly was permanently "1,668 feet above its cleared level" — the
+  controller booking the pilot for doing what it had just cleared.
+- **The repeat suppression keys on the message's *kind*, not its text.** The
+  deviation call has the number of feet in it and that number changes every
+  tick, so matching on the wording matched nothing and the same rebuke came out
+  forty times in a row. `MAX_CHASES` is the other half: a call that never stops
+  is a call nobody hears, which is what the terrain warning's approach
+  suppression already knew.
+- **Being on the way to a level is not being off it.** Cleared to climb, an
+  aeroplane is below its level for minutes; what makes that a deviation is not
+  the error but *not going there*, so before `atc_level_reached` the test is the
+  vertical speed's sign and the grace is forty seconds rather than ten.
+
+### And its guard needed cases on the thresholds, for the fourth time
+
+Seven clearance cases across five types passed while `LEVEL_TOLERANCE_FT` was
+moved from 300 to 350 and `DESCENT_CLEARANCE_MARGIN_NM` from 12 to 10, because
+every case sat either exactly on its level or a thousand feet off it, and the
+nearest was five miles inside the descent margin with the next a hundred miles
+outside. Neither constant was ever *asked about*. The fix is the TCAS grid's and
+the four EGT states': cases that straddle the number. Four sit 290 and 310 feet
+off a legal level — inside 300 and outside it — twice over, once being given the
+level and once already established on one and drifted, which is the branch that
+decides `on_clearance` and was otherwise unreachable. Two sit 80 and 81 miles
+out, which is 11.9 and 12.4 miles short of needing the descent, so the margin
+moved half a mile in either direction flips exactly one of them.
+
+And `parity_check.py` now **fails the run if those windows are empty**, the same
+vacuity guard the rotor sweep and the cruise-distance case carry, because the
+lesson is that a guard which cannot see a constant move is not guarding it.
+
 ## Things deliberately not modelled
 
 The A321 is the neo; there is no A321ceo.
@@ -750,5 +813,9 @@ be selected by hand.
 pressurisation, air data and inertial reference are absent because **every
 failure that is present changes a number the flight model already reads**. A
 failure whose only consequence is a message about itself is not a failure, it is
-a label. The ECAM has the E/WD but no system synoptic pages (ENG, FUEL, F/CTL,
+a label — and `atc.py` is written against the same rule. The ECAM has the E/WD but no system synoptic pages (ENG, FUEL, F/CTL,
 WHEEL) — those would be drawings of systems that do not exist.
+
+The controller has no voice, no frequency, no handoff between sectors and no
+phraseology parser. Those are scenery: the clearances that are here are the ones
+that change what the aeroplane may do.

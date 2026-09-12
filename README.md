@@ -654,13 +654,46 @@ Nothing is scheduled out of a field it could not leave — which is why Anfell
 International sees the A380 and Harrow Deep's 5,400 feet sees the A319neo, and
 why the type is picked before the pair of airfields rather than after.
 
+## And somebody is talking to you
+
+File a route and a controller picks you up. `atc` in the text simulator, and a
+radio strip down the side of the glass cockpit, show the same thing from the
+same model.
+
+What makes it a controller rather than a caption is that none of it merely
+prints:
+
+* **You are given a level, and held to it.** The semicircular rule decides which
+  one — eastbound odd, westbound even, the oldest rule in the air — so heading
+  north-east at 23,000 feet you keep it and heading south-west you are sent down
+  to 22,000. Drift more than three hundred feet off and you are asked to say
+  your intentions, and the seconds spent off it are counted into the debrief.
+* **Descent is withheld until you are cleared for it.** Arm the managed descent
+  an hour early and the autopilot sits in ALT CRZ where it belongs. Twelve miles
+  before the profile actually needs to start down, the clearance arrives — "*A20N65,
+  descend at your discretion, one hundred and six miles to run*" — and DES
+  engages. It is a **floor**, not a target: anywhere between your level and the
+  field is yours.
+* **You are given a place in the landing sequence**, and it is read off the
+  traffic: "*number two for CROW, follow the A330-800neo ahead of you*" is a real
+  aeroplane that is really closer to the field than you are, and you can look out
+  of the window and find it.
+
+The controller stops chasing you after three calls. A call that never stops is a
+call nobody hears — but the deviation still goes in the debrief, which is where
+being told off turns into something to do better next time.
+
+There is no voice, no frequency, no handoff between sectors and no phraseology
+to learn. Those would be scenery. What is here is the clearances that change
+what the aeroplane may do.
+
 ## Tests
 
 ```bash
 python -m unittest discover -s tests -t .
 ```
 
-583 tests, no dependencies. They check the atmosphere against published ISA
+606 tests, no dependencies. They check the atmosphere against published ISA
 tables, stall speed against its closed form, cruise fuel flow and service
 ceiling against published figures for every type, terrain determinism,
 save/load fidelity, that every prose template renders against a live context,
