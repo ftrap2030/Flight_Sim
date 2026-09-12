@@ -357,6 +357,9 @@ class Session:
         if command.kind == "show_traffic":
             return (dashboard.traffic_block(self.sim), False)
 
+        if command.kind == "show_atc":
+            return (dashboard.atc_block(self.sim), False)
+
         if command.kind == "clear_route":
             self.sim.route.clear()
             self.sim.sync_route()

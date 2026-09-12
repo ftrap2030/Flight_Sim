@@ -6,6 +6,7 @@ displays are laid out (PFD on the left, systems on the right).
 """
 
 from . import aircraft as fleet
+from . import atc
 from . import autopilot
 from . import atmosphere as atm
 from . import engines
@@ -823,4 +824,42 @@ def traffic_block(sim, radius_nm=40.0):
         lines.append("")
         lines.append("**{} is inside a mile and a half and within four hundred "
                      "feet.**".format(closest.callsign))
+    return "\n".join(lines)
+
+
+def atc_block(sim):
+    """What the controller has said, and what you are cleared to do.
+
+    The clearance comes from `atc.clearance`, which both front ends read --
+    so the radio strip in the browser and this table cannot disagree about
+    what the aeroplane has been told.
+    """
+    clearance = atc.clearance(sim)
+    if clearance is None:
+        return ("### Radio\n\nYou are not talking to anybody. File a route "
+                "with `route ANFL CROW` and the controller will pick you up.")
+
+    lines = [
+        "### Radio",
+        "",
+        "| | |",
+        "| --- | --- |",
+        "| Callsign | {} |".format(clearance["callsign"]),
+        "| Cleared to | {} |".format(clearance["level_text"]),
+        "| Descent | {} |".format(
+            "cleared at your discretion" if clearance["descent_cleared"]
+            else "not yet cleared"),
+    ]
+    if clearance["sequence"]:
+        lines.append("| Sequence | number {} |".format(clearance["sequence"]))
+    lines.append("| Clearance | {} |".format(
+        "complying" if clearance["on_clearance"]
+        else "**{:,.0f} ft off**".format(abs(clearance["deviation_ft"]))))
+
+    said = atc.messages(sim)
+    if said:
+        lines.extend(["", "**Last heard**", ""])
+        for message in said:
+            mark = "**" if message.urgent else ""
+            lines.append("- {}{}{}".format(mark, message.text, mark))
     return "\n".join(lines)

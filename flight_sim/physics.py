@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, asdict
 
 from . import aircraft as fleet
 from . import atmosphere as atm
+from . import atc as atc_module
 from . import autopilot
 from . import engines
 from . import failures
@@ -192,6 +193,19 @@ class FlightState:
     ap_approach: bool = False
     # Managed lateral: steer to the route rather than to a selected heading.
     ap_nav: bool = False
+    # What the controller has cleared, and how well it is being followed.
+    # State rather than a pure function because a controller responds to you
+    # and so has to remember what it last said -- and a session resumed from
+    # disk must not forget that it was told to maintain FL230.
+    atc_cleared_altitude_ft: float = None
+    atc_descent_cleared: bool = False
+    atc_sequence: int = 0
+    atc_off_level_s: float = 0.0
+    atc_level_reached: bool = False
+    atc_chases: int = 0
+    atc_deviation_s: float = 0.0
+    atc_messages: list = field(default_factory=list)
+
     # Managed vertical: fly the idle descent the flight plan was priced on,
     # starting at the top of descent. Armed in the cruise and engaged by the
     # distance to run, which is why it is a flag rather than a target -- the
@@ -1210,6 +1224,11 @@ class Simulator:
 
         if self.route.advance_if_reached(s.x_nm, s.y_nm):
             self.sync_route()
+
+        # The controller, once a tick and not once a substep: it is reacting to
+        # where the aeroplane is rather than to how it got there, and reading
+        # the descent guidance and the traffic is not free.
+        self.atc_messages_this_tick = atc_module.update(self, seconds)
 
         # Keep the surrounding world realised as the aircraft moves.
         if math.hypot(

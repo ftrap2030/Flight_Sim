@@ -709,6 +709,15 @@ def debrief_data(sim):
                        touchdown["remaining_ft"], "ft", 0),
         ])
 
+    # Last, and last in the browser too: `parity_check` compares the rows in
+    # order, so where a row goes is as much model data as what is in it.
+    # Only when there was a controller to disobey -- a clearance nobody issued
+    # cannot have been departed from, and a row reading "0 s" on every
+    # routeless flight is noise.
+    if state.atc_cleared_altitude_ft is not None:
+        rows.append(DebriefRow("atc_deviation", "Off your clearance",
+                               state.atc_deviation_s, "s", 0, "clock"))
+
     route = getattr(sim, "route", None)
     idents = [w.ident or w.name for w in route.waypoints] if route else []
 

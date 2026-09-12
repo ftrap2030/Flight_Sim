@@ -200,6 +200,23 @@
   }
   .warn.red { color: var(--efis-red); }
 
+  /* ---- the radio ---- */
+  /* Under the warnings, because a clearance is not a warning -- but in the
+     same column, because both are the aeroplane telling you something. */
+  #radio {
+    position: absolute; top: 58px; left: 50%; transform: translateX(-50%);
+    display: grid; gap: 3px; max-width: 56%; pointer-events: none;
+    justify-items: center;
+  }
+  #radio .call {
+    font-family: var(--font-inst); font-size: 12px; letter-spacing: .04em;
+    padding: 3px 10px; border: 1px solid var(--edge);
+    background: rgba(8,13,16,.86); color: var(--efis-cyan);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  #radio .call.urgent { color: var(--efis-amber); border-color: var(--efis-amber); }
+
   /* ---- the instrument bar ---- */
   #panel {
     border-top: 1px solid var(--edge);
@@ -422,6 +439,7 @@
     </div>
 
     <div id="warnstrip"></div>
+    <div id="radio"></div>
 
     <div id="ending">
       <div class="card">
@@ -2303,6 +2321,163 @@ function trafficNear(s, radiusNm = 40) {
   return out;
 }
 
+/* ==========================================================================
+   THE CONTROLLER  (atc.py)
+
+   A clearance that only printed text would be a label, which is the thing
+   `failures.py` refuses to do. So the level here is measured against, descent
+   is withheld until it is given, the approach sequence is read off the traffic
+   model, and all of it lands in the debrief.
+
+   The clearance is model data: this file draws it, it does not decide it.
+   ========================================================================== */
+const ATC_LEVEL_TOLERANCE_FT = 300;
+const ATC_LEVEL_GRACE_S = 10;
+const ATC_INSTRUCTION_GRACE_S = 40;
+const ATC_MAX_CHASES = 3;
+const ATC_DESCENT_MARGIN_NM = 12;
+const ATC_SEQUENCE_RANGE_NM = 35;
+const ATC_REPEAT_INTERVAL_S = 45;
+
+/* Eastbound odd, westbound even -- the oldest rule in the air, and why two
+   aeroplanes converging head-on are a thousand feet apart without anybody
+   arranging it. (atc.semicircular_level_ft) */
+function semicircularLevelFt(trackDeg, wantedFt) {
+  if (wantedFt < 5000) return Math.round(wantedFt / 500) * 500;
+  const eastbound = wrap360(trackDeg) >= 0 && wrap360(trackDeg) < 180;
+  let base = Math.floor(wantedFt / 1000);
+  if ((Math.abs(base % 2) === 1) !== eastbound) base -= 1;
+  return Math.max(5000, base * 1000);
+}
+
+function atcCallsign(a, s) {
+  return a.icao + String((WORLD_SEED % 89) + 10).padStart(2, "0");
+}
+
+function atcLevelText(ft) {
+  return ft >= 5000
+    ? "flight level " + String(Math.round(ft / 100)).padStart(3, "0")
+    : Math.round(ft).toLocaleString() + " feet";
+}
+
+/* Dedupe by *kind*, not by wording: the deviation call carries the number of
+   feet, which changes every frame. (atc._say) */
+function atcSay(s, kind, text, urgent) {
+  for (let i = s.atcMessages.length - 1, seen = 0; i >= 0 && seen < 6; i--, seen++) {
+    if (s.atcMessages[i].kind !== kind) continue;
+    if (s.t - s.atcMessages[i].elapsedS < ATC_REPEAT_INTERVAL_S) return null;
+    break;
+  }
+  const message = { kind, text, elapsedS: s.t, urgent: !!urgent };
+  s.atcMessages.push(message);
+  if (s.atcMessages.length > 40) s.atcMessages.splice(0, s.atcMessages.length - 40);
+  return message;
+}
+
+/* Who else is going to the same runway and how many are ahead -- straight off
+   the traffic model, so "number two" is an aeroplane you can look at. */
+function atcInboundSequence(s, ident) {
+  const field = airfieldsNear(s.x, s.y, 250).find(f => f.ident === ident);
+  if (!field) return [1, null];
+  const mine = Math.hypot(field.x - s.x, field.y - s.y);
+  if (mine > ATC_SEQUENCE_RANGE_NM) return [1, null];
+  const ahead = [];
+  for (const c of trafficNear(s, ATC_SEQUENCE_RANGE_NM * 2)) {
+    if (c.destination !== ident) continue;
+    const theirs = Math.hypot(field.x - c.x, field.y - c.y);
+    if (theirs < mine) ahead.push([theirs, c]);
+  }
+  ahead.sort((p, q) => p[0] - q[0]);
+  return [ahead.length + 1, ahead.length ? ahead[ahead.length - 1][1] : null];
+}
+
+function atcUpdate(a, s, dt) {
+  const fresh = [];
+  const destination = s.route ? s.route.destination : null;
+  if (!destination || s.onGround) {
+    s.atcClearedAltFt = null; s.atcDescentCleared = false; s.atcSequence = 0;
+    return fresh;
+  }
+  const g = descentGuidance(a, s);
+  const callsign = atcCallsign(a, s);
+
+  if (s.atcClearedAltFt === null) {
+    const level = semicircularLevelFt(s.hdg, s.ap.altFt !== null ? s.ap.altFt : s.alt);
+    s.atcClearedAltFt = level;
+    s.atcLevelReached = Math.abs(s.alt - level) <= ATC_LEVEL_TOLERANCE_FT;
+    const text = s.atcLevelReached
+      ? `${callsign}, maintain ${atcLevelText(level)}.`
+      : `${callsign}, ${level > s.alt ? "climb" : "descend"} to ${atcLevelText(level)}.`;
+    const m = atcSay(s, "level", text);
+    if (m) fresh.push(m);
+  }
+
+  const error = s.alt - s.atcClearedAltFt;
+  if (Math.abs(error) <= ATC_LEVEL_TOLERANCE_FT) s.atcLevelReached = true;
+
+  let deviating, complaint;
+  if (s.atcDescentCleared) {
+    /* "At your discretion" makes it a floor, not a target. */
+    deviating = error < -ATC_LEVEL_TOLERANCE_FT;
+    complaint = `${callsign}, you are below your cleared altitude.`;
+  } else if (s.atcLevelReached) {
+    deviating = Math.abs(error) > ATC_LEVEL_TOLERANCE_FT;
+    complaint = `${callsign}, you are ${Math.round(Math.abs(error)).toLocaleString()}`
+              + ` feet ${error > 0 ? "above" : "below"} your cleared level. Say intentions.`;
+  } else {
+    const fpm = s.tas * Math.sin(rad(s.gamma)) * FPM_PER_MS;
+    deviating = fpm * (error < 0 ? 1 : -1) < 100;
+    complaint = `${callsign}, confirm you are ${error < 0 ? "climbing" : "descending"}`
+              + ` to ${atcLevelText(s.atcClearedAltFt)}.`;
+  }
+  if (deviating) {
+    s.atcOffLevelS += dt;
+    const grace = s.atcLevelReached ? ATC_LEVEL_GRACE_S : ATC_INSTRUCTION_GRACE_S;
+    if (s.atcOffLevelS > grace && s.atcChases < ATC_MAX_CHASES) {
+      const m = atcSay(s, "level", complaint, true);
+      if (m) { s.atcChases++; fresh.push(m); }
+    }
+    s.atcDeviationS += dt;
+  } else s.atcOffLevelS = 0;
+
+  if (g && !s.atcDescentCleared
+      && g.distanceToGoNm <= g.topOfDescentNm + ATC_DESCENT_MARGIN_NM) {
+    s.atcDescentCleared = true;
+    s.atcChases = 0;
+    s.atcClearedAltFt = Math.ceil((destination.elevationFt || 0) / 500) * 500;
+    const m = atcSay(s, "descent", `${callsign}, descend at your discretion, `
+      + `${Math.round(g.distanceToGoNm)} nautical miles to run.`);
+    if (m) fresh.push(m);
+  }
+
+  const [position, ahead] = atcInboundSequence(s, destination.ident);
+  if (position !== s.atcSequence) {
+    s.atcSequence = position;
+    let text;
+    if (position === 1) text = `${callsign}, you are number one for ${destination.ident}.`;
+    else if (ahead) {
+      const other = FLEET_BY_KEY[ahead.key];
+      text = `${callsign}, number ${position} for ${destination.ident}, `
+           + `follow the ${other ? other.name : ahead.key} ahead of you.`;
+    } else text = `${callsign}, number ${position} for ${destination.ident}.`;
+    const m = atcSay(s, "sequence", text);
+    if (m) fresh.push(m);
+  }
+  return fresh;
+}
+
+/* What the aeroplane is cleared to do. Model data. (atc.clearance) */
+function atcClearance(a, s) {
+  if (s.atcClearedAltFt === null || s.atcClearedAltFt === undefined) return null;
+  const error = s.alt - s.atcClearedAltFt;
+  const onClearance = s.atcDescentCleared ? error >= -ATC_LEVEL_TOLERANCE_FT
+                    : (s.atcLevelReached ? Math.abs(error) <= ATC_LEVEL_TOLERANCE_FT : true);
+  return { callsign: atcCallsign(a, s), clearedAltitudeFt: s.atcClearedAltFt,
+           levelText: atcLevelText(s.atcClearedAltFt),
+           descentCleared: s.atcDescentCleared, sequence: s.atcSequence,
+           deviationFt: error, onClearance };
+}
+
 /* ---------- session state ---------- */
 let craft = FLEET_BY_KEY["a350"];
 let weather = new WeatherState(WEATHER_BY_KEY["clear"], WORLD_SEED);
@@ -2382,6 +2557,12 @@ function newFlight(keepView) {
        like the Python's `warnings_seen` it is gathered while it happens. */
     warningsSeen: [],
     plannedFuel: 0,
+    /* What the controller has cleared, and how well it is being followed.
+       State, not a pure function: a controller responds to you, so it has to
+       remember what it last said. (FlightState.atc_*) */
+    atcClearedAltFt: null, atcDescentCleared: false, atcSequence: 0,
+    atcOffLevelS: 0, atcLevelReached: false, atcChases: 0,
+    atcDeviationS: 0, atcMessages: [],
     warnings: []
   };
   settleEngines(craft, S);
@@ -2399,6 +2580,11 @@ function newFlight(keepView) {
     settleEngines(craft, S);      // trim moved the levers
   }
   S.approach = approachGuidance(craft, S);
+  /* The descent cache is keyed on the clock, and a reset moves the aeroplane
+     without moving it -- so the first two seconds of a new flight would have
+     been guided by the last one's descent. The parity guard found this: two
+     cases placed at the same instant got the first one's answer. */
+  descentCache = { at: null, value: null };
   htOriginNm = [NaN, NaN];      // the fields moved; re-bake both height textures
   htFineOriginNm = [NaN, NaN];
   if (!keepView) setView("cockpit");
@@ -4912,6 +5098,11 @@ function debriefData(a, s, kind) {
     row("remaining", "Runway remaining", td.remaining, "ft")
   );
 
+  /* Only when there was a controller to disobey -- a clearance nobody issued
+     cannot have been departed from. (navigation.debrief_data) */
+  if (s.atcClearedAltFt !== null && s.atcClearedAltFt !== undefined)
+    rows.push(row("atc_deviation", "Off your clearance", s.atcDeviationS, "s", 0, "clock"));
+
   const status = ENDING_STATUS[kind] || ENDING_STATUS[s.status] || s.status;
   return {
     aircraftName: a.name, weatherName: weather.name,
@@ -5084,6 +5275,25 @@ function logbookLine(entry, previous) {
       : `${kg(delta)} kg off the best of ${kg(previous.best.fuelKg)}`;
   return `<span class="lb-route">${where}</span>` +
          `<span class="lb-note">${verdict} · ${flights} flights</span>`;
+}
+
+/* The radio strip: the last few transmissions, oldest dropping off. A
+   clearance is model data (`atcClearance`); this only picks the colour. */
+const radioShown = [];
+function renderRadio(message) {
+  radioShown.push(message);
+  if (radioShown.length > 3) radioShown.shift();
+  const box = el("radio");
+  if (!box) return;
+  box.innerHTML = radioShown.map(m =>
+    `<span class="call${m.urgent ? " urgent" : ""}">${m.text}</span>`).join("");
+  /* Calls do not stay on the glass for ever -- a strip that never clears is
+     the cry-wolf failure again, one layer up. */
+  clearTimeout(renderRadio.timer);
+  renderRadio.timer = setTimeout(() => {
+    radioShown.length = 0;
+    if (el("radio")) el("radio").innerHTML = "";
+  }, 14000);
 }
 
 /* ---------- input ---------- */
@@ -6457,6 +6667,11 @@ function frame(now) {
        guidance above: the approach channel and NAV both read a readout, and
        the wind does not change in a hundredth of a second. */
     apUpdate(craft, S, lastReadout, dt);
+    /* The controller, on the same once-a-frame schedule and for the same
+       reason: it reacts to where the aeroplane is, not to how it got there.
+       The Python runs it once a ten-second tick and the grace periods are in
+       seconds, so the two accumulate the same totals either way. */
+    for (const m of atcUpdate(craft, S, dt)) renderRadio(m);
   }
 
   render();
