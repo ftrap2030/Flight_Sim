@@ -538,17 +538,17 @@ const wrap180 = d => ((d + 180) % 360 + 360) % 360 - 180;
 
 /* ---------- the fleet (aircraft.py, exported verbatim) ---------- */
 const FLEET = [
-{key:"a319neo",name:"A319neo",icao:"A19N",engines:"2 × CFM LEAP-1A24",wingArea:122.6,span:35.8,length:33.84,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,fanDia:1.98,fanBlades:18,oew:42600,mtow:75500,payload:12000,startFuel:10000,fuelCap:19182.636000000002,thrust:215200,tsfc:1.43e-05,idleFrac:0.05,cd0:0.019,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.795,waveK:18,vmo:350,mmo:0.82,ceiling:39800,cruiseMach:0.78,rollRate:16,pitchRate:3.4,arms:[-5.75,5.75],rudderPower:0.0022,dirStab:0.0035,dihedral:0.62,yawTau:1.9,maxRudder:30},
-{key:"a320",name:"A320-200",icao:"A320",engines:"2 × CFM56-5B4",wingArea:122.6,span:34.1,length:37.57,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,fanDia:1.735,fanBlades:36,oew:42600,mtow:78000,payload:15000,startFuel:12000,fuelCap:19182.636000000002,thrust:240200,tsfc:1.66e-05,idleFrac:0.05,cd0:0.0199,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.79,waveK:18,vmo:350,mmo:0.82,ceiling:39000,cruiseMach:0.78,rollRate:15,pitchRate:3.2,arms:[-5.75,5.75],rudderPower:0.0022,dirStab:0.0035,dihedral:0.6,yawTau:2,maxRudder:30},
-{key:"a320neo",name:"A320neo",icao:"A20N",engines:"2 × CFM LEAP-1A26",wingArea:122.6,span:35.8,length:37.57,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,fanDia:1.98,fanBlades:18,oew:44300,mtow:79000,payload:15000,startFuel:12000,fuelCap:19182.636000000002,thrust:241200,tsfc:1.43e-05,idleFrac:0.05,cd0:0.0195,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.795,waveK:18,vmo:350,mmo:0.82,ceiling:39800,cruiseMach:0.78,rollRate:15,pitchRate:3.2,arms:[-5.75,5.75],rudderPower:0.0022,dirStab:0.0035,dihedral:0.6,yawTau:2,maxRudder:30},
-{key:"a321",name:"A321neo",icao:"A21N",engines:"2 × CFM LEAP-1A32",wingArea:122.6,span:35.8,length:44.51,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,fanDia:1.98,fanBlades:18,oew:50100,mtow:97000,payload:20000,startFuel:15000,fuelCap:19054.800000000003,thrust:286200,tsfc:1.43e-05,idleFrac:0.05,cd0:0.02,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.792,waveK:18,vmo:350,mmo:0.82,ceiling:39800,cruiseMach:0.78,rollRate:12,pitchRate:2.7,arms:[-5.75,5.75],rudderPower:0.0022,dirStab:0.0035,dihedral:0.55,yawTau:2.2,maxRudder:30},
-{key:"a321xlr",name:"A321XLR",icao:"A21N",engines:"2 × CFM LEAP-1A35",wingArea:122.6,span:35.8,length:44.51,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,fanDia:1.98,fanBlades:18,oew:52300,mtow:101000,payload:20000,startFuel:22000,fuelCap:29426.4,thrust:286200,tsfc:1.43e-05,idleFrac:0.05,cd0:0.0202,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.792,waveK:18,vmo:350,mmo:0.82,ceiling:39800,cruiseMach:0.78,rollRate:11.5,pitchRate:2.6,arms:[-5.75,5.75],rudderPower:0.0022,dirStab:0.0035,dihedral:0.55,yawTau:2.3,maxRudder:30},
-{key:"a330-800",name:"A330-800neo",icao:"A338",engines:"2 × Rolls-Royce Trent 7000",wingArea:361.6,span:64,length:58.82,height:17.39,fusW:5.64,fusH:5.64,sweep:30,decks:1,fanDia:2.85,fanBlades:26,oew:132000,mtow:251000,payload:36000,startFuel:56000,fuelCap:111828.36,thrust:648000,tsfc:1.42e-05,idleFrac:0.05,cd0:0.01834,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.835,waveK:18,vmo:330,mmo:0.86,ceiling:41450,cruiseMach:0.82,rollRate:10.6,pitchRate:2.45,arms:[-10,10],rudderPower:0.0024,dirStab:0.0035,dihedral:0.5,yawTau:2.65,maxRudder:30},
-{key:"a330neo",name:"A330-900neo",icao:"A339",engines:"2 × Rolls-Royce Trent 7000",wingArea:361.6,span:64,length:63.66,height:16.79,fusW:5.64,fusH:5.64,sweep:30,decks:1,fanDia:2.85,fanBlades:26,oew:137000,mtow:251000,payload:40000,startFuel:58000,fuelCap:111828.36,thrust:648000,tsfc:1.42e-05,idleFrac:0.05,cd0:0.019,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.835,waveK:18,vmo:330,mmo:0.86,ceiling:41450,cruiseMach:0.82,rollRate:10.2,pitchRate:2.35,arms:[-10,10],rudderPower:0.0024,dirStab:0.0035,dihedral:0.5,yawTau:2.75,maxRudder:30},
-{key:"a350",name:"A350-900",icao:"A359",engines:"2 × Rolls-Royce Trent XWB-84",wingArea:442,span:64.75,length:66.8,height:17.08,fusW:5.96,fusH:6.09,sweep:31.9,decks:1,fanDia:3,fanBlades:22,oew:142400,mtow:280000,payload:40000,startFuel:70000,fuelCap:110952,thrust:749000,tsfc:1.23e-05,idleFrac:0.05,cd0:0.0167,e:0.85,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.86,waveK:18,vmo:340,mmo:0.89,ceiling:43100,cruiseMach:0.85,rollRate:10,pitchRate:2.3,arms:[-10.6,10.6],rudderPower:0.0024,dirStab:0.0035,dihedral:0.5,yawTau:2.8,maxRudder:30},
-{key:"a350k",name:"A350-1000",icao:"A35K",engines:"2 × Rolls-Royce Trent XWB-97",wingArea:464.3,span:64.75,length:73.79,height:17.08,fusW:5.96,fusH:6.09,sweep:31.9,decks:1,fanDia:3,fanBlades:22,oew:155000,mtow:319000,payload:45000,startFuel:85000,fuelCap:127667.964,thrust:863000,tsfc:1.23e-05,idleFrac:0.05,cd0:0.017,e:0.85,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.858,waveK:18,vmo:340,mmo:0.89,ceiling:43100,cruiseMach:0.85,rollRate:9,pitchRate:2.1,arms:[-10.6,10.6],rudderPower:0.0024,dirStab:0.0035,dihedral:0.48,yawTau:3,maxRudder:30},
-{key:"a380",name:"A380-800",icao:"A388",engines:"4 × Rolls-Royce Trent 970",wingArea:845,span:79.75,length:72.72,height:24.09,fusW:7.14,fusH:8.41,sweep:33.5,decks:2,fanDia:2.95,fanBlades:24,oew:277000,mtow:575000,payload:60000,startFuel:160000,fuelCap:257280.00000000003,thrust:1242800,tsfc:1.21e-05,idleFrac:0.05,cd0:0.0145,e:0.84,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.858,waveK:18,vmo:340,mmo:0.89,ceiling:43100,cruiseMach:0.85,rollRate:7,pitchRate:1.8,arms:[-21.6,-12.4,12.4,21.6],rudderPower:0.002,dirStab:0.0038,dihedral:0.4,yawTau:3.5,maxRudder:30},
-{key:"belugaxl",name:"BelugaXL",icao:"A337",engines:"2 × Rolls-Royce Trent 700",wingArea:361.6,span:60.3,length:63.1,height:18.9,fusW:5.64,fusH:8.8,sweep:30,decks:1,fanDia:2.47,fanBlades:26,oew:130000,mtow:227000,payload:51000,startFuel:30000,fuelCap:67536,thrust:632000,tsfc:1.5919e-05,idleFrac:0.05,cd0:0.02797,e:0.78,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.72,waveK:18,vmo:300,mmo:0.78,ceiling:35000,cruiseMach:0.69,rollRate:8.5,pitchRate:2,arms:[-10,10],rudderPower:0.0024,dirStab:0.003,dihedral:0.45,yawTau:3.2,maxRudder:30}
+{key:"a319neo",name:"A319neo",icao:"A19N",engines:"2 × CFM LEAP-1A24",wingArea:122.6,span:35.8,length:33.84,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,pax:true,fanDia:1.98,fanBlades:18,oew:42600,mtow:75500,payload:12000,startFuel:10000,fuelCap:19182.636000000002,thrust:215200,tsfc:1.43e-05,idleFrac:0.05,cd0:0.019,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.795,waveK:18,vmo:350,mmo:0.82,ceiling:39800,cruiseMach:0.78,rollRate:16,pitchRate:3.4,arms:[-5.75,5.75],rudderPower:0.0022,dirStab:0.0035,dihedral:0.62,yawTau:1.9,maxRudder:30},
+{key:"a320",name:"A320-200",icao:"A320",engines:"2 × CFM56-5B4",wingArea:122.6,span:34.1,length:37.57,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,pax:true,fanDia:1.735,fanBlades:36,oew:42600,mtow:78000,payload:15000,startFuel:12000,fuelCap:19182.636000000002,thrust:240200,tsfc:1.66e-05,idleFrac:0.05,cd0:0.0199,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.79,waveK:18,vmo:350,mmo:0.82,ceiling:39000,cruiseMach:0.78,rollRate:15,pitchRate:3.2,arms:[-5.75,5.75],rudderPower:0.0022,dirStab:0.0035,dihedral:0.6,yawTau:2,maxRudder:30},
+{key:"a320neo",name:"A320neo",icao:"A20N",engines:"2 × CFM LEAP-1A26",wingArea:122.6,span:35.8,length:37.57,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,pax:true,fanDia:1.98,fanBlades:18,oew:44300,mtow:79000,payload:15000,startFuel:12000,fuelCap:19182.636000000002,thrust:241200,tsfc:1.43e-05,idleFrac:0.05,cd0:0.0195,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.795,waveK:18,vmo:350,mmo:0.82,ceiling:39800,cruiseMach:0.78,rollRate:15,pitchRate:3.2,arms:[-5.75,5.75],rudderPower:0.0022,dirStab:0.0035,dihedral:0.6,yawTau:2,maxRudder:30},
+{key:"a321",name:"A321neo",icao:"A21N",engines:"2 × CFM LEAP-1A32",wingArea:122.6,span:35.8,length:44.51,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,pax:true,fanDia:1.98,fanBlades:18,oew:50100,mtow:97000,payload:20000,startFuel:15000,fuelCap:19054.800000000003,thrust:286200,tsfc:1.43e-05,idleFrac:0.05,cd0:0.02,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.792,waveK:18,vmo:350,mmo:0.82,ceiling:39800,cruiseMach:0.78,rollRate:12,pitchRate:2.7,arms:[-5.75,5.75],rudderPower:0.0022,dirStab:0.0035,dihedral:0.55,yawTau:2.2,maxRudder:30},
+{key:"a321xlr",name:"A321XLR",icao:"A21N",engines:"2 × CFM LEAP-1A35",wingArea:122.6,span:35.8,length:44.51,height:11.76,fusW:3.95,fusH:4.14,sweep:25,decks:1,pax:true,fanDia:1.98,fanBlades:18,oew:52300,mtow:101000,payload:20000,startFuel:22000,fuelCap:29426.4,thrust:286200,tsfc:1.43e-05,idleFrac:0.05,cd0:0.0202,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.792,waveK:18,vmo:350,mmo:0.82,ceiling:39800,cruiseMach:0.78,rollRate:11.5,pitchRate:2.6,arms:[-5.75,5.75],rudderPower:0.0022,dirStab:0.0035,dihedral:0.55,yawTau:2.3,maxRudder:30},
+{key:"a330-800",name:"A330-800neo",icao:"A338",engines:"2 × Rolls-Royce Trent 7000",wingArea:361.6,span:64,length:58.82,height:17.39,fusW:5.64,fusH:5.64,sweep:30,decks:1,pax:true,fanDia:2.85,fanBlades:26,oew:132000,mtow:251000,payload:36000,startFuel:56000,fuelCap:111828.36,thrust:648000,tsfc:1.42e-05,idleFrac:0.05,cd0:0.01834,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.835,waveK:18,vmo:330,mmo:0.86,ceiling:41450,cruiseMach:0.82,rollRate:10.6,pitchRate:2.45,arms:[-10,10],rudderPower:0.0024,dirStab:0.0035,dihedral:0.5,yawTau:2.65,maxRudder:30},
+{key:"a330neo",name:"A330-900neo",icao:"A339",engines:"2 × Rolls-Royce Trent 7000",wingArea:361.6,span:64,length:63.66,height:16.79,fusW:5.64,fusH:5.64,sweep:30,decks:1,pax:true,fanDia:2.85,fanBlades:26,oew:137000,mtow:251000,payload:40000,startFuel:58000,fuelCap:111828.36,thrust:648000,tsfc:1.42e-05,idleFrac:0.05,cd0:0.019,e:0.82,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.835,waveK:18,vmo:330,mmo:0.86,ceiling:41450,cruiseMach:0.82,rollRate:10.2,pitchRate:2.35,arms:[-10,10],rudderPower:0.0024,dirStab:0.0035,dihedral:0.5,yawTau:2.75,maxRudder:30},
+{key:"a350",name:"A350-900",icao:"A359",engines:"2 × Rolls-Royce Trent XWB-84",wingArea:442,span:64.75,length:66.8,height:17.08,fusW:5.96,fusH:6.09,sweep:31.9,decks:1,pax:true,fanDia:3,fanBlades:22,oew:142400,mtow:280000,payload:40000,startFuel:70000,fuelCap:110952,thrust:749000,tsfc:1.23e-05,idleFrac:0.05,cd0:0.0167,e:0.85,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.86,waveK:18,vmo:340,mmo:0.89,ceiling:43100,cruiseMach:0.85,rollRate:10,pitchRate:2.3,arms:[-10.6,10.6],rudderPower:0.0024,dirStab:0.0035,dihedral:0.5,yawTau:2.8,maxRudder:30},
+{key:"a350k",name:"A350-1000",icao:"A35K",engines:"2 × Rolls-Royce Trent XWB-97",wingArea:464.3,span:64.75,length:73.79,height:17.08,fusW:5.96,fusH:6.09,sweep:31.9,decks:1,pax:true,fanDia:3,fanBlades:22,oew:155000,mtow:319000,payload:45000,startFuel:85000,fuelCap:127667.964,thrust:863000,tsfc:1.23e-05,idleFrac:0.05,cd0:0.017,e:0.85,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.858,waveK:18,vmo:340,mmo:0.89,ceiling:43100,cruiseMach:0.85,rollRate:9,pitchRate:2.1,arms:[-10.6,10.6],rudderPower:0.0024,dirStab:0.0035,dihedral:0.48,yawTau:3,maxRudder:30},
+{key:"a380",name:"A380-800",icao:"A388",engines:"4 × Rolls-Royce Trent 970",wingArea:845,span:79.75,length:72.72,height:24.09,fusW:7.14,fusH:8.41,sweep:33.5,decks:2,pax:true,fanDia:2.95,fanBlades:24,oew:277000,mtow:575000,payload:60000,startFuel:160000,fuelCap:257280.00000000003,thrust:1242800,tsfc:1.21e-05,idleFrac:0.05,cd0:0.0145,e:0.84,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.858,waveK:18,vmo:340,mmo:0.89,ceiling:43100,cruiseMach:0.85,rollRate:7,pitchRate:1.8,arms:[-21.6,-12.4,12.4,21.6],rudderPower:0.002,dirStab:0.0038,dihedral:0.4,yawTau:3.5,maxRudder:30},
+{key:"belugaxl",name:"BelugaXL",icao:"A337",engines:"2 × Rolls-Royce Trent 700",wingArea:361.6,span:60.3,length:63.1,height:18.9,fusW:5.64,fusH:8.8,sweep:30,decks:1,pax:false,fanDia:2.47,fanBlades:26,oew:130000,mtow:227000,payload:51000,startFuel:30000,fuelCap:67536,thrust:632000,tsfc:1.5919e-05,idleFrac:0.05,cd0:0.02797,e:0.78,cl0:0.2,clMax:1.45,alphaCrit:15,machCrit:0.72,waveK:18,vmo:300,mmo:0.78,ceiling:35000,cruiseMach:0.69,rollRate:8.5,pitchRate:2,arms:[-10,10],rudderPower:0.0024,dirStab:0.003,dihedral:0.45,yawTau:3.2,maxRudder:30}
 ];
 const FLEET_BY_KEY = Object.fromEntries(FLEET.map(a => [a.key, a]));
 
@@ -4191,31 +4191,69 @@ void main() {
   fragColor = vec4(mix(col, uHaze, clamp(fog, 0.0, 1.0)), a * 0.92);
 }`;
 
-/* ---------- aircraft ---------- */
+/* ---------- aircraft ----------
+
+   Control surfaces are hinged in the *vertex shader* rather than by rebuilding
+   the mesh. Every vertex carries the index of the surface it belongs to, the
+   hinge line of each surface is a property of the type, and the deflection is
+   a uniform -- so the geometry stays a static per-type buffer that traffic
+   shares, and moving a rudder costs one float. Index 0 is structure, which
+   does not move, and its hinge angle is always zero.
+
+   What the surfaces are driven *by* is the flight model's own state, never
+   something worked out here. A rudder drawn from anything but `S.rudder` would
+   be a second aeroplane, which is the mistake the speed tape and the FMA each
+   exist to prevent. */
 const MODEL_VS = `#version 300 es
 precision highp float;
-in vec3 aPos;
-in vec3 aNormal;
-in vec3 aColor;
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec3 aColor;
+layout(location = 3) in vec2 aSurf;      // x: hinge index, y: emissive strength
 uniform mat4 uVP;
 uniform mat4 uModel;
 uniform mat3 uNormalM;
+uniform vec3 uHingeP[10];
+uniform vec3 uHingeA[10];
+uniform float uHingeAng[10];
+uniform float uGearDown;
 out vec3 vN;
 out vec3 vC;
 out vec3 vW;
+out float vE;
 void main() {
-  vec4 w = uModel * vec4(aPos, 1.0);
-  vW = w.xyz; vN = normalize(uNormalM * aNormal); vC = aColor;
+  int sid = int(aSurf.x + 0.5);
+  vec3 p = aPos;
+  vec3 n = aNormal;
+  /* Rodrigues about the surface's own hinge. Index 0 holds a zero angle, so
+     structure falls through this unchanged rather than needing a branch. */
+  vec3 P = uHingeP[sid], A = uHingeA[sid];
+  float ang = uHingeAng[sid];
+  float c = cos(ang), s = sin(ang);
+  vec3 d = p - P;
+  p = P + d * c + cross(A, d) * s + A * dot(A, d) * (1.0 - c);
+  n = n * c + cross(A, n) * s + A * dot(A, n) * (1.0 - c);
+  /* The gear is index 9 and is drawn only when it is down: collapsing it onto
+     its own hinge point rasterises nothing, which is cheaper than a second
+     draw call and keeps one buffer per type. */
+  if (sid == 9) p = mix(P, p, uGearDown);
+  vec4 w = uModel * vec4(p, 1.0);
+  vW = w.xyz; vN = normalize(uNormalM * n); vC = aColor; vE = aSurf.y;
   gl_Position = uVP * w;
 }`;
 
+/* Lambert, a hemisphere ambient, one specular lobe -- and an emissive channel
+   for the lights, added *after* the fog the way the runway lighting already is
+   at the bottom of the terrain shader. A light that fogged out with the metal
+   around it would be a painted dot rather than a lamp. */
 const MODEL_FS = `#version 300 es
 precision highp float;
-in vec3 vN; in vec3 vC; in vec3 vW;
+in vec3 vN; in vec3 vC; in vec3 vW; in float vE;
 out vec4 fragColor;
 uniform vec3 uCam, uSun, uHaze;
 uniform float uFogDist, uDay;
 uniform vec3 uSunTint;
+uniform float uLamp[5];
 void main() {
   vec3 n = normalize(vN);
   vec3 V = normalize(uCam - vW);
@@ -4226,7 +4264,13 @@ void main() {
   float spec = pow(max(dot(n, h), 0.0), 34.0) * 0.30 * uDay;
   vec3 lit = vC * ambient + vC * uSunTint * lam * 0.85 * uDay + uSunTint * spec;
   float fog = 1.0 - exp(-length(uCam - vW) / uFogDist);
-  fragColor = vec4(mix(lit, uHaze, clamp(fog, 0.0, 1.0)), 1.0);
+  vec3 col = mix(lit, uHaze, clamp(fog, 0.0, 1.0));
+  /* vE is which *kind* of lamp this is, not how bright it is: the strobe
+     and the beacon flash, so what they are doing is a function of the clock
+     and belongs in one uniform rather than in the geometry. Index 0 is
+     everything that is not a lamp, and its gain is always zero. */
+  col += vC * uLamp[int(vE + 0.5)] * (1.0 - 0.55 * clamp(fog, 0.0, 1.0));
+  fragColor = vec4(col, 1.0);
 }`;
 
 /* ---------- GL objects ---------- */
@@ -4367,10 +4411,11 @@ function regenHeight(camNmX, camNmY, force) {
 const glModels = {};
 function modelBuffers(a) {
   if (glModels[a.key]) return glModels[a.key];
-  const tris = modelFor(a);
+  const tris = modelFor(a).tris;
   const pos = new Float32Array(tris.length * 9);
   const nrm = new Float32Array(tris.length * 9);
   const col = new Float32Array(tris.length * 9);
+  const srf = new Float32Array(tris.length * 6);
   tris.forEach((t, ti) => {
     /* Body axes are (starboard, forward, up); the renderer wants
        (east, north, up) before the model matrix, so forward becomes north. */
@@ -4382,96 +4427,570 @@ function modelBuffers(a) {
     n = [n[0]/len, n[1]/len, n[2]/len];
     const c = hex(t.col).map(v => v / 255);
     for (let k = 0; k < 3; k++) {
-      const o = (ti * 3 + k) * 3;
+      const o = (ti * 3 + k) * 3, os = (ti * 3 + k) * 2;
       pos[o] = p[k][0]; pos[o+1] = p[k][1]; pos[o+2] = p[k][2];
       nrm[o] = n[0]; nrm[o+1] = n[1]; nrm[o+2] = n[2];
       col[o] = c[0]; col[o+1] = c[1]; col[o+2] = c[2];
+      srf[os] = t.sid || 0; srf[os+1] = t.emit || 0;
     }
   });
   const vao = gl.createVertexArray();
   gl.bindVertexArray(vao);
-  [pos, nrm, col].forEach((arr, i) => {
+  [[pos, 3], [nrm, 3], [col, 3], [srf, 2]].forEach(([arr, n], i) => {
     const b = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, b);
     gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW);
     gl.enableVertexAttribArray(i);
-    gl.vertexAttribPointer(i, 3, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribPointer(i, n, gl.FLOAT, false, 0, 0);
   });
   return (glModels[a.key] = { vao, count: tris.length * 3 });
 }
 
 /* ---------- 3D model, built from each type's real dimensions ----------
-   Unchanged in intent from the raycaster build: fuselage stations scaled by
-   length and cross-section, wing swept by the published quarter-chord angle,
-   fin reaching the published height, one nacelle per entry in engine_arms_m. */
-function buildModel(a) {
-  const L = a.length, B = a.span / 2, Hf = a.fusH / 2, Wf = a.fusW / 2;
-  const noseY = L * 0.5, tailY = -L * 0.5;
-  const tris = [];
-  const quad = (p, q, r, s, col) => { tris.push({ p: [p, q, r], col }); tris.push({ p: [p, r, s], col }); };
-  const FUS = "#dfe4e8", FUS_D = "#aeb8bf", WING = "#c8d0d6", ENG = "#79838a", TAIL = "#2f6ea8";
 
-  const ring = (y, sc) => {
-    const pts = [];
-    for (let i = 0; i < 10; i++) {
-      const t = i / 10 * Math.PI * 2;
-      pts.push([Math.cos(t) * Wf * sc, y, Math.sin(t) * Hf * sc]);
+   Nothing here is drawn by hand, for the reason `artwork.py` draws nothing by
+   hand: the fuselage is `length` long and `fusW` by `fusH` round, the wing is
+   swept by the published quarter-chord angle and spans `span`, the fin reaches
+   `height`, there is one nacelle per entry in `engine_arms_m` and it is as fat
+   as the published `fanDia` -- the same number the engine's note is derived
+   from, so the engine you hear is the engine you see.
+
+   The rule that comes with that is `artwork.py`'s: **if two types look
+   identical, they are identical.** The drawing may not invent a difference it
+   has no way of seeing, and it may not hide one it does.
+
+   Surface indices. Everything structural is 0 and never moves; the rest are
+   hinged in the vertex shader from state the flight model owns. */
+const SURF = { FIXED: 0, AIL_L: 1, AIL_R: 2, ELEV: 3, RUDDER: 4,
+               FLAP_L: 5, FLAP_R: 6, SPOIL_L: 7, SPOIL_R: 8, GEAR: 9 };
+const SURF_COUNT = 10;
+
+/* NACA four-digit symmetric half-thickness, as a fraction of chord. A wing
+   with a section instead of two coincident quads is the whole difference
+   between an aeroplane and a paper one: there is finally a surface for the
+   light to fall across. */
+function naca(u, tc) {
+  return 5 * tc * (0.2969 * Math.sqrt(u) - 0.1260 * u - 0.3516 * u * u
+                 + 0.2843 * u * u * u - 0.1015 * u * u * u * u);
+}
+
+function buildModel(a) {
+  const L = a.length, B = a.span / 2;
+  const Wf = a.fusW / 2;
+  /* Two published cross-sections, differenced. The lower lobe is as tall as it
+     is wide because a circular section is; whatever `fusH` adds above that is
+     cargo. On every airliner the two are equal and every expression below
+     collapses to the circle that was always there -- which is the same way
+     `artwork.py` keeps `deck_top` and `fus_top` on one row for ten types and
+     apart for the eleventh. */
+  const lowerR = Wf, upperH = a.fusH - Wf;
+  const noseY = L * 0.5, tailY = -L * 0.5;
+
+  const CS = 0.76;                       // where the wing box stops
+  const rootLE = -L * 0.02, rootC = L * 0.20, tipC = L * 0.055;
+  const sweepBack = Math.tan(rad(a.sweep)) * B;
+  const rootX = Wf * 0.92, rootZ = -lowerR * 0.34, dih = B * 0.055;
+  const wingSec = v => ({
+    x: rootX + (B - rootX) * v,
+    le: rootLE - sweepBack * v,
+    ch: rootC + (tipC - rootC) * v,
+    z: rootZ + dih * v,
+    tc: 0.138 - 0.048 * v
+  });
+  const wingPt = (v, u, up, sgn) => {
+    const s = wingSec(v), half = naca(Math.min(u, 1), s.tc) * s.ch;
+    return [s.x * sgn, s.le - u * s.ch, s.z + (up ? half : -half)];
+  };
+
+  /* How much leg the aeroplane needs, solved rather than guessed.
+
+     Where the engine hangs is already decided: under the wing at its published
+     arm, a pylon's depth below the lower surface, and as fat as the published
+     fan. The only thing left free is how high the whole aeroplane stands, so
+     the leg is whatever puts half a metre of daylight under the lowest cowl.
+
+     The type this binds on is the A321 -- same fuselage as an A320, longer and
+     heavier, and the least room underneath. Which is why the real one has
+     longer main gear than the aeroplane it is stretched from. */
+  const ENGINE_CLEARANCE_M = 0.50;
+  const cowlRadius = a.fanDia / 2 * 1.16;
+  let lowestCowl = 0;
+  for (const arm of a.arms) {
+    const v = Math.max(0, Math.min(0.95, (Math.abs(arm) - rootX) / Math.max(B - rootX, 1e-3)));
+    const w = wingSec(v);
+    const under = w.z - naca(0.3, w.tc) * w.ch;
+    lowestCowl = Math.min(lowestCowl, under - cowlRadius * 0.42 - cowlRadius - cowlRadius * 1.06);
+  }
+  const gearLeg = Math.max(1.60, lowerR * 0.70,
+                           -lowestCowl - lowerR + ENGINE_CLEARANCE_M);
+  const groundZ = -lowerR - gearLeg;
+
+  const tris = [];
+  const tri = (p, q, r, col, sid, emit) =>
+    tris.push({ p: [p, q, r], col, sid: sid || 0, emit: emit || 0 });
+  const quad = (p, q, r, s, col, sid, emit) => {
+    tri(p, q, r, col, sid, emit); tri(p, r, s, col, sid, emit);
+  };
+  /* Skin is drawn from both sides everywhere else in this file, and the model
+     shader two-sides its normals, so a closed solid needs no second winding. */
+  const FUS = "#e7ebee", FUS_D = "#aab4bc", WING = "#cfd6db", WING_D = "#b3bcc3",
+        ENG = "#dde3e7", ENG_D = "#9aa5ac", LIP = "#39424a", FAN = "#14181b",
+        PYL = "#c6ced4", TAIL = "#2f6ea8", GEAR = "#79828a", TYRE = "#1b1e20",
+        GLASS = "#12181c";
+
+  /* ---- fuselage ----
+     Stations run nose to tail as a fraction of length: how wide, how much of
+     the cargo lobe has started, and how far the section's centre has moved.
+     The nose droops a little and the tail cone sweeps up, which is the shape
+     that says "airliner" before any of the detail does. */
+  const RING_N = 16;
+  const STATIONS = [
+    [0.000, 0.030, 0.00, -0.22], [0.018, 0.260, 0.00, -0.17],
+    [0.045, 0.520, 0.00, -0.10], [0.080, 0.740, 0.15, -0.05],
+    [0.130, 0.900, 0.55, -0.01], [0.200, 0.985, 0.92,  0.00],
+    [0.280, 1.000, 1.00,  0.00], [0.640, 1.000, 1.00,  0.00],
+    [0.760, 0.960, 1.00,  0.03], [0.850, 0.830, 1.00,  0.13],
+    [0.920, 0.560, 0.90,  0.32], [0.965, 0.290, 0.70,  0.52],
+    [1.000, 0.055, 0.50,  0.70]
+  ];
+  const ring = ([u, wsc, lobe, zc]) => {
+    const y = noseY - u * L, pts = [];
+    for (let i = 0; i < RING_N; i++) {
+      const t = i / RING_N * Math.PI * 2, c = Math.cos(t), s = Math.sin(t);
+      /* Above the centreline the roof reaches the lobe, below it the lower
+         lobe. `upperH === lowerR` on an airliner, so `lobe` cancels out. */
+      const zr = s >= 0 ? lowerR + (upperH - lowerR) * lobe : lowerR;
+      pts.push([c * Wf * wsc, y, zc * lowerR + s * zr * wsc]);
     }
     return pts;
   };
-  const stations = [[noseY, .10], [noseY - L * .07, .62], [noseY - L * .20, 1],
-                    [tailY + L * .24, 1], [tailY + L * .06, .40], [tailY, .10]];
-  for (let i = 0; i < stations.length - 1; i++) {
-    const r0 = ring(stations[i][0], stations[i][1]);
-    const r1 = ring(stations[i + 1][0], stations[i + 1][1]);
-    for (let k = 0; k < 10; k++) {
-      const n = (k + 1) % 10;
-      quad(r0[k], r0[n], r1[n], r1[k], k < 4 ? FUS : FUS_D);
+  for (let i = 0; i < STATIONS.length - 1; i++) {
+    const r0 = ring(STATIONS[i]), r1 = ring(STATIONS[i + 1]);
+    const overWing = STATIONS[i][0] > 0.16 && STATIONS[i][0] < 0.80;
+    for (let k = 0; k < RING_N; k++) {
+      const n = (k + 1) % RING_N;
+      const upper = k < RING_N / 2;
+      /* The flight deck's glazing, on the nose stations above the waterline.
+         A freighter has one too -- it is the cabin behind it that it has not
+         got, which is the distinction `_draw_cabin` branches on. */
+      const glazed = STATIONS[i][0] < 0.055 && upper;
+      quad(r0[k], r0[n], r1[n], r1[k],
+           glazed ? GLASS : (upper ? FUS : FUS_D), SURF.FIXED,
+           glazed && overWing ? 0 : 0);
     }
   }
 
-  const sweepBack = Math.tan(rad(a.sweep)) * B;
-  const rootLE = -L * 0.02, rootTE = rootLE - L * 0.20;
-  const tipLE = rootLE - sweepBack, tipTE = tipLE - L * 0.055;
-  const dih = B * 0.10;
-  for (const sgn of [1, -1]) {
-    const root0 = [Wf * 0.85 * sgn, rootLE, -Hf * .30], root1 = [Wf * 0.85 * sgn, rootTE, -Hf * .30];
-    const tip0 = [B * sgn, tipLE, dih * .55], tip1 = [B * sgn, tipTE, dih * .55];
-    quad(root0, tip0, tip1, root1, WING);
-    quad(root1, tip1, tip0, root0, WING);              // underside
-    /* Sharklet or wingtip fence, angled up from the tip. */
-    quad(tip0, [B * sgn, tipLE + L * .01, dih * .55 + B * .075],
-         [B * sgn, tipTE, dih * .55 + B * .06], tip1, WING);
+  /* ---- the cabin ----
+     A window line and the cheatline under it, drawn as stripes rather than as
+     a hundred little panes: at any range this aeroplane is ever seen from, a
+     row of windows *is* a stripe, and four triangles say it as well as four
+     hundred would.
+
+     It branches on `pax`, not on a seat count of zero -- the same distinction
+     `_draw_cabin` makes, and the reason a BelugaXL gets its flight deck and no
+     cabin behind it. */
+  if (a.pax) {
+    const eps = Wf * 0.008;
+    /* A point on the skin at ring angle `th`, stood off by a hair so it cannot
+       fight the fuselage for the depth buffer -- the spoilers' problem again. */
+    const skin = (u, th, sgn) => {
+      let i = 0;
+      while (i < STATIONS.length - 2 && STATIONS[i + 1][0] < u) i++;
+      const [u0, w0, l0, c0] = STATIONS[i], [u1, w1, l1, c1] = STATIONS[i + 1];
+      const f = clamp((u - u0) / Math.max(u1 - u0, 1e-6), 0, 1);
+      const wsc = w0 + (w1 - w0) * f, lobe = l0 + (l1 - l0) * f, zc = c0 + (c1 - c0) * f;
+      const s = Math.sin(th), c = Math.cos(th);
+      const zr = s >= 0 ? lowerR + (upperH - lowerR) * lobe : lowerR;
+      return [sgn * (Wf * wsc + eps) * c, noseY - u * L,
+              zc * lowerR + s * (zr * wsc + eps)];
+    };
+    const UU = [0.13, 0.26, 0.40, 0.54, 0.68, 0.80];
+    for (let d = 0; d < a.decks; d++) {
+      /* One row per deck, which is what `cabin_decks` is for -- an A380 has
+         two and the eye reads the difference immediately. */
+      const mid = a.decks === 1 ? 0.34 : (d === 0 ? 0.78 : 0.06);
+      for (const sgn of [1, -1]) {
+        for (let i = 0; i < UU.length - 1; i++) {
+          const [p, q] = [UU[i], UU[i + 1]];
+          quad(skin(p, mid + 0.10, sgn), skin(q, mid + 0.10, sgn),
+               skin(q, mid - 0.10, sgn), skin(p, mid - 0.10, sgn), GLASS);
+          /* The cheatline under it, in the tail's colour, which is what stops
+             the fuselage reading as a bare white tube. */
+          quad(skin(p, mid - 0.22, sgn), skin(q, mid - 0.22, sgn),
+               skin(q, mid - 0.32, sgn), skin(p, mid - 0.32, sgn), TAIL);
+        }
+      }
+    }
   }
 
-  const tpB = B * 0.36, tpY = tailY + L * 0.11;
+  /* ---- wing ----
+     Lofted between a root and a tip section: straight taper, published sweep,
+     thicker at the root as a wing is. The last quarter of the chord is left
+     off and filled by the control surfaces below, which is why they can move
+     without the wing tearing. */
+  const VS = [0, 0.16, 0.34, 0.52, 0.70, 0.86, 1.0];
+  const US = [0, 0.02, 0.06, 0.13, 0.24, 0.40, 0.58, CS];
   for (const sgn of [1, -1]) {
-    const a0 = [Wf * .5 * sgn, tpY, Hf * .25], a1 = [tpB * sgn, tpY - L * .055, Hf * .55];
-    const a2 = [tpB * sgn, tpY - L * .105, Hf * .55], a3 = [Wf * .5 * sgn, tpY - L * .115, Hf * .25];
-    quad(a0, a1, a2, a3, WING); quad(a3, a2, a1, a0, WING);
+    for (let i = 0; i < VS.length - 1; i++) {
+      for (let j = 0; j < US.length - 1; j++) {
+        const [v0, v1] = [VS[i], VS[i + 1]], [u0, u1] = [US[j], US[j + 1]];
+        quad(wingPt(v0, u0, true, sgn), wingPt(v0, u1, true, sgn),
+             wingPt(v1, u1, true, sgn), wingPt(v1, u0, true, sgn), WING);
+        quad(wingPt(v0, u0, false, sgn), wingPt(v1, u0, false, sgn),
+             wingPt(v1, u1, false, sgn), wingPt(v0, u1, false, sgn), WING_D);
+      }
+      /* Blunt trailing edge of the box, which is what the control surfaces
+         hinge off. */
+      quad(wingPt(VS[i], CS, true, sgn), wingPt(VS[i], CS, false, sgn),
+           wingPt(VS[i + 1], CS, false, sgn), wingPt(VS[i + 1], CS, true, sgn), WING_D);
+    }
+    /* Tip cap, or the wing is a hollow tube seen end-on. */
+    for (let j = 0; j < US.length - 1; j++) {
+      quad(wingPt(1, US[j], true, sgn), wingPt(1, US[j + 1], true, sgn),
+           wingPt(1, US[j + 1], false, sgn), wingPt(1, US[j], false, sgn), WING_D);
+    }
+    /* Sharklet: a small fin standing off the tip, with thickness. */
+    const tipTop = wingSec(1);
+    const shH = B * 0.085, shT = tipC * 0.055;
+    /* The outboard face sits *on* the tip, or the model comes out wider than
+       the published span -- which the guard would catch, and which would also
+       be a lie about the one dimension a wingtip device does not change. */
+    const sh = (u, z, o) => [(tipTop.x - shT) * sgn + o * sgn,
+                             tipTop.le - u * tipC * 0.82, tipTop.z + z];
+    for (const o of [shT, -shT]) {
+      quad(sh(0.05, 0, o), sh(0.95, 0, o), sh(0.95, shH * 0.72, o), sh(0.30, shH, o), WING);
+    }
+    quad(sh(0.30, shH, shT), sh(0.95, shH * 0.72, shT),
+         sh(0.95, shH * 0.72, -shT), sh(0.30, shH, -shT), WING);
   }
-  const finTop = a.height - a.fusH * 0.55;
-  const f0 = [0, tpY + L * .03, Hf * .85], f1 = [0, tpY - L * .085, finTop];
-  const f2 = [0, tpY - L * .155, finTop], f3 = [0, tpY - L * .145, Hf * .85];
-  quad(f0, f1, f2, f3, TAIL); quad(f3, f2, f1, f0, TAIL);
 
+  /* ---- control surfaces ----
+     Wedges filling the last quarter of the chord, each hinged on the wing box
+     it hangs off. Flaps inboard, ailerons outboard, spoilers on the upper
+     surface ahead of the flaps -- which is where they are, and why extending
+     them dumps the lift the flaps are making. */
+  const hinges = Array.from({ length: SURF_COUNT }, () => ({
+    p: [0, 0, 0], axis: [1, 0, 0]
+  }));
+  const panel = (v0, v1, sgn, sid, u1, lift) => {
+    const mid = u => [wingPt(v0, u, true, sgn), wingPt(v0, u, false, sgn),
+                      wingPt(v1, u, false, sgn), wingPt(v1, u, true, sgn)];
+    const a0 = mid(CS), a1 = mid(u1);
+    const z = lift || 0;
+    const up = p => [p[0], p[1], p[2] + z];
+    quad(up(a0[0]), up(a1[0]), up(a1[3]), up(a0[3]), WING, sid);        // top
+    quad(up(a0[1]), up(a0[2]), up(a1[2]), up(a1[1]), WING_D, sid);      // bottom
+    quad(up(a1[0]), up(a1[1]), up(a1[2]), up(a1[3]), WING_D, sid);      // trailing edge
+    quad(up(a0[0]), up(a0[1]), up(a1[1]), up(a1[0]), WING_D, sid);      // inboard
+    quad(up(a0[3]), up(a1[3]), up(a1[2]), up(a0[2]), WING_D, sid);      // outboard
+    /* The hinge is the panel's own forward edge, so it swings about the wing
+       rather than about the aeroplane. */
+    const h0 = wingPt(v0, CS, true, sgn), h1 = wingPt(v1, CS, true, sgn);
+    const d = [h1[0] - h0[0], h1[1] - h0[1], h1[2] - h0[2]];
+    /* Every hinge axis points to starboard, including the port wing's. Left
+       as built, the two wings' axes point *outboard* -- opposite ways -- and
+       the same signed angle lowers one flap and raises the other. Which is
+       exactly what happened, and what the guard caught. With one convention a
+       positive angle means trailing edge down on both sides, and a surface
+       that is supposed to act in opposition says so with a sign rather than
+       relying on the geometry to flip it. */
+    if (d[0] < 0) { d[0] = -d[0]; d[1] = -d[1]; d[2] = -d[2]; }
+    const m = Math.hypot(d[0], d[1], d[2]) || 1;
+    hinges[sid] = { p: [h0[0], h0[1], h0[2] + z], axis: [d[0]/m, d[1]/m, d[2]/m] };
+  };
+  panel(0.14, 0.50, 1, SURF.FLAP_R, 1.06);
+  panel(0.14, 0.50, -1, SURF.FLAP_L, 1.06);
+  panel(0.62, 0.94, 1, SURF.AIL_R, 1.0);
+  panel(0.62, 0.94, -1, SURF.AIL_L, 1.0);
+  /* Spoiler panels sit *on* the skin, so they are lifted clear of it by a
+     hair -- coincident faces would fight for the depth buffer. */
+  const spoiler = (sgn, sid) => {
+    const eps = rootC * 0.004;
+    const pt = (v, u) => { const p = wingPt(v, u, true, sgn); return [p[0], p[1], p[2] + eps]; };
+    const [v0, v1] = [0.18, 0.50], [u0, u1] = [0.52, CS - 0.01];
+    quad(pt(v0, u0), pt(v0, u1), pt(v1, u1), pt(v1, u0), WING_D, sid);
+    const h0 = pt(v0, u0), h1 = pt(v1, u0);
+    const d = [h1[0] - h0[0], h1[1] - h0[1], h1[2] - h0[2]];
+    if (d[0] < 0) { d[0] = -d[0]; d[1] = -d[1]; d[2] = -d[2]; }   // starboard, as above
+    const m = Math.hypot(d[0], d[1], d[2]) || 1;
+    hinges[sid] = { p: h0, axis: [d[0]/m, d[1]/m, d[2]/m] };
+  };
+  spoiler(1, SURF.SPOIL_R); spoiler(-1, SURF.SPOIL_L);
+
+  /* ---- tailplane and fin ----
+     Flat, so one hinge line serves both elevators. */
+  const tpB = B * 0.36, tpY = tailY + L * 0.26, tpC = L * 0.20, tpZ = lowerR * 0.30;
+  const tpSweep = L * 0.13;
+  const tpSec = v => ({ x: Wf * 0.42 + (tpB - Wf * 0.42) * v,
+                        le: tpY - tpSweep * v, ch: tpC * (1 - 0.45 * v),
+                        z: tpZ, tc: 0.10 });
+  const tpPt = (v, u, up, sgn) => {
+    const s = tpSec(v), half = naca(Math.min(u, 1), s.tc) * s.ch;
+    return [s.x * sgn, s.le - u * s.ch, s.z + (up ? half : -half)];
+  };
+  const TCS = 0.68;
+  const TVS = [0, 0.35, 0.7, 1.0], TUS = [0, 0.08, 0.24, 0.46, TCS];
+  for (const sgn of [1, -1]) {
+    for (let i = 0; i < TVS.length - 1; i++) {
+      for (let j = 0; j < TUS.length - 1; j++) {
+        const [v0, v1] = [TVS[i], TVS[i+1]], [u0, u1] = [TUS[j], TUS[j+1]];
+        quad(tpPt(v0,u0,true,sgn), tpPt(v0,u1,true,sgn), tpPt(v1,u1,true,sgn), tpPt(v1,u0,true,sgn), WING);
+        quad(tpPt(v0,u0,false,sgn), tpPt(v1,u0,false,sgn), tpPt(v1,u1,false,sgn), tpPt(v0,u1,false,sgn), WING_D);
+      }
+    }
+    for (let j = 0; j < TUS.length - 1; j++) {
+      quad(tpPt(1,TUS[j],true,sgn), tpPt(1,TUS[j+1],true,sgn),
+           tpPt(1,TUS[j+1],false,sgn), tpPt(1,TUS[j],false,sgn), WING_D);
+    }
+    /* Elevator, hinged on the spanwise line both halves share. */
+    const e0 = [tpPt(0,TCS,true,sgn), tpPt(0,TCS,false,sgn), tpPt(1,TCS,false,sgn), tpPt(1,TCS,true,sgn)];
+    const e1 = [tpPt(0,1,true,sgn), tpPt(0,1,false,sgn), tpPt(1,1,false,sgn), tpPt(1,1,true,sgn)];
+    quad(e0[0], e1[0], e1[3], e0[3], WING, SURF.ELEV);
+    quad(e0[1], e0[2], e1[2], e1[1], WING_D, SURF.ELEV);
+    quad(e1[0], e1[1], e1[2], e1[3], WING_D, SURF.ELEV);
+  }
+  {
+    const h = tpPt(0, TCS, true, 1), t = tpPt(1, TCS, true, 1);
+    const d = [t[0]-h[0], t[1]-h[1], t[2]-h[2]];
+    const m = Math.hypot(d[0], d[1], d[2]) || 1;
+    hinges[SURF.ELEV] = { p: [0, h[1], h[2]], axis: [d[0]/m, d[1]/m, d[2]/m] };
+  }
+
+  /* The fin reaches the published height measured off the ground the wheels
+     stand on, so the model is exactly as tall as the type is. */
+  const finTop = groundZ + a.height;
+  const finRootY = tailY + L * 0.30, finC = L * 0.24;
+  const finSec = w => ({ le: finRootY - L * 0.14 * w, ch: finC * (1 - 0.50 * w),
+                         z: lowerR * 0.80 + (finTop - lowerR * 0.80) * w,
+                         tc: 0.11 });
+  const finPt = (w, u, sgn) => {
+    const s = finSec(w), half = naca(Math.min(u, 1), s.tc) * s.ch;
+    return [half * sgn, s.le - u * s.ch, s.z];
+  };
+  const RCS = 0.64;
+  const FWS = [0, 0.3, 0.62, 0.86, 1.0], FUS_U = [0, 0.09, 0.26, 0.48, RCS];
+  for (let i = 0; i < FWS.length - 1; i++) {
+    for (let j = 0; j < FUS_U.length - 1; j++) {
+      const [w0, w1] = [FWS[i], FWS[i+1]], [u0, u1] = [FUS_U[j], FUS_U[j+1]];
+      quad(finPt(w0,u0,1), finPt(w0,u1,1), finPt(w1,u1,1), finPt(w1,u0,1), TAIL);
+      quad(finPt(w0,u0,-1), finPt(w1,u0,-1), finPt(w1,u1,-1), finPt(w0,u1,-1), TAIL);
+    }
+  }
+  for (let j = 0; j < FUS_U.length - 1; j++) {
+    quad(finPt(1,FUS_U[j],1), finPt(1,FUS_U[j+1],1), finPt(1,FUS_U[j+1],-1), finPt(1,FUS_U[j],-1), TAIL);
+  }
+  for (let i = 0; i < FWS.length - 1; i++) {
+    const r0 = [finPt(FWS[i],RCS,1), finPt(FWS[i],RCS,-1)];
+    const r1 = [finPt(FWS[i+1],RCS,1), finPt(FWS[i+1],RCS,-1)];
+    const t0 = finPt(FWS[i],1,1), t1 = finPt(FWS[i+1],1,1);
+    quad(r0[0], t0, t1, r1[0], TAIL, SURF.RUDDER);
+    quad(r0[1], r1[1], t1, t0, TAIL, SURF.RUDDER);
+  }
+  {
+    /* The rudder hinges on the fin's rear spar, which is swept with it. */
+    const h = finPt(0, RCS, 1), t = finPt(1, RCS, 1);
+    const d = [0, t[1]-h[1], t[2]-h[2]];
+    const m = Math.hypot(d[0], d[1], d[2]) || 1;
+    hinges[SURF.RUDDER] = { p: [0, h[1], h[2]], axis: [0, d[1]/m, d[2]/m] };
+  }
+
+  /* ---- nacelles and pylons ----
+     The cowl is as fat as the published fan plus a cowl's thickness, which is
+     the same `fanDia` the engine's note comes from. An open tube was the old
+     shape and you could see straight through it; this one has an inlet lip, a
+     fan to look at and a core plug behind. */
+  const NAC_N = 14;
   const widest = Math.max(...a.arms.map(Math.abs));
   for (const arm of a.arms) {
     const outboard = Math.abs(arm) / widest;
-    const ey = rootLE - sweepBack * outboard * 0.55 + L * 0.05;
-    const er = a.fusW * 0.30, ez = -Hf * .55 - dih * outboard * .45;
-    const n0 = [], n1 = [];
-    for (let i = 0; i < 10; i++) {
-      const t = i / 10 * Math.PI * 2;
-      n0.push([arm + Math.cos(t) * er, ey, ez + Math.sin(t) * er]);
-      n1.push([arm + Math.cos(t) * er * .90, ey - L * .10, ez + Math.sin(t) * er * .90]);
+    const v = Math.min(0.95, (Math.abs(arm) - rootX) / Math.max(B - rootX, 1e-3));
+    const w = wingSec(Math.max(v, 0));
+    /* As fat as the published fan plus a cowl, and as long as such a cowl is.
+       The inlet hangs about one fan diameter ahead of the leading edge, which
+       is where a pylon that length puts it. */
+    const fanR = a.fanDia / 2, cowlR = cowlRadius;
+    const nacL = a.fanDia * 2.05;
+    const ey = w.le + a.fanDia * 1.05;
+    /* Hung a pylon's depth below the wing's lower surface, not tucked flush
+       against it: flush leaves nothing for the pylon to be, which is how the
+       first version came out with a four-centimetre sliver joining them and
+       looking, from outside, like nothing at all. */
+    const wingUnder = w.z - naca(0.3, w.tc) * w.ch;
+    const pylonGap = cowlR * 0.42;   // the same figure the leg was solved for
+    const ez = wingUnder - pylonGap - cowlR;
+    /* Cowl profile: lip, maximum diameter a third back, tapering to the nozzle. */
+    const PROF = [[0.00, 0.80], [0.05, 0.99], [0.18, 1.06], [0.34, 1.05],
+                  [0.62, 0.97], [0.85, 0.88], [1.00, 0.78]];
+    const npt = (t, r, i) => {
+      const th = i / NAC_N * Math.PI * 2;
+      return [arm + Math.cos(th) * cowlR * r, ey - t * nacL, ez + Math.sin(th) * cowlR * r];
+    };
+    for (let s = 0; s < PROF.length - 1; s++) {
+      for (let i = 0; i < NAC_N; i++) {
+        const j = (i + 1) % NAC_N;
+        quad(npt(PROF[s][0], PROF[s][1], i), npt(PROF[s][0], PROF[s][1], j),
+             npt(PROF[s+1][0], PROF[s+1][1], j), npt(PROF[s+1][0], PROF[s+1][1], i),
+             s < 4 ? ENG : ENG_D);
+      }
     }
-    for (let k = 0; k < 10; k++) { const n = (k + 1) % 10; quad(n0[k], n0[n], n1[n], n1[k], ENG); }
+    /* Inlet lip turning inward, and the fan behind it. */
+    for (let i = 0; i < NAC_N; i++) {
+      const j = (i + 1) % NAC_N;
+      /* The lip is dark on a real engine -- it is the anti-ice skin, not paint. */
+      quad(npt(0, 0.80, i), npt(0, 0.80, j),
+           npt(0.09, fanR / cowlR, j), npt(0.09, fanR / cowlR, i), LIP);
+      tri(npt(0.10, fanR / cowlR, i), npt(0.10, fanR / cowlR, j),
+          [arm, ey - nacL * 0.10, ez], FAN);
+      /* Core plug: the cone you see up the back of a running engine. */
+      tri(npt(1.0, 0.78, i), npt(1.0, 0.78, j),
+          [arm, ey - nacL * 1.10, ez], ENG_D);
+    }
+    /* The pylon. Without it the engines hang in space beside the aeroplane,
+       which was the most obviously wrong thing in the old model. */
+    const pw = cowlR * 0.13;
+    const py0 = w.le - w.ch * 0.18, py1 = ey - nacL * 0.55;
+    const pzTop = wingUnder + cowlR * 0.05, pzBot = ez + cowlR * 0.88;
+    for (const o of [pw, -pw]) {
+      quad([arm + o, py0, pzTop], [arm + o, py1, pzBot],
+           [arm + o, ey - nacL * 0.05, pzBot], [arm + o, py0 + w.ch * 0.26, pzTop], PYL);
+    }
+    quad([arm + pw, py1, pzBot], [arm - pw, py1, pzBot],
+         [arm - pw, py0, pzTop], [arm + pw, py0, pzTop], PYL);
+    quad([arm + pw, py0, pzTop], [arm - pw, py0, pzTop],
+         [arm - pw, py0 + w.ch * 0.26, pzTop], [arm + pw, py0 + w.ch * 0.26, pzTop], PYL);
   }
-  return tris;
+
+  /* ---- landing gear ----
+     Drawn when it is down, and the bogie count is `artwork.py`'s: pavement
+     loading decides it, so one leg a side on a narrowbody, two on a widebody
+     and three on the A380 -- the same thresholds, so the side profile and this
+     cannot disagree about how many wheels a type has. */
+  const gearGroups = a.mtow < 150000 ? 1 : (a.mtow < 400000 ? 2 : 3);
+  const axles = a.mtow < 150000 ? 1 : 2;
+  const legR = Math.max(0.21, lowerR * 0.115), tyreR = gearLeg * 0.42;
+  const leg = (x, y, n) => {
+    /* Strut. */
+    for (let i = 0; i < 8; i++) {
+      const t0 = i / 8 * Math.PI * 2, t1 = (i + 1) / 8 * Math.PI * 2;
+      const p = (t, z, r) => [x + Math.cos(t) * r, y + Math.sin(t) * r, z];
+      /* Fatter at the top, where the oleo is. */
+      quad(p(t0, -lowerR * 0.55, legR * 1.5), p(t1, -lowerR * 0.55, legR * 1.5),
+           p(t1, groundZ + tyreR * 1.6, legR), p(t0, groundZ + tyreR * 1.6, legR), GEAR, SURF.GEAR);
+    }
+    /* The bogie beam the axles hang off. */
+    if (n > 1) {
+      const by = tyreR * 1.25;
+      for (const dz of [legR * 0.5, -legR * 0.5]) {
+        quad([x - legR, y - by, groundZ + tyreR + dz], [x + legR, y - by, groundZ + tyreR + dz],
+             [x + legR, y + by, groundZ + tyreR + dz], [x - legR, y + by, groundZ + tyreR + dz],
+             GEAR, SURF.GEAR);
+      }
+    }
+    for (let k = 0; k < n; k++) {
+      const wy = y + (k - (n - 1) / 2) * tyreR * 2.3;
+      for (const sx of (n > 1 || gearGroups > 1 ? [tyreR * 0.8, -tyreR * 0.8] : [0])) {
+        for (let i = 0; i < 8; i++) {
+          const t0 = i / 8 * Math.PI * 2, t1 = (i + 1) / 8 * Math.PI * 2;
+          const p = (t, o) => [x + sx + o, wy + Math.cos(t) * tyreR,
+                               groundZ + tyreR + Math.sin(t) * tyreR];
+          quad(p(t0, tyreR * 0.32), p(t1, tyreR * 0.32),
+               p(t1, -tyreR * 0.32), p(t0, -tyreR * 0.32), TYRE, SURF.GEAR);
+          tri(p(t0, tyreR * 0.32), p(t1, tyreR * 0.32),
+              [x + sx + tyreR * 0.32, wy, groundZ + tyreR], TYRE, SURF.GEAR);
+        }
+      }
+    }
+  };
+  leg(0, noseY - L * 0.17, 1);
+  const mainY = rootLE - rootC * 0.55;
+  for (const sgn of [1, -1]) {
+    for (let g = 0; g < gearGroups; g++) {
+      leg(sgn * Wf * 0.80, mainY - g * tyreR * 2.9, axles);
+    }
+  }
+  /* Everything on the gear collapses to this point when it is up. */
+  hinges[SURF.GEAR] = { p: [0, mainY, -lowerR * 0.5], axis: [1, 0, 0] };
+
+  /* ---- lights ----
+     Red to port, green to starboard, white astern: the oldest convention in
+     navigation and the one thing about an aeroplane at dusk you can actually
+     see. Strobes and the beacon flash, so their emission is a function of the
+     clock rather than of geometry, and lives in `lightGains` below. */
+  const lamps = [];
+  /* Bigger than a real lamp, because a real one is seen as a glow and there is
+     no bloom here to make one -- the geometry has to be the glow. */
+  const LAMP_R = L * 0.016;
+  /* An octahedron rather than a disc: a lamp has to be visible from wherever
+     you are looking, and a flat one turns edge-on and goes out. */
+  const lamp = (p, col, kind, r) => {
+    const s = r || LAMP_R;
+    const ax = [[s,0,0], [-s,0,0]], eq = [[0,s,0], [0,0,s], [0,-s,0], [0,0,-s]];
+    const at = o => [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
+    for (const a0 of ax) for (let i = 0; i < 4; i++) {
+      tri(at(a0), at(eq[i]), at(eq[(i + 1) % 4]), col, SURF.FIXED, kind);
+    }
+    lamps.push({ p, col, kind });
+  };
+  /* Inboard of the tip by their own radius, so the lamps cannot make the
+     aeroplane wider than its published span. */
+  const tipR = wingSec(0.99), tipY = tipR.le - tipR.ch * 0.2, tipX = B - LAMP_R;
+  lamp([ tipX, tipY, tipR.z], "#2fe06a", 1);               // starboard, green
+  lamp([-tipX, tipY, tipR.z], "#ff3b30", 1);               // port, red
+  lamp([ tipX, tipY - tipR.ch * 0.5, tipR.z], "#ffffff", 2);       // strobes
+  lamp([-tipX, tipY - tipR.ch * 0.5, tipR.z], "#ffffff", 2);
+  lamp([0, tailY + LAMP_R * 1.05, lowerR * 0.42], "#ffffff", 1);   // tail
+  lamp([0, rootLE + rootC * 0.2,  lowerR * 1.01], "#ff2a20", 3);   // beacon, upper
+  lamp([0, rootLE + rootC * 0.2, -lowerR * 1.01], "#ff2a20", 3);   // beacon, lower
+  /* Landing lights come on with the gear, because that is when they are on. */
+  lamp([ Wf * 1.1, rootLE + rootC * 0.1, rootZ], "#fff6d8", 4, L * 0.010);
+  lamp([-Wf * 1.1, rootLE + rootC * 0.1, rootZ], "#fff6d8", 4, L * 0.010);
+
+  return { tris, hinges, groundZ, gearGroups, axles, lamps,
+           span: B * 2, length: L, height: a.height, pods: a.arms.length };
 }
 const modelCache = {};
 const modelFor = a => modelCache[a.key] || (modelCache[a.key] = buildModel(a));
+
+/* What each hinge is doing right now, in radians. Every one of these reads
+   state the flight model already owns -- a surface drawn from anything else
+   would be a second aeroplane, which is the rule the speed tape and the flight
+   mode annunciator each exist to keep. */
+const AIL_MAX = rad(22), ELEV_MAX = rad(17), RUD_MAX = rad(28),
+      FLAP_MAX = rad(38), SPOIL_MAX = rad(46);
+function surfaceAngles(a, s, out) {
+  for (let i = 0; i < SURF_COUNT; i++) out[i] = 0;
+  /* Roll demand: what the law is asking for against what the aeroplane is
+     doing. An aileron at rest when the wings are level and hard over when the
+     roll is being fought is what it looks like from outside. */
+  const rollErr = clamp(((s.lawBank !== undefined ? s.lawBank : s.cmdBank) - s.bank) / 12, -1, 1);
+  /* Positive is trailing edge down. A roll to port wants the starboard aileron
+     down and the port one up, which is the one pair here that opposes. */
+  out[SURF.AIL_R] = -rollErr * AIL_MAX;
+  out[SURF.AIL_L] =  rollErr * AIL_MAX;
+  const pitchErr = clamp(((s.lawPitch !== undefined ? s.lawPitch : s.cmdPitch) - s.pitch) / 8, -1, 1);
+  out[SURF.ELEV] = -pitchErr * ELEV_MAX;
+  /* `rudder_deg` is positive to the right -- it drives `sideslip_deg` positive
+     through `cn_rudder`, and positive sideslip is the nose right of the flight
+     path. Right rudder puts the trailing edge to starboard. */
+  out[SURF.RUDDER] = (s.rudder || 0) / Math.max(a.maxRudder, 1) * RUD_MAX;
+  const flap = FLAP_CL[s.flaps] / FLAP_CL[FLAP_CL.length - 1] * FLAP_MAX;
+  out[SURF.FLAP_L] = out[SURF.FLAP_R] = flap;
+  const sp = s.spoilers ? (s.onGround ? 1 : 0.55) * SPOIL_MAX : 0;
+  out[SURF.SPOIL_L] = out[SURF.SPOIL_R] = -sp;
+  return out;
+}
+
+/* Lamp brightness by kind: 1 steady, 2 strobe, 3 beacon, 4 with the gear.
+   The flash rates are the real ones -- a strobe about once a second, a beacon
+   slower -- and they are the only thing here that is a function of the clock
+   rather than of the aeroplane. */
+function lampGain(kind, t, gearDown) {
+  if (kind === 1) return 2.4;
+  if (kind === 2) return (t % 1.05) < 0.10 ? 9 : 0;
+  if (kind === 3) return 0.5 + 2.6 * Math.pow(Math.max(0, Math.sin(t * 2.0)), 6.0);
+  if (kind === 4) return gearDown ? 3.0 : 0;
+  return 0;
+}
 
 /* ---------- resize ---------- */
 function resize() {
@@ -4512,6 +5031,34 @@ function sunTint() {
   const e = sunVector()[2];
   const low = clamp(1 - e / 0.36, 0, 1);
   return [1.0, 1.0 - low * 0.34, 1.0 - low * 0.62];
+}
+
+/* Everything the model program needs that is the same for every aeroplane in
+   the frame, plus the hinge table and lamp gains for one of them. Two call
+   sites -- the aeroplane you are flying and the ones out of the window -- and
+   they must not drift apart, which is the same reason `updatePanel` owns the
+   readout rather than each caller assembling one. */
+const HINGE_P = new Float32Array(SURF_COUNT * 3);
+const HINGE_A = new Float32Array(SURF_COUNT * 3);
+const HINGE_ANG = new Float32Array(SURF_COUNT);
+const LAMP_GAIN = new Float32Array(5);
+const SURF_ANGLES = new Float32Array(SURF_COUNT);
+
+function setModelHinges(a, angles, gearDown, clockS) {
+  const hinges = modelFor(a).hinges;
+  for (let i = 0; i < SURF_COUNT; i++) {
+    const h = hinges[i];
+    HINGE_P[i*3] = h.p[0]; HINGE_P[i*3+1] = h.p[1]; HINGE_P[i*3+2] = h.p[2];
+    HINGE_A[i*3] = h.axis[0]; HINGE_A[i*3+1] = h.axis[1]; HINGE_A[i*3+2] = h.axis[2];
+    HINGE_ANG[i] = angles ? angles[i] : 0;
+  }
+  LAMP_GAIN[0] = 0;
+  for (let k = 1; k < 5; k++) LAMP_GAIN[k] = lampGain(k, clockS, gearDown);
+  gl.uniform3fv(progModel.u.uHingeP, HINGE_P);
+  gl.uniform3fv(progModel.u.uHingeA, HINGE_A);
+  gl.uniform1fv(progModel.u.uHingeAng, HINGE_ANG);
+  gl.uniform1fv(progModel.u.uLamp, LAMP_GAIN);
+  gl.uniform1f(progModel.u.uGearDown, gearDown ? 1 : 0);
 }
 
 function render() {
@@ -4664,6 +5211,7 @@ function render() {
     const m = modelBuffers(a);
     gl.useProgram(progModel);
     gl.bindVertexArray(m.vao);
+    setModelHinges(a, surfaceAngles(a, s, SURF_ANGLES), s.gear, s.t);
     gl.uniformMatrix4fv(progModel.u.uVP, false, VP);
     gl.uniformMatrix4fv(progModel.u.uModel, false, MODELM);
     gl.uniformMatrix3fv(progModel.u.uNormalM, false, NORMALM);
@@ -4714,6 +5262,11 @@ function render() {
                    MODELM[8], MODELM[9], MODELM[10]]);
       const mesh = modelBuffers(other);
       gl.bindVertexArray(mesh.vao);
+      /* Traffic is evaluated rather than flown, so it has no control demand of
+         its own and its surfaces sit where a trimmed aeroplane's do. Its gear
+         follows its phase, which the profile does know. */
+      const low = t.phase !== "cruise" && t.alt - elevation(t.x, t.y) < 2500;
+      setModelHinges(other, null, low, s.t);
       gl.uniformMatrix4fv(progModel.u.uModel, false, MODELM);
       gl.uniformMatrix3fv(progModel.u.uNormalM, false, NORMALM);
       gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
