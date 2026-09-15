@@ -32,6 +32,11 @@ const place = (p, o) => p.evaluate(o => {
   if (process.env.CHROMIUM) launch.executablePath = process.env.CHROMIUM;
   const b = await chromium.launch(launch);
   const p = await b.newPage({ viewport: { width: 1280, height: 820 } });
+  /* Playwright's default is thirty seconds, and a software rasteriser on a CI
+     runner takes longer than that to put 714k triangles on a 1280x820 page.
+     Nothing is being relaxed here -- there is no assertion in this file to
+     relax. It is how long the picture takes to draw. */
+  p.setDefaultTimeout(150000);
   const errs = []; p.on('pageerror', e => errs.push('PAGEERROR: ' + e.message));
   await p.goto('file://' + process.argv[2]);
   await p.waitForTimeout(7000);
