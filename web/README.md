@@ -43,12 +43,37 @@ in `tools/` gets to a flight.
   own engine. Radio-altitude callouts use the browser's speech synthesiser.
 * **The aeroplanes** — built from each type's published dimensions, not drawn
   by hand: a lofted wing section, engines as fat as the published fan on real
-  pylons, gear whose bogie count follows `artwork.py`'s own rule, a cabin that
-  a freighter does not get, and navigation lights, strobes and a beacon. The
-  control surfaces are hinged in the vertex shader and deflected from the
-  flight model's own state — the ailerons from the roll demand, the rudder from
-  `rudder_deg`, the flaps from the detent — so an aeroplane out of the window
-  is doing what it looks like it is doing.
+  pylons, a wing-root fairing and flap-track canoes, gear whose bogie count
+  follows `artwork.py`'s own rule, a cabin that a freighter does not get, and
+  navigation lights, strobes and a beacon. The control surfaces are hinged in
+  the vertex shader and deflected from the flight model's own state — the
+  ailerons from the roll demand, the rudder from `rudder_deg`, the flaps from
+  the detent — so an aeroplane out of the window is doing what it looks like it
+  is doing.
+
+  They are **smooth** because their vertex normals are averaged rather than
+  taken per face, and *creased* where the surface genuinely creases: a corner
+  averages only the faces within 46° of its own, so the fuselage comes out
+  round, the wing's blunt trailing edge stays an edge, and the BelugaXL's cargo
+  step stays a step — nothing needed marking by hand. Flat shading, not the
+  polygon count, is what made the old fleet look like blocks glued together;
+  sixteen sides give sixteen flat bands and sixty-four give sixty-four thinner
+  ones.
+
+* **The engines** turn. Each nacelle has a spinner, a core plug, separate
+  bypass and core nozzles, reverser cascades, and as many fan blades as the
+  type *publishes* — and the fan spins at `FAN_TIP_SPEED_MS / (π · fanDia)`
+  scaled by N1, which is the same shaft speed the engine's note is derived
+  from, so the engine you see is the engine you hear. Above about 40% N1 the
+  blades fade into the disc behind them, because a spooled-up fan is a blur and
+  not a wheel with spokes.
+
+* **The metal reflects the sky it is flying in.** `SKY_FS`'s body is factored
+  into a shared `GLSL_SKY` — the same way `GLSL_NOISE` is shared between the
+  height bake, the terrain and the water — and the model shader evaluates it
+  along the reflection vector, Fresnel-weighted. No cubemap, no second pass and
+  no texture: the fuselage picks up zenith blue above and haze below, and goes
+  orange at sunset because the sky does.
 * **Traffic** — fourteen scheduled services between the five home airfields,
   drawn as TCAS symbols on the navigation display and as aeroplanes out of the
   window within fifteen miles. Evaluated rather than simulated: a contact is an
@@ -211,7 +236,10 @@ hangar: every type in `FLEET` has a card, each card names the aeroplane it is a
 picture of, and no card is blank -- measured as the spread of light in it,
 because a card that rendered an empty frame looks exactly like a card until you
 go looking. It checks `?fly=1` reaches the runway too, since all five tools
-depend on that and nothing else asserts it. Every type's model is
+depend on that and nothing else asserts it. It finds parts by what they *are* --
+each triangle carries a `pid` -- rather than by what colour they are painted,
+which was one field doing two jobs: repainting an engine used to break the check
+that there *is* an engine. Every type's model is
 measured against the span, length and height it publishes -- to two
 centimetres, because the model is *generated* from those numbers and either
 equals them or has a bug. One pod per engine on its published arm, with a pylon
@@ -226,11 +254,43 @@ or down depends on which way, so a test written in signs passes a model whose
 port flap goes up while its starboard flap goes down. That is exactly what this
 file caught on its first run.
 
-Ten deliberate breakages fail it ten times. The last one is the interesting
-one: standing the whole fleet 25% higher satisfies every published figure,
-because they all measure from the ground the wheels stand on. What catches it is
-that the gear length is *solved* for the clearance the engines need, and that
-solve has to be what decides the leg on at least one type or it is decorative.
+Ten deliberate breakages fail it ten times. The interesting one is that
+standing the whole fleet 25% higher satisfies every published figure, because
+they all measure from the ground the wheels stand on. What catches it is that
+the gear length is *solved* for the clearance the engines need, and that solve
+has to be what decides the leg on at least one type or it is decorative.
+
+Four more assertions came with the smooth aeroplanes, each for something that
+would otherwise have been invisible:
+
+* **Every solid is wound one way round, and no triangle has no area.** Never
+  checked before, although the file's no-back-face-culling note had always been
+  uneasy about it -- and between them the two caught four real defects on the
+  first run: the fuselage's nose cap wound backwards, so its normal pointed aft
+  into the aeroplane and dragged the whole radome's shading dark; the pylon and
+  the sharklet each with one of their two mirrored flanks inside-out; and a
+  flap-track canoe whose tail ring was collapsed onto its own axis. Full
+  *closure* is asserted only of the hull, because everything else here is an
+  assembly -- the cowl opens onto the fan, a sharklet sits on a wing tip -- so
+  an edge used once is a join rather than a fault.
+* **Smoothing happened where it should and not where it should not**, stated as
+  a property rather than an appearance: normals meeting at a point on the
+  constant section agree to within a degree, and somewhere on the wing they
+  disagree by a right angle, because a blunt trailing edge is one. Flatten the
+  normals and the first fails; smooth across every crease and the second does.
+* **The fan has as many blades as the type publishes, and it turns at the speed
+  the sound is made from** -- compared against `fanShaftHz`, the one function
+  both the note and the spin read. It must also stay still with the engines
+  stopped, because "it turns" is only half a claim.
+* **There is one sky and the metal reads it.** `MODEL_FS` and `SKY_FS` must
+  carry the shared `GLSL_SKY` verbatim, with `skyColour` declared exactly once
+  in each, so a copy cannot be pasted into one and edited. And because a shader
+  that ignored the sky uniforms would satisfy that perfectly, the fleet is drawn
+  twice under two very different skies and the pixels have to differ.
+
+Seven deliberate breakages fail those four, seven times: flatten the normals,
+smooth across every crease, invert one winding, drop a blade, freeze the fan,
+desynchronise the two skies, and cut the reflection out of the material.
 
 `tools/shots.js` puts the aircraft at fixed places in the world and photographs
 them, which is how the renderer is checked:

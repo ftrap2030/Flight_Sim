@@ -725,9 +725,29 @@ and the gear comes down, with the right number of bogies for the weight. At
 dusk the navigation lights are red to port and green to starboard, the strobes
 fire about once a second and the beacon turns over more slowly.
 
+They are smooth, and that is not a polygon count: vertex normals are averaged
+across each surface and kept sharp only where the shape genuinely creases, at a
+46° threshold nobody has to mark by hand. Flat shading — one normal per facet —
+is what made the old fleet look like blocks glued together.
+
+Look into an engine and there is an engine: a spinner, a core plug, two nozzles,
+reverser cascades, and exactly as many fan blades as the type publishes. It
+turns at the shaft speed the published fan diameter implies, which is the same
+number the engine's note is made from — and above about 40% N1 the blades fade
+into a disc, because a spooled fan is a blur rather than a wheel with spokes.
+
+And the paint reflects the sky it is flying in. The sky is a single shared
+function, evaluated along the reflection vector and weighted so it is strongest
+at grazing angles — which is where a real fuselage is brightest and is most of
+what makes metal look like metal. At sunset the aeroplane goes orange because
+the sky does.
+
 `web/tools/model_check.js` is what keeps all of that honest: it measures every
 model against its published span, length and height, counts the pods and the
-bogies, and deflects each surface to check which way the metal actually went.
+bogies, deflects each surface to check which way the metal actually went, and
+checks that every solid is wound one way round, that the smoothing happened
+where it should and nowhere else, that the fan has its published blades and
+turns, and that the metal and the sky are reading one definition.
 
 ## Tests
 

@@ -175,7 +175,7 @@ and there is one nacelle per entry in `engine_arms_m`, as fat as the published
 you hear is the engine you see**.
 
 It was 164 triangles before this: flat plates for wings, open tubes for engines
-joined to nothing, no gear, no moving surface, no lights. It is about two
+joined to nothing, no gear, no moving surface, no lights. It is six to nine
 thousand now, which is still nothing against 714k of terrain.
 
 Four things in it are load-bearing.
@@ -249,6 +249,125 @@ the whole fleet 25% higher satisfies *every published figure*, because they all
 measure from the ground the wheels are on. What catches it is the vacuity guard
 — the engine-clearance solve has to be what decides the leg on at least one
 type, or it is decorative.
+
+**And it identifies a part by what it *is*, never by what colour it is wearing.**
+It used to find the nacelle by looking for four particular hex strings, which
+made the livery and the part identity one field doing two jobs: repainting an
+engine broke the check that there *is* an engine, and painting a new wing-root
+fairing in the fuselage's grey made the fuselage measure a foot deeper than it
+is — which is how that was found. Every triangle carries a `pid` now, and the
+paint is free to change under it.
+
+## Smooth is interpolated normals, not more triangles
+
+The fleet looked like blocks glued together, and the polygon count was not why.
+`modelBuffers` wrote **one face normal to all three of a triangle's vertices**,
+which is flat shading: every facet gets one uniform brightness and the eye
+resolves each one as a plate. Tessellation cannot fix that — sixteen sides give
+sixteen flat bands and sixty-four give sixty-four thinner ones.
+
+`modelNormals` averages instead, and **creases are found rather than declared**:
+a corner averages only the incident faces within `CREASE` (46°) of its own. The
+fuselage comes out round, the wing's blunt trailing edge stays an edge, and the
+Beluga's cargo step stays a step because it is a right angle. Nothing needed
+marking by hand and a new part cannot forget to. Thin plates — panels, lamps,
+the window stripe, fan blades — are excluded, because a plate should look like
+one. Parts never smooth into each other: a nacelle resting against a pylon is
+two surfaces touching, not one surface bending.
+
+It is a separate function from the buffer it fills so that the guard can ask
+what the smoothing *did* rather than look at a picture of it.
+
+**`gl_FrontFacing` replaced `dot(n, V) < 0.0`.** With smooth normals the old
+test misfires at grazing incidence — an interpolated normal on a curved hull
+can point slightly away from a viewer the triangle genuinely faces — and puts a
+hard bright seam exactly on the silhouette. `gl_FrontFacing` asks about the
+triangle, which is the question that was always meant.
+
+### Winding is load-bearing even with no back-face culling
+
+Nothing here is culled, so a face wound backwards still draws — but its *normal*
+points inward, and that normal is then averaged into its neighbours'. The
+fuselage's nose cap shipped that way and dragged the whole radome's shading
+dark. The pylon and the sharklet each had one of their two mirrored flanks
+inside-out for the same reason: **two mirror-image faces cannot share a corner
+order.**
+
+And a quad with a collapsed corner is a triangle. Emitted as two anyway, one of
+them has no area, no face normal and nothing useful to contribute to the average
+— so `quad` collapses it. Every tip cap in the fleet had one, because the upper
+and lower skins meet at the leading edge where `naca(0)` is zero.
+
+## The fan turns at the speed the sound is made from
+
+`fanShaftHz` is the one owner: `FAN_TIP_SPEED_MS / (π · fanDia)`, the shaft
+speed the published diameter implies at 100% N1. `updateAudio` derives the
+engine's note from it and `setModelHinges` derives the fan's rotation from it.
+A fan spinning at a rate the sound did not agree with would be the same fault
+as a speed tape computing its own VLS.
+
+Three things about it:
+
+- **The rotation reuses the hinge machinery.** A fan is a rotation about a point
+  and a line, which is what a hinge already is, so `SURF` grew `FAN0..FAN3` and
+  the Rodrigues rotation in `MODEL_VS` spins them for four floats and no new
+  code. `SURF_COUNT` is interpolated into the shader's array sizes, so the two
+  cannot drift.
+- **The phase is accumulated, never `omega × clock`.** Written the second way,
+  every change in N1 rewrites the whole history and the fan jumps — by more and
+  more as the clock grows, so it looks right for a minute and is a strobe light
+  by the twentieth. This is the float-truncation family one step along: an
+  expression that is right instantaneously and wrong integrated.
+- **A spooled fan is a blur, and it costs no blending.** At three thousand rpm
+  sampled sixty times a second the blades alias into a strobing mess, which is
+  both ugly and a lie. The face behind the blades is painted `FAN_BLUR_HEX` and
+  the vertex shader mixes the blades *toward that same colour* as N1 rises, so
+  at takeoff power the disc reads as solid with nothing sorted and nothing
+  blended. One `mix`, one owner for the colour.
+
+## The metal reflects the sky, out of one definition
+
+`SKY_FS` was already a pure function of ray direction, so its body is factored
+into `GLSL_SKY` exactly as `GLSL_NOISE` is shared between the height bake, the
+terrain and the water — and `MODEL_FS` calls it along the **reflection vector**,
+Fresnel-weighted. No cubemap, no second pass, no texture: the fuselage picks up
+zenith blue above and haze below, and goes orange at sunset because the sky
+does. The sky has one definition and both the sky and the metal read it, which
+is `fbw.characteristic_speeds`'s rule in the one place the thing with two
+readers is a shader.
+
+The consequence to remember: **at a grazing angle painted metal is nearly a
+mirror, so the environment cannot be a void.** The hangar reflected its own
+near-black clear colour and turned every nose and leading edge dark. `HANGAR_ENV`
+is a lit roof and a pale floor, and it is a *parameter* of
+`drawAircraftPreview` rather than a literal inside it, so the guard can draw the
+same aeroplane under two skies and check the pixels differ — a reflection nobody
+can move is not one.
+
+### Four more guards, and seven breakages
+
+`model_check.js` grew four assertions with this, each for something otherwise
+invisible: every solid wound one way round with no zero-area triangles (the hull
+closed outright, everything else an assembly and allowed its joins); smoothing
+present on the constant section and absent at the wing's trailing edge; the
+published blade count on every arm with the fan turning at `fanShaftHz` and
+still with the engines stopped; and one `GLSL_SKY` shared verbatim by both
+programs with the reflection measurably live.
+
+Flatten the normals, smooth across every crease, invert one winding, drop a
+blade, freeze the fan, desynchronise the two skies, cut the reflection out of
+the material — seven breakages, seven catches, each by the assertion meant for
+it.
+
+One more thing the retessellation taught, and it is a family rather than a
+one-off: **a threshold that reads off how finely a shape happens to be sliced is
+not a threshold about the shape.** Raising the tyre ring from 8 segments to 14
+stopped a vertex landing at the bottom of the wheel, and the whole fleet stood
+two centimetres off the runway with every published height short by the same
+amount — a polygon inscribed in a circle only touches it at its vertices. The
+windscreen had the same shape of bug: "every station forward of 0.055" began at
+the radome and painted the nose cone black once the station table went from
+thirteen rows to twenty-three.
 
 ## The build opens in a hangar, and the loading screen is load-bearing
 

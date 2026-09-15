@@ -35,7 +35,7 @@ const gearGroupsFor = mtow => (mtow < 150000 ? 1 : (mtow < 400000 ? 2 : 3));
    bridge, because a constant declared out here is not visible inside
    `p.evaluate` and one declared in there does not come back. */
 const SURF_ID = { AIL_L: 1, AIL_R: 2, ELEV: 3, RUDDER: 4, FLAP_L: 5, FLAP_R: 6,
-                  SPOIL_L: 7, SPOIL_R: 8, GEAR: 9 };
+                  SPOIL_L: 7, SPOIL_R: 8, GEAR: 9, FAN0: 10 };
 
 /* Where a model is measured from, and what its lamps are. Everything below is
    computed in the page, because that is where the geometry is. */
@@ -51,8 +51,16 @@ const PROBE = () => {
     const m = modelFor(a);
     const all = box(m.tris);
     const gear = m.tris.filter(t => t.sid === SURF.GEAR);
-    const nac = m.tris.filter(t => t.col === "#dde3e7" || t.col === "#9aa5ac"
-                                || t.col === "#39424a" || t.col === "#14181b");
+    /* By what a triangle *is*, never by what colour it is wearing.
+
+       This file used to find the nacelle by looking for four particular hex
+       strings, which made the livery and the part identity one field doing two
+       jobs: repainting an engine broke the check that there *is* an engine, and
+       painting a wing-root fairing in the fuselage's grey made the fuselage
+       measure a foot deeper than it is. `pid` is the answer to "what is this",
+       and the paint is free to change under it. */
+    const nac = m.tris.filter(t => t.pid === PART.COWL || t.pid === PART.FAN
+                                || t.pid === PART.BLADE);
     /* Pods: cluster the nacelle skin by the arm it is nearest to, and check
        each published arm actually has metal on it. */
     const podsFound = a.arms.map(arm => nac.filter(t =>
@@ -64,7 +72,7 @@ const PROBE = () => {
        stations, so demanding all three vertices sit inside a thin band selects
        nothing at all -- which is how this first reported every type as having
        a lobe a billion metres deep. */
-    const skin = m.tris.filter(t => (t.col === "#e7ebee" || t.col === "#aab4bc")
+    const skin = m.tris.filter(t => t.pid === PART.HULL
       && Math.abs((t.p[0][1] + t.p[1][1] + t.p[2][1]) / 3) < a.length * 0.12);
     let halfW = 0, roof = -1e9, floor = 1e9;
     for (const t of skin) for (const v of t.p) {
@@ -81,7 +89,7 @@ const PROBE = () => {
       const near = t => Math.abs((t.p[0][0] + t.p[1][0] + t.p[2][0]) / 3 - arm) < a.fanDia * 0.75;
       let lo = 1e9, hi = -1e9;
       for (const t of m.tris) {
-        if (t.col !== "#c6ced4" || !near(t)) continue;
+        if (t.pid !== PART.PYLON || !near(t)) continue;
         for (const v of t.p) { lo = Math.min(lo, v[2]); hi = Math.max(hi, v[2]); }
       }
       /* How deep the pylon actually is, as a fraction of the cowl. A vertical
@@ -99,7 +107,7 @@ const PROBE = () => {
     const gbox = box(gear);
     /* The struts only -- the upper half of the leg. Counting whole legs off
        every gear triangle counts each axle of a bogie as its own leg. */
-    const struts = gear.filter(t => t.col === "#79828a"
+    const struts = gear.filter(t => t.pid === PART.GEAR
       && cen(t)[2] > gbox.lo[2] + (gbox.hi[2] - gbox.lo[2]) * 0.55).map(cen);
     const noseLegTris = struts.filter(c => c[1] > a.length * 0.10).length;
     const mains = struts.filter(c => c[1] < 0);
@@ -118,6 +126,106 @@ const PROBE = () => {
       if (l.p[0] < -a.span * 0.2) lampsBySide.port.push(l.col);
       if (l.p[0] >  a.span * 0.2) lampsBySide.stbd.push(l.col);
     }
+    /* ---- is every solid actually a solid? ----
+
+       Every edge of a closed part should be shared by exactly two triangles
+       traversed in *opposite* directions -- that is what "wound consistently"
+       means, and it is what the file's no-back-face-culling note has always
+       been worried about without anyone ever checking it. It is not a
+       hypothetical: the fuselage's nose cap shipped wound backwards for an
+       hour, its normal pointing aft into the aeroplane, and it dragged the
+       whole radome's shading dark.
+
+       Closure is asserted where closure is real. Parts meet each other at
+       genuine openings -- the cowl opens onto the fan, the pylon onto the wing
+       -- so a boundary edge is not by itself a fault. What is a fault is a
+       boundary that does not close up into loops, which is a crack, and an edge
+       used three times, which is a fold. The hull is the one part with nothing
+       to meet, so it must have no boundary at all. */
+    const manifold = {};
+    let degenerate = 0;
+    const qv3 = v => Math.round(v[0]*1e4) + "," + Math.round(v[1]*1e4) + ","
+                   + Math.round(v[2]*1e4);
+    for (const t of m.tris) {
+      const c = t.p.map(qv3);
+      if (c[0] === c[1] || c[1] === c[2] || c[2] === c[0]) degenerate++;
+    }
+    for (const pid of SOLID_PARTS) {
+      const use = new Map();
+      for (const t of m.tris) {
+        if (t.pid !== pid) continue;
+        for (let k = 0; k < 3; k++) {
+          const A = qv3(t.p[k]), B = qv3(t.p[(k + 1) % 3]);
+          const key = A < B ? A + "|" + B : B + "|" + A;
+          const e = use.get(key) || { fwd: 0, rev: 0 };
+          if (A < B) e.fwd++; else e.rev++;
+          use.set(key, e);
+        }
+      }
+      let sameWay = 0, boundary = 0;
+      for (const e of use.values()) {
+        /* Two triangles that share an edge and both walk it the same way are
+           wound against each other: one of them is inside-out. */
+        if (e.fwd + e.rev === 2 && (e.fwd === 2 || e.rev === 2)) sameWay++;
+        if (e.fwd + e.rev === 1) boundary++;
+      }
+      manifold[pid] = { sameWay, boundary, edges: use.size };
+    }
+
+    /* ---- the fan ----
+       The blade count is the published one, and there is a fan on every arm.
+       Two triangles a blade, because a blade is a quad. */
+    const blades = a.arms.map((_arm, i) =>
+      m.tris.filter(t => t.pid === PART.BLADE && t.sid === SURF.FAN0 + i).length / 2);
+    const fanAxes = a.arms.map((_arm, i) => m.hinges[SURF.FAN0 + i].axis);
+
+    /* ---- what the smoothing did ----
+       Stated as a property rather than as an appearance: two triangles either
+       side of a shared edge agree about the normal there when the surface is
+       smooth, and disagree when it is a crease. The fuselage amidships is the
+       smooth case; the wing's blunt trailing edge is the sharp one. A model
+       shaded flat fails the first, and one smoothed indiscriminately fails the
+       second. */
+    const norms = modelNormals(m.tris);
+    const qv = v => Math.round(v[0]*1e4) + "," + Math.round(v[1]*1e4) + ","
+                  + Math.round(v[2]*1e4);
+    /* The sharpest disagreement between two normals meeting at the same point,
+       over the triangles `want` selects and the positions `where` accepts. 1 is
+       perfect agreement -- a smooth surface -- and 0 is a right-angle crease.
+       `n` is how many points were actually compared, because a measurement
+       taken nowhere agrees with itself. */
+    const agreement = (want, where) => {
+      const at = new Map();
+      m.tris.forEach((t, ti) => {
+        if (!want(t)) return;
+        t.p.forEach((v, k) => {
+          if (where && !where(v)) return;
+          const key = qv(v);
+          if (!at.has(key)) at.set(key, []);
+          at.get(key).push(norms[ti][k]);
+        });
+      });
+      let worst = 1, n = 0;
+      for (const ns of at.values()) {
+        if (ns.length < 2) continue;
+        n++;
+        for (let i = 1; i < ns.length; i++) {
+          worst = Math.min(worst, ns[0][0]*ns[i][0] + ns[0][1]*ns[i][1] + ns[0][2]*ns[i][2]);
+        }
+      }
+      return { worst, n };
+    };
+    /* The smooth case: the constant section amidships, which is a cylinder and
+       has no crease anywhere on it. */
+    const smoothHull = agreement(t => t.pid === PART.HULL
+      && Math.abs((t.p[0][1] + t.p[1][1] + t.p[2][1]) / 3) < a.length * 0.12);
+    /* The sharp case: the wing, which has a blunt trailing edge running its
+       whole span and so must have a right angle somewhere on it. Measured over
+       the whole part rather than at a line picked out by hand -- a swept wing's
+       aftmost point is its tip, so "the four most aft vertices" is a wingtip
+       and not an edge, which is what the first attempt measured. */
+    const wingCrease = agreement(t => t.pid === PART.WING);
+
     /* Silhouette: the model's own outline, quantised, so two types that draw
        the same picture hash the same. */
     let sig = 0;
@@ -135,6 +243,8 @@ const PROBE = () => {
       pylonGaps, noseLegTris, mainSides, mainRows,
       nacLowest: box(nac).lo[2], podsFound,
       halfW, roof, floor, surfaces, lampsBySide, sig,
+      manifold, degenerate, blades, fanAxes, fanBlades: a.fanBlades,
+      smoothHull, wingCrease,
       tris: m.tris.length
     };
   });
@@ -221,6 +331,86 @@ const DEFLECT = () => {
   };
 };
 
+/* Does the fan turn, and at the speed the *sound* is made from?
+
+   `setModelHinges` owns the fan, so this asks it rather than recomputing one:
+   two calls a second apart at a known N1, and the angle it wrote into the hinge
+   table is the answer. Accumulated, so the second call is a second's worth of
+   revolutions on from the first, and the count comes straight out of
+   `fanShaftHz` -- the same function `updateAudio` derives the note from. An
+   engine that span at a rate the sound did not agree with would be two engines.
+
+   It also asks a stopped fan to stay stopped, because "turns" is only half the
+   claim: a fan that advanced whatever N1 was would pass a test that only ever
+   looked at one setting. */
+const SPIN = () => {
+  const a = FLEET_BY_KEY['a320neo'];
+  const read = () => HINGE_ANG[SURF.FAN0];
+  const sample = (n1, t0, t1) => {
+    setModelHinges(a, null, true, t0, n1);
+    const was = read();
+    setModelHinges(a, null, true, t1, n1);
+    /* Unwrapped: the phase is taken modulo a turn, so a second at 4,000 rpm is
+       many revolutions and only the remainder survives. What is compared is
+       that remainder against the one the shaft speed predicts. */
+    return { was, now: read() };
+  };
+  const dt = 0.25;
+  const turn = Math.PI * 2;
+  const expect = n1 => (fanShaftHz(a) * n1 * dt * turn) % turn;
+  return {
+    shaftHz: fanShaftHz(a),
+    idle: sample(0, 100, 100 + dt), idleExpect: expect(0),
+    takeoff: sample(0.95, 200, 200 + dt), takeoffExpect: expect(0.95),
+    /* And the blur: a fan at idle shows its blades, one at takeoff power does
+       not. Both are read off the same function the shader is handed. */
+    blurIdle: fanBlur(0.05), blurTakeoff: fanBlur(0.95)
+  };
+};
+
+/* Does the metal reflect the sky it is flying in, and is it the *same* sky?
+
+   Two claims, and they need different kinds of evidence.
+
+   The first is that there is one definition. `SKY_FS` and `MODEL_FS` must both
+   carry the shared `GLSL_SKY` verbatim and neither may declare `skyColour`
+   anywhere else, so a copy cannot be pasted into one and then edited. This is
+   the rule `fbw.characteristic_speeds` and `autopilot.fma` already follow, in
+   the one place where the thing with two readers is a shader.
+
+   The second is that the reflection is *live* -- that the sky uniforms reach
+   the metal at all. A model shader that ignored them entirely would satisfy the
+   first claim perfectly, so the fleet is drawn twice under two very different
+   skies and the pixels have to differ. Which is `cruise_check`'s vacuity
+   lesson: a constant nobody can move is not being read. */
+const REFLECT = () => {
+  const twoSkies = [[0.05, 0.06, 0.09], [0.86, 0.62, 0.30]];
+  const shot = zen => {
+    const a = FLEET_BY_KEY['a350'];
+    gl.viewport(0, 0, 160, 120);
+    gl.enable(gl.SCISSOR_TEST); gl.scissor(0, 0, 160, 120);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    drawAircraftPreview(a, 214, 160, 120, 0.02, 1.35,
+                        { haze: zen, zen: zen, gloss: 1.0 });
+    gl.disable(gl.SCISSOR_TEST);
+    const px = new Uint8Array(160 * 120 * 4);
+    gl.readPixels(0, 0, 160, 120, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    let sum = 0, lit = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      const v = (px[i] + px[i + 1] + px[i + 2]) / 3;
+      if (v > 12) { sum += v; lit++; }       // the aeroplane, not the backdrop
+    }
+    return { mean: lit ? sum / lit : 0, lit };
+  };
+  return {
+    shared: MODEL_FS.includes(GLSL_SKY) && SKY_FS.includes(GLSL_SKY),
+    /* One definition in each program, and it came from the shared string. */
+    defs: [MODEL_FS, SKY_FS].map(src => (src.match(/vec3 skyColour\s*\(/g) || []).length),
+    dark: shot(twoSkies[0]), bright: shot(twoSkies[1])
+  };
+};
+
 (async () => {
   const launch = { args: ['--use-gl=angle', '--use-angle=swiftshader',
                           '--enable-unsafe-swiftshader'] };
@@ -241,6 +431,8 @@ const DEFLECT = () => {
   }
   const rows = await p.evaluate(PROBE);
   const defl = await p.evaluate(DEFLECT);
+  const spin = await p.evaluate(SPIN);
+  const refl = await p.evaluate(REFLECT);
   /* The page was booted with `?fly=1`, so it is on the runway: reaching the
      hangar from here also proves the two screens can be moved between. */
   const flyingFirst = await p.evaluate(() => screen);
@@ -440,6 +632,115 @@ const DEFLECT = () => {
     if (!rows.some(r => r.key === key)) {
       say(key, 'is in the hangar and not in the fleet');
     }
+  }
+
+  /* 11. Every solid is wound one way round, and no triangle has no area.
+
+         Neither was ever checked before this, although the file's
+         no-back-face-culling comment has always been uneasy about the first --
+         and between them they caught four real defects in one run: the
+         fuselage's nose cap wound backwards, so its normal pointed aft into the
+         aeroplane and dragged the whole radome's shading dark; the pylon and
+         the sharklet each with one of their two mirrored flanks inside-out; and
+         a flap-track fairing whose tail ring was collapsed onto its own axis,
+         which is ten triangles with no area, no normal and no business in a
+         buffer.
+
+         What is *not* asserted is full closure, because a part here is an
+         assembly rather than one body: the cowl opens onto the fan, the pylon
+         onto the wing, and a sharklet sits on a wing tip, so an edge used once
+         or four times is a join rather than a fault. The hull is the exception
+         -- it meets nothing, so it has to be shut. */
+  const PART_NAME = { 0: 'hull', 2: 'wing', 3: 'tail', 4: 'pylon', 5: 'cowl',
+                      7: 'gear', 8: 'tyre', 12: 'fairing' };
+  for (const r of rows) {
+    if (r.degenerate) {
+      say(r.key, `has ${r.degenerate} triangle(s) with two corners in the same place`);
+    }
+    for (const [pid, mf] of Object.entries(r.manifold)) {
+      if (mf.sameWay) {
+        say(r.key, `${PART_NAME[pid] || 'part ' + pid} has ${mf.sameWay} edge(s) `
+                   + `whose two triangles are wound against each other`);
+      }
+    }
+    if (r.manifold[0] && r.manifold[0].boundary) {
+      say(r.key, `fuselage is an open tube (${r.manifold[0].boundary} edges on its rim)`);
+    }
+  }
+
+  /* 12. Smoothing happened where it should and not where it should not. This
+         is the difference between the two shading models stated as a property
+         of the geometry rather than as an appearance -- flatten the normals and
+         the first fails; smooth across every crease and the second does. */
+  for (const r of rows) {
+    if (!(r.smoothHull.n > 40)) {
+      say(r.key, `has only ${r.smoothHull.n} shared points on its constant section `
+                 + `-- nothing was measured`);
+    } else if (!(r.smoothHull.worst > 0.985)) {
+      say(r.key, `fuselage is not smooth: normals meeting at a point differ by `
+                 + `${(Math.acos(Math.min(1, r.smoothHull.worst)) * 180 / Math.PI).toFixed(0)} deg`);
+    }
+    if (!(r.wingCrease.n > 100)) {
+      say(r.key, `has only ${r.wingCrease.n} shared points on its wing -- nothing was measured`);
+    } else if (!(r.wingCrease.worst < 0.5)) {
+      say(r.key, `the wing has no crease anywhere on it (the sharpest corner `
+                 + `agrees to ${r.wingCrease.worst.toFixed(3)}) -- a blunt trailing `
+                 + `edge cannot have been smoothed into the skin`);
+    }
+  }
+
+  /* 13. The fan: as many blades as the type publishes, on every arm, each on
+         its own hinge -- and it turns at the speed the *engine's note* is
+         derived from. */
+  for (const r of rows) {
+    r.blades.forEach((n, i) => {
+      if (n !== r.fanBlades) {
+        say(r.key, `engine ${i + 1} has ${n} fan blades and publishes ${r.fanBlades}`);
+      }
+    });
+    r.fanAxes.forEach((ax, i) => {
+      /* All of them about the engine's own axis, and all the same way, or one
+         side of the aeroplane would be running backwards. */
+      if (Math.abs(ax[1] - 1) > 1e-9) {
+        say(r.key, `engine ${i + 1}'s fan does not turn about the engine axis`);
+      }
+    });
+  }
+  const fanSay = msg => bad.push('fan       ' + msg);
+  {
+    const turned = Math.abs(spin.takeoff.now - spin.takeoff.was);
+    if (!(turned > 1e-6)) fanSay('does not turn at takeoff power');
+    if (Math.abs(spin.idle.now - spin.idle.was) > 1e-9) {
+      fanSay('turns with the engines stopped');
+    }
+    /* Against the shaft speed, not against itself: this is the one number the
+       sound and the picture share. */
+    const err = Math.abs(spin.takeoff.now - spin.takeoff.was - spin.takeoffExpect);
+    if (!(Math.min(err, Math.abs(err - Math.PI * 2)) < 1e-4)) {
+      fanSay('turns ' + (spin.takeoff.now - spin.takeoff.was).toFixed(4)
+             + ' rad where fanShaftHz says ' + spin.takeoffExpect.toFixed(4));
+    }
+    if (!(spin.blurIdle < 0.02)) fanSay('is a blur at idle');
+    if (!(spin.blurTakeoff > 0.8)) fanSay('still shows its blades at takeoff power');
+  }
+
+  /* 14. One sky, and the metal reads it. */
+  const skySay = msg => bad.push('sky       ' + msg);
+  if (!refl.shared) {
+    skySay('the model shader and the sky shader do not share one GLSL_SKY -- '
+           + 'a copy has been pasted and the two can now drift');
+  }
+  if (refl.defs.join() !== '1,1') {
+    skySay('skyColour is declared ' + refl.defs.join(' and ') + ' times in the two '
+           + 'programs, and it should be once in each');
+  }
+  if (!(refl.dark.lit > 500 && refl.bright.lit > 500)) {
+    skySay('nothing was drawn to measure the reflection on ('
+           + refl.dark.lit + ' and ' + refl.bright.lit + ' lit pixels)');
+  } else if (!(refl.bright.mean - refl.dark.mean > 4)) {
+    skySay('the metal looks the same under a dark sky and a sunset one ('
+           + refl.dark.mean.toFixed(1) + ' against ' + refl.bright.mean.toFixed(1)
+           + ') -- the reflection is not live');
   }
 
   /* The vacuity guard, the fifth of its kind here: a run that checked nothing

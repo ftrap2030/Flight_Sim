@@ -718,6 +718,12 @@ const GROUND_SPOILER_LIFT_FACTOR = 0.35;
    With the published `fanDia` it gives the shaft speed, and with `fanBlades`
    the note the aeroplane actually makes. */
 const FAN_TIP_SPEED_MS = 425.0;
+/* Shaft revolutions per second at 100% N1 (aircraft.fan_shaft_rpm, over sixty).
+   One owner, because two things read it: the note the engine makes and the
+   speed its fan is *drawn* turning at. A fan spinning at a rate the sound did
+   not agree with would be the same fault as a speed tape drawing its own VLS --
+   the aeroplane you see disagreeing with the aeroplane you hear. */
+function fanShaftHz(a) { return FAN_TIP_SPEED_MS / (Math.PI * a.fanDia); }
 /* The high-pressure spool: how many times it turns per fan revolution, and
    roughly how many blades its first compressor stage carries. Together they
    put the core's whine a couple of kilohertz up, above the fan's, which is
@@ -3563,7 +3569,7 @@ function updateAudio(a, s, readout, dt) {
   /* Fan blade-passing frequency (aircraft.fan_tone_hz). The shaft speed comes
      from the diameter, because a big fan cannot turn fast without its tips
      going supersonic; the tone is that times the blade count. */
-  const shaftHz = 60 * FAN_TIP_SPEED_MS / (Math.PI * a.fanDia) / 60;
+  const shaftHz = fanShaftHz(a);
   const fanHz = clamp(audio.n1 * shaftHz * a.fanBlades, 20, 16000);
   n.fan.frequency.setTargetAtTime(fanHz, t, glide);
   n.fan2.frequency.setTargetAtTime(Math.min(fanHz * 2, 18000), t, glide);
@@ -4251,6 +4257,58 @@ void main() {
 }`;
 
 /* ---------- sky ---------- */
+/* ---------- the sky, as a function of a direction ----------
+
+   Factored out of `SKY_FS` so that the *metal* can read it too. It takes only a
+   ray and the day's lighting, which means an aeroplane can be given a real sky
+   reflection by evaluating it along the reflection vector -- no cubemap, no
+   second pass, no texture, and no possibility of the fuselage reflecting a
+   different sky from the one being drawn behind it. That is the rule
+   `fbw.characteristic_speeds` and `autopilot.fma` already follow, applied to a
+   colour: the sky has one definition and everything that needs it reads that.
+
+   `withSun` is off for the reflection -- a 260th-power sun disc mirrored in a
+   fuselage is a single blown-out pixel that crawls, not a highlight. The
+   specular lobe is what puts the sun on the metal, and it is already there. */
+const GLSL_SKY = `
+float skyStars(vec3 r) {
+  vec3 p = floor(r * 260.0);
+  float h = fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+  return h > 0.9985 ? pow(fract(h * 921.0), 2.0) : 0.0;
+}
+
+vec3 skyColour(vec3 ray, vec3 sun, vec3 haze, vec3 zenith, vec3 tint,
+               float day, float sunVisible, bool withSun) {
+  float up = clamp(ray.z, -1.0, 1.0);
+
+  /* Haze piles up toward the horizon, so the gradient is steep near it and
+     flattens overhead. */
+  vec3 dayCol = mix(haze, zenith, pow(clamp(up, 0.0, 1.0), 0.42));
+  vec3 nightCol = mix(vec3(0.035, 0.045, 0.075), vec3(0.008, 0.012, 0.030),
+                      pow(clamp(up, 0.0, 1.0), 0.5));
+  vec3 col = mix(nightCol, dayCol, day);
+
+  if (up < 0.0) {
+    vec3 below = mix(vec3(0.02, 0.025, 0.035), vec3(0.20, 0.21, 0.20), day);
+    col = mix(mix(nightCol, haze, day), below, clamp(-up * 2.2, 0.0, 1.0));
+  }
+
+  col += vec3(1.0) * skyStars(ray) * (1.0 - day) * step(0.0, up);
+
+  /* The sun reddens as it sinks, and the glow around it spreads -- one tint
+     drives both, so sunset is a single continuous change. */
+  float sd = max(dot(ray, sun), 0.0);
+  float vis = sunVisible * smoothstep(-0.06, 0.06, sun.z);
+  if (withSun) col += tint * pow(sd, 260.0) * 1.7 * vis;
+  col += tint * pow(sd, 9.0) * 0.34 * vis;
+  /* Horizon glow on the sun's side, which lingers after it has set. */
+  float horizonGlow = pow(max(dot(normalize(vec3(ray.xy, 0.0)), normalize(vec3(sun.xy, 0.0))), 0.0), 6.0)
+                    * exp(-abs(up) * 7.0) * clamp(1.0 - abs(sun.z) * 3.0, 0.0, 1.0);
+  col += tint * horizonGlow * 0.42;
+  return col;
+}
+`;
+
 const SKY_FS = `#version 300 es
 precision highp float;
 in vec2 vNdc;
@@ -4262,44 +4320,12 @@ uniform float uSunVisible;
 uniform float uDay;            // 1 full daylight, 0 night
 uniform vec3 uSunTint;
 
-/* Cheap hashed stars: no texture, and they sit still because the hash is a
-   function of the ray direction rather than of time. */
-float stars(vec3 r) {
-  vec3 p = floor(r * 260.0);
-  float h = fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
-  return h > 0.9985 ? pow(fract(h * 921.0), 2.0) : 0.0;
-}
+${GLSL_SKY}
 
 void main() {
   vec3 ray = normalize(uF + uR * (vNdc.x * uTanHalf.x) + uU * (vNdc.y * uTanHalf.y));
-  float up = clamp(ray.z, -1.0, 1.0);
-
-  /* Haze piles up toward the horizon, so the gradient is steep near it and
-     flattens overhead. */
-  vec3 dayCol = mix(uHaze, uZenith, pow(clamp(up, 0.0, 1.0), 0.42));
-  vec3 nightCol = mix(vec3(0.035, 0.045, 0.075), vec3(0.008, 0.012, 0.030),
-                      pow(clamp(up, 0.0, 1.0), 0.5));
-  vec3 col = mix(nightCol, dayCol, uDay);
-
-  if (up < 0.0) {
-    vec3 below = mix(vec3(0.02, 0.025, 0.035), vec3(0.20, 0.21, 0.20), uDay);
-    col = mix(mix(nightCol, uHaze, uDay), below, clamp(-up * 2.2, 0.0, 1.0));
-  }
-
-  col += vec3(1.0) * stars(ray) * (1.0 - uDay) * step(0.0, up);
-
-  /* The sun reddens as it sinks, and the glow around it spreads -- one tint
-     drives both, so sunset is a single continuous change. */
-  float sd = max(dot(ray, uSun), 0.0);
-  float vis = uSunVisible * smoothstep(-0.06, 0.06, uSun.z);
-  col += uSunTint * pow(sd, 260.0) * 1.7 * vis;
-  col += uSunTint * pow(sd, 9.0) * 0.34 * vis;
-  /* Horizon glow on the sun's side, which lingers after it has set. */
-  float horizonGlow = pow(max(dot(normalize(vec3(ray.xy, 0.0)), normalize(vec3(uSun.xy, 0.0))), 0.0), 6.0)
-                    * exp(-abs(up) * 7.0) * clamp(1.0 - abs(uSun.z) * 3.0, 0.0, 1.0);
-  col += uSunTint * horizonGlow * 0.42;
-
-  fragColor = vec4(col, 1.0);
+  fragColor = vec4(skyColour(ray, uSun, uHaze, uZenith, uSunTint, uDay, uSunVisible,
+                             true), 1.0);
 }`;
 
 /* ---------- cloud deck ----------
@@ -4349,6 +4375,42 @@ void main() {
   fragColor = vec4(mix(col, uHaze, clamp(fog, 0.0, 1.0)), a * 0.92);
 }`;
 
+/* Surface indices. Everything structural is 0 and never moves; the rest are
+   hinged in the vertex shader from state the flight model owns.
+
+   These live here rather than beside `buildModel`, where they read more
+   naturally, because `MODEL_VS` sizes its hinge arrays from `SURF_COUNT` and
+   a `const` cannot be read before it is declared. One number owns how many
+   hinges there are; the shader may not carry a second copy of it. */
+const SURF = { FIXED: 0, AIL_L: 1, AIL_R: 2, ELEV: 3, RUDDER: 4,
+               FLAP_L: 5, FLAP_R: 6, SPOIL_L: 7, SPOIL_R: 8, GEAR: 9,
+               /* One per possible nacelle: the fan spins about the engine's own
+                  axis, which is a rotation about a point and a line, which is
+                  what a hinge already is. Reusing them costs four floats and no
+                  new machinery. */
+               FAN0: 10, FAN1: 11, FAN2: 12, FAN3: 13 };
+const SURF_COUNT = 14;
+
+/* What a triangle *is*, as opposed to what colour it is painted.
+
+   These used to be the same question: the guard found the nacelle by looking
+   for four particular hex strings. That made the livery and the part identity
+   one field doing two jobs, so repainting an engine broke the check that there
+   is an engine. A part knows what it is; a colour is what it happens to be
+   wearing. */
+const PART = { HULL: 0, TRIM: 1, WING: 2, TAIL: 3, PYLON: 4, COWL: 5,
+               FAN: 6, GEAR: 7, TYRE: 8, LAMP: 9, PANEL: 10, BLADE: 11,
+               FAIRING: 12 };
+/* The colour of a fan face, which is also the colour a blade blurs *to*. One
+   owner: the geometry paints the disc with it and the vertex shader mixes the
+   blades toward it, and if those were two literals a repaint would leave the
+   blades fading to a colour the disc behind them is not. */
+const FAN_BLUR_HEX = "#4a5158";
+/* The ones that are closed solids, and so must be watertight and wound the
+   same way round. A panel is a plate and is none of those things. */
+const SOLID_PARTS = [PART.HULL, PART.WING, PART.TAIL, PART.COWL, PART.GEAR,
+                     PART.TYRE, PART.PYLON, PART.FAIRING];
+
 /* ---------- aircraft ----------
 
    Control surfaces are hinged in the *vertex shader* rather than by rebuilding
@@ -4371,10 +4433,19 @@ layout(location = 3) in vec2 aSurf;      // x: hinge index, y: emissive strength
 uniform mat4 uVP;
 uniform mat4 uModel;
 uniform mat3 uNormalM;
-uniform vec3 uHingeP[10];
-uniform vec3 uHingeA[10];
-uniform float uHingeAng[10];
+uniform vec3 uHingeP[${SURF_COUNT}];
+uniform vec3 uHingeA[${SURF_COUNT}];
+uniform float uHingeAng[${SURF_COUNT}];
 uniform float uGearDown;
+/* How far each fan has blurred into the disc behind it, and the colour it
+   blurs to. Done here rather than in the fragment shader because it is a
+   property of the *vertex's surface*, and a fragment has no idea which part it
+   belongs to -- and done by mixing a colour rather than by blending, because
+   blending would need every fan sorted against everything else in the frame to
+   pay for what is one mix. One entry per nacelle rather than one for the
+   aeroplane, so an engine that has failed winds its own fan down. */
+uniform float uFanBlur[4];
+uniform vec3 uFanBlurCol;
 out vec3 vN;
 out vec3 vC;
 out vec3 vW;
@@ -4391,12 +4462,16 @@ void main() {
   vec3 d = p - P;
   p = P + d * c + cross(A, d) * s + A * dot(A, d) * (1.0 - c);
   n = n * c + cross(A, n) * s + A * dot(A, n) * (1.0 - c);
-  /* The gear is index 9 and is drawn only when it is down: collapsing it onto
-     its own hinge point rasterises nothing, which is cheaper than a second
-     draw call and keeps one buffer per type. */
-  if (sid == 9) p = mix(P, p, uGearDown);
+  /* The gear is drawn only when it is down: collapsing it onto its own hinge
+     point rasterises nothing, which is cheaper than a second draw call and
+     keeps one buffer per type. Its index is interpolated in from SURF rather
+     than typed in again -- the shader may not hold a second copy of a number
+     the geometry is already built from. */
+  if (sid == ${SURF.GEAR}) p = mix(P, p, uGearDown);
   vec4 w = uModel * vec4(p, 1.0);
-  vW = w.xyz; vN = normalize(uNormalM * n); vC = aColor; vE = aSurf.y;
+  vec3 col = aColor;
+  if (sid >= ${SURF.FAN0}) col = mix(col, uFanBlurCol, uFanBlur[sid - ${SURF.FAN0}]);
+  vW = w.xyz; vN = normalize(uNormalM * n); vC = col; vE = aSurf.y;
   gl_Position = uVP * w;
 }`;
 
@@ -4412,15 +4487,37 @@ uniform vec3 uCam, uSun, uHaze;
 uniform float uFogDist, uDay;
 uniform vec3 uSunTint;
 uniform float uLamp[5];
+uniform vec3 uZenith;
+uniform float uSunVisible;
+uniform float uGloss;          // 0 matte, 1 the painted skin of an airliner
+${GLSL_SKY}
 void main() {
   vec3 n = normalize(vN);
   vec3 V = normalize(uCam - vW);
-  if (dot(n, V) < 0.0) n = -n;          // two-sided: winding cannot darken a face
+  /* Ask about the *triangle*, not about the interpolated normal. With smooth
+     normals the old dot(n, V) < 0.0 test misfires at grazing incidence -- the
+     interpolated normal on a curved hull can point slightly away from a viewer
+     the triangle genuinely faces -- and puts a hard bright seam exactly on the
+     silhouette. gl_FrontFacing is the question that was always meant, and it
+     keeps this file's no-back-face-culling rule intact. */
+  if (!gl_FrontFacing) n = -n;
   float lam = max(dot(n, uSun), 0.0);
   float ambient = (0.42 + 0.18 * clamp(n.z, 0.0, 1.0)) * mix(0.20, 1.0, uDay);
   vec3 h = normalize(uSun + V);
-  float spec = pow(max(dot(n, h), 0.0), 34.0) * 0.30 * uDay;
+  float spec = pow(max(dot(n, h), 0.0), 62.0) * 0.55 * uDay;
   vec3 lit = vC * ambient + vC * uSunTint * lam * 0.85 * uDay + uSunTint * spec;
+
+  /* An airliner is painted metal, and most of what you see on one is the sky
+     and the ground reflected in it. The same skyColour the sky itself is
+     drawn from, evaluated along the reflection vector: blue above, haze and
+     ground below, and orange at sunset because the sky is orange at sunset.
+     Schlick's Fresnel, so it is strongest at grazing angles -- which is where
+     a real fuselage is brightest and is most of what makes metal read as
+     metal rather than as plaster. */
+  vec3 refl = reflect(-V, n);
+  vec3 env = skyColour(refl, uSun, uHaze, uZenith, uSunTint, uDay, uSunVisible, false);
+  float f = 0.05 + 0.95 * pow(1.0 - clamp(dot(n, V), 0.0, 1.0), 5.0);
+  lit = mix(lit, env, clamp(f * uGloss, 0.0, 0.9));
   float fog = 1.0 - exp(-length(uCam - vW) / uFogDist);
   vec3 col = mix(lit, uHaze, clamp(fog, 0.0, 1.0));
   /* vE is which *kind* of lamp this is, not how bright it is: the strobe
@@ -4565,11 +4662,77 @@ function regenHeight(camNmX, camNmY, force) {
   }
 }
 
-/* ---------- per-type model buffers, with normals ---------- */
+/* ---------- vertex normals ----------
+
+   A face normal written to all three of a triangle's vertices is *flat
+   shading*, and flat shading is why this fleet looked like blocks glued
+   together: every facet gets one uniform brightness and the eye resolves each
+   one as a plate. Tessellation cannot fix it -- sixteen sides gives sixteen
+   flat bands and sixty-four gives sixty-four thinner ones. Smoothness is
+   normals *interpolated* across a surface, which means a vertex has to carry
+   the average of the faces that meet at it.
+
+   Creases are found rather than declared. A corner averages only the incident
+   faces within `CREASE` of its own, so a fuselage comes out smooth, a wing
+   trailing edge stays sharp, and the BelugaXL's cargo-lobe step stays a step
+   -- because it is a right angle and the threshold rejects it. Nothing needed
+   marking by hand, and a new part cannot forget to.
+
+   Parts do not smooth into each other: a nacelle resting against a pylon is
+   two surfaces touching, not one surface bending.
+
+   It is a function of the triangles alone, and separate from the buffers it
+   fills, so the guard can ask what the smoothing actually did rather than
+   looking at a picture of it. Returns three unit normals per triangle. */
+const CREASE = Math.cos(rad(46));
+const QUANT = 1e4;                         // 0.1 mm, well under any real gap
+function modelNormals(tris) {
+  const faceN = new Array(tris.length);
+  const atVertex = new Map();
+  tris.forEach((t, ti) => {
+    const p = t.p;
+    const e1 = [p[1][0]-p[0][0], p[1][1]-p[0][1], p[1][2]-p[0][2]];
+    const e2 = [p[2][0]-p[0][0], p[2][1]-p[0][1], p[2][2]-p[0][2]];
+    let n = [e1[1]*e2[2]-e1[2]*e2[1], e1[2]*e2[0]-e1[0]*e2[2], e1[0]*e2[1]-e1[1]*e2[0]];
+    const len = Math.hypot(n[0], n[1], n[2]) || 1;
+    faceN[ti] = [n[0]/len, n[1]/len, n[2]/len];
+    /* Thin panels stay flat: a spoiler is a plate and should look like one,
+       and so should a fan blade and a reverser cascade vane. */
+    if (t.pid === PART.PANEL || t.pid === PART.LAMP || t.pid === PART.TRIM
+        || t.pid === PART.BLADE) return;
+    for (const v of p) {
+      const key = t.pid + "|" + Math.round(v[0] * QUANT) + "|"
+                + Math.round(v[1] * QUANT) + "|" + Math.round(v[2] * QUANT);
+      const at = atVertex.get(key);
+      if (at) at.push(ti); else atVertex.set(key, [ti]);
+    }
+  });
+
+  return tris.map((t, ti) => {
+    const f = faceN[ti];
+    return t.p.map(v => {
+      const key = t.pid + "|" + Math.round(v[0] * QUANT) + "|"
+                + Math.round(v[1] * QUANT) + "|" + Math.round(v[2] * QUANT);
+      const share = atVertex.get(key);
+      if (!share || share.length < 2) return f;
+      let sx = 0, sy = 0, sz = 0;
+      for (const other of share) {
+        const g = faceN[other];
+        if (f[0]*g[0] + f[1]*g[1] + f[2]*g[2] < CREASE) continue;   // a crease
+        sx += g[0]; sy += g[1]; sz += g[2];
+      }
+      const l = Math.hypot(sx, sy, sz);
+      return l > 1e-6 ? [sx / l, sy / l, sz / l] : f;
+    });
+  });
+}
+
+/* ---------- per-type model buffers ---------- */
 const glModels = {};
 function modelBuffers(a) {
   if (glModels[a.key]) return glModels[a.key];
   const tris = modelFor(a).tris;
+  const norms = modelNormals(tris);
   const pos = new Float32Array(tris.length * 9);
   const nrm = new Float32Array(tris.length * 9);
   const col = new Float32Array(tris.length * 9);
@@ -4577,16 +4740,11 @@ function modelBuffers(a) {
   tris.forEach((t, ti) => {
     /* Body axes are (starboard, forward, up); the renderer wants
        (east, north, up) before the model matrix, so forward becomes north. */
-    const p = t.p.map(v => [v[0], v[1], v[2]]);
-    const e1 = [p[1][0]-p[0][0], p[1][1]-p[0][1], p[1][2]-p[0][2]];
-    const e2 = [p[2][0]-p[0][0], p[2][1]-p[0][1], p[2][2]-p[0][2]];
-    let n = [e1[1]*e2[2]-e1[2]*e2[1], e1[2]*e2[0]-e1[0]*e2[2], e1[0]*e2[1]-e1[1]*e2[0]];
-    const len = Math.hypot(n[0], n[1], n[2]) || 1;
-    n = [n[0]/len, n[1]/len, n[2]/len];
     const c = hex(t.col).map(v => v / 255);
     for (let k = 0; k < 3; k++) {
+      const v = t.p[k], n = norms[ti][k];
       const o = (ti * 3 + k) * 3, os = (ti * 3 + k) * 2;
-      pos[o] = p[k][0]; pos[o+1] = p[k][1]; pos[o+2] = p[k][2];
+      pos[o] = v[0]; pos[o+1] = v[1]; pos[o+2] = v[2];
       nrm[o] = n[0]; nrm[o+1] = n[1]; nrm[o+2] = n[2];
       col[o] = c[0]; col[o+1] = c[1]; col[o+2] = c[2];
       srf[os] = t.sid || 0; srf[os+1] = t.emit || 0;
@@ -4615,13 +4773,7 @@ function modelBuffers(a) {
 
    The rule that comes with that is `artwork.py`'s: **if two types look
    identical, they are identical.** The drawing may not invent a difference it
-   has no way of seeing, and it may not hide one it does.
-
-   Surface indices. Everything structural is 0 and never moves; the rest are
-   hinged in the vertex shader from state the flight model owns. */
-const SURF = { FIXED: 0, AIL_L: 1, AIL_R: 2, ELEV: 3, RUDDER: 4,
-               FLAP_L: 5, FLAP_R: 6, SPOIL_L: 7, SPOIL_R: 8, GEAR: 9 };
-const SURF_COUNT = 10;
+   has no way of seeing, and it may not hide one it does. */
 
 /* NACA four-digit symmetric half-thickness, as a fraction of chord. A wing
    with a section instead of two coincident quads is the whole difference
@@ -4684,31 +4836,58 @@ function buildModel(a) {
   const groundZ = -lowerR - gearLeg;
 
   const tris = [];
+  /* What is being built right now. Threading a part through every `quad` call
+     would be forty arguments of noise; the builder moves through the aeroplane
+     in order, so it can simply say where it has got to. */
+  let part = PART.HULL;
   const tri = (p, q, r, col, sid, emit) =>
-    tris.push({ p: [p, q, r], col, sid: sid || 0, emit: emit || 0 });
+    tris.push({ p: [p, q, r], col, sid: sid || 0, emit: emit || 0, pid: part });
+  const same = (p, q) => Math.abs(p[0]-q[0]) < 1e-4 && Math.abs(p[1]-q[1]) < 1e-4
+                      && Math.abs(p[2]-q[2]) < 1e-4;
+  /* A quad with a collapsed corner is a triangle, and emitting it as two
+     triangles anyway leaves one with no area -- and therefore no face normal,
+     which then gets averaged into its neighbours' and darkens them. That is not
+     hypothetical: every tip cap in the fleet has one, because the upper and
+     lower skins meet at the leading edge, so `naca(0)` puts two of the four
+     corners in the same place. Collapsing it here fixes the wing, the tailplane
+     and the fin at once, and any future surface that tapers to an edge. */
   const quad = (p, q, r, s, col, sid, emit) => {
+    if (same(p, s)) return tri(p, q, r, col, sid, emit);
+    if (same(q, r)) return tri(p, q, s, col, sid, emit);
     tri(p, q, r, col, sid, emit); tri(p, r, s, col, sid, emit);
   };
   /* Skin is drawn from both sides everywhere else in this file, and the model
      shader two-sides its normals, so a closed solid needs no second winding. */
   const FUS = "#e7ebee", FUS_D = "#aab4bc", WING = "#cfd6db", WING_D = "#b3bcc3",
-        ENG = "#dde3e7", ENG_D = "#9aa5ac", LIP = "#39424a", FAN = "#14181b",
+        ENG = "#dde3e7", ENG_D = "#9aa5ac", LIP = "#39424a",
         PYL = "#c6ced4", TAIL = "#2f6ea8", GEAR = "#79828a", TYRE = "#1b1e20",
-        GLASS = "#12181c";
+        GLASS = "#12181c", APU = "#2b3138", SLAT = "#9ea8b0",
+        /* The fan. `FAN_BLUR` is the face behind the blades and the colour the
+           blades are painted as N1 rises, so a spooled fan reads as a solid
+           disc without a drop of alpha blending; `BLADE` is a blade at rest and
+           `SPIN` the spinner, which is lighter so its spiral stands out. */
+        FAN_BLUR = FAN_BLUR_HEX, BLADE = "#8f989f", SPIN = "#cdd4d9",
+        CASC = "#6d767d";
 
+  part = PART.HULL;
   /* ---- fuselage ----
      Stations run nose to tail as a fraction of length: how wide, how much of
      the cargo lobe has started, and how far the section's centre has moved.
      The nose droops a little and the tail cone sweeps up, which is the shape
      that says "airliner" before any of the detail does. */
-  const RING_N = 16;
+  const RING_N = 28;
   const STATIONS = [
-    [0.000, 0.030, 0.00, -0.22], [0.018, 0.260, 0.00, -0.17],
-    [0.045, 0.520, 0.00, -0.10], [0.080, 0.740, 0.15, -0.05],
-    [0.130, 0.900, 0.55, -0.01], [0.200, 0.985, 0.92,  0.00],
-    [0.280, 1.000, 1.00,  0.00], [0.640, 1.000, 1.00,  0.00],
-    [0.760, 0.960, 1.00,  0.03], [0.850, 0.830, 1.00,  0.13],
-    [0.920, 0.560, 0.90,  0.32], [0.965, 0.290, 0.70,  0.52],
+    [0.000, 0.030, 0.00, -0.22], [0.009, 0.155, 0.00, -0.205],
+    [0.018, 0.260, 0.00, -0.17],  [0.030, 0.395, 0.00, -0.140],
+    [0.045, 0.520, 0.00, -0.10],  [0.061, 0.635, 0.02, -0.075],
+    [0.080, 0.740, 0.15, -0.05],  [0.104, 0.830, 0.33, -0.030],
+    [0.130, 0.900, 0.55, -0.01],  [0.163, 0.950, 0.76, -0.004],
+    [0.200, 0.985, 0.92,  0.00],  [0.238, 0.997, 0.98,  0.00],
+    [0.280, 1.000, 1.00,  0.00],  [0.640, 1.000, 1.00,  0.00],
+    [0.760, 0.960, 1.00,  0.03],  [0.805, 0.905, 1.00,  0.07],
+    [0.850, 0.830, 1.00,  0.13],  [0.886, 0.710, 0.97,  0.22],
+    [0.920, 0.560, 0.90,  0.32],  [0.944, 0.415, 0.80,  0.42],
+    [0.965, 0.290, 0.70,  0.52],  [0.984, 0.165, 0.60,  0.62],
     [1.000, 0.055, 0.50,  0.70]
   ];
   const ring = ([u, wsc, lobe, zc]) => {
@@ -4728,16 +4907,50 @@ function buildModel(a) {
     for (let k = 0; k < RING_N; k++) {
       const n = (k + 1) % RING_N;
       const upper = k < RING_N / 2;
-      /* The flight deck's glazing, on the nose stations above the waterline.
-         A freighter has one too -- it is the cabin behind it that it has not
-         got, which is the distinction `_draw_cabin` branches on. */
-      const glazed = STATIONS[i][0] < 0.055 && upper;
+      /* The flight deck's glazing. A freighter has one too -- it is the cabin
+         behind it that it has not got, which is the distinction `_draw_cabin`
+         branches on.
+
+         Both bounds are geometry rather than station indices. Written as "every
+         station forward of 0.055", it began at the radome and painted the nose
+         cone black: the windscreen starts *behind* the radar, and it wraps the
+         top of the nose rather than the whole upper half, which is why the
+         angular bound is here too. Refining the station table from thirteen
+         rows to twenty-three is what made that visible -- a threshold that
+         reads off how finely a shape happens to be sliced is not a threshold
+         about the shape. */
+      const u0 = STATIONS[i][0];
+      const glazed = u0 >= 0.013 && u0 < 0.050 && upper
+                  && Math.abs(k - RING_N / 4) <= RING_N * 0.14;
       quad(r0[k], r0[n], r1[n], r1[k],
            glazed ? GLASS : (upper ? FUS : FUS_D), SURF.FIXED,
            glazed && overWing ? 0 : 0);
     }
   }
+  /* Both ends were open rings, which is a tube rather than a body: from dead
+     ahead you could see in through the radome. Capping them flat rather than
+     with a point keeps `length` exactly what is published -- a cone tip would
+     add its own height to the one dimension the guard measures hardest.
 
+     The aft cap earns its keep twice. Every airliner's tail cone ends in the
+     APU exhaust, so the disc that closes the fuselage *is* that exhaust, and
+     it only has to be painted like one. */
+  for (const [st, c, out] of [[STATIONS[0], FUS, -1],
+                             [STATIONS[STATIONS.length - 1], APU, 1]]) {
+    const r = ring(st), mid = [0, r[0][1], st[3] * lowerR];
+    /* The two caps face opposite ways, so they cannot share a winding. Built
+       with one, the nose cap's normal pointed *aft* -- into the aeroplane --
+       and the shading it averaged into the first station dragged the whole
+       radome black. A face normal is only as good as the order its corners are
+       in, which is why the guard below asks whether every solid is wound
+       consistently rather than taking it on trust. */
+    for (let k = 0; k < RING_N; k++) {
+      const n = (k + 1) % RING_N;
+      tri(out > 0 ? r[k] : r[n], out > 0 ? r[n] : r[k], mid, c);
+    }
+  }
+
+  part = PART.TRIM;
   /* ---- the cabin ----
      A window line and the cheatline under it, drawn as stripes rather than as
      a hundred little panes: at any range this aeroplane is ever seen from, a
@@ -4781,13 +4994,14 @@ function buildModel(a) {
     }
   }
 
+  part = PART.WING;
   /* ---- wing ----
      Lofted between a root and a tip section: straight taper, published sweep,
      thicker at the root as a wing is. The last quarter of the chord is left
      off and filled by the control surfaces below, which is why they can move
      without the wing tearing. */
-  const VS = [0, 0.16, 0.34, 0.52, 0.70, 0.86, 1.0];
-  const US = [0, 0.02, 0.06, 0.13, 0.24, 0.40, 0.58, CS];
+  const VS = [0, 0.09, 0.20, 0.33, 0.46, 0.60, 0.74, 0.87, 0.95, 1.0];
+  const US = [0, 0.008, 0.02, 0.04, 0.075, 0.13, 0.21, 0.32, 0.46, 0.61, CS];
   for (const sgn of [1, -1]) {
     for (let i = 0; i < VS.length - 1; i++) {
       for (let j = 0; j < US.length - 1; j++) {
@@ -4810,18 +5024,134 @@ function buildModel(a) {
     /* Sharklet: a small fin standing off the tip, with thickness. */
     const tipTop = wingSec(1);
     const shH = B * 0.085, shT = tipC * 0.055;
+    /* Three millimetres inboard of the tip, not flush with it. Flush puts the
+       sharklet's outboard face in the same plane as the wing's tip cap, and two
+       coplanar faces are a z-fight rather than a join. Three millimetres is far
+       inside the two-centimetre tolerance the span is measured to. */
+    const shInset = 0.003;
     /* The outboard face sits *on* the tip, or the model comes out wider than
        the published span -- which the guard would catch, and which would also
        be a lie about the one dimension a wingtip device does not change. */
     const sh = (u, z, o) => [(tipTop.x - shT) * sgn + o * sgn,
                              tipTop.le - u * tipC * 0.82, tipTop.z + z];
-    for (const o of [shT, -shT]) {
-      quad(sh(0.05, 0, o), sh(0.95, 0, o), sh(0.95, shH * 0.72, o), sh(0.30, shH, o), WING);
+    for (const o of [shT - shInset, -shT]) {
+      const f = [sh(0.05, 0, o), sh(0.95, 0, o),
+                 sh(0.95, shH * 0.72, o), sh(0.30, shH, o)];
+      /* Mirrored faces cannot share a corner order, or one of them is
+         inside-out -- the nose cap's mistake again, and the third part it has
+         turned up on. */
+      if (o < 0) f.reverse();
+      quad(f[0], f[1], f[2], f[3], WING);
     }
-    quad(sh(0.30, shH, shT), sh(0.95, shH * 0.72, shT),
+    quad(sh(0.30, shH, shT - shInset), sh(0.95, shH * 0.72, shT - shInset),
          sh(0.95, shH * 0.72, -shT), sh(0.30, shH, -shT), WING);
+
+    /* ---- slat lines ----
+       The joints between the leading-edge slats, which is the only thing that
+       breaks up a wing's leading edge from outside. Panels, so they keep flat
+       normals and read as lines rather than dissolving into the curve. */
+    part = PART.PANEL;
+    for (let k = 1; k <= 5; k++) {
+      const v = 0.10 + k * 0.155, e = 0.004;
+      const sl = (vv, u, up) => wingPt(vv, u, up, sgn);
+      quad(sl(v - e, 0.03, true), sl(v + e, 0.03, true),
+           sl(v + e, 0.0, true), sl(v - e, 0.0, true), SLAT);
+      quad(sl(v - e, 0.0, false), sl(v + e, 0.0, false),
+           sl(v + e, 0.04, false), sl(v - e, 0.04, false), SLAT);
+    }
+
+    /* ---- flap track fairings ----
+       The canoes under the trailing edge. They are most of what a wing's
+       underside looks like, and the one place an airliner's silhouette is not
+       smooth. Each is a closed body so it takes the fairing's own smoothing
+       rather than the wing's. */
+    part = PART.FAIRING;
+    for (const v of [0.18, 0.36, 0.55]) {
+      const w = wingSec(v);
+      const tr = w.ch * 0.062;
+      const under = w.z - naca(0.62, w.tc) * w.ch;
+      /* Fraction of chord aft of the leading edge, and how fat the canoe is
+         there: buried in the wing at the front, fattest under the rear spar,
+         drawn out to a point behind the trailing edge. */
+      /* The last radius is small but not zero: a ring collapsed onto the axis
+         is ten triangles with two corners in the same place, which have no
+         area, no normal and no business in a buffer. It is closed with a cap
+         like the front, which is what a canoe's tail actually looks like. */
+      const CAN = [[0.42, 0.20], [0.56, 0.72], [0.72, 1.00], [0.90, 0.88],
+                   [1.08, 0.58], [1.26, 0.16]];
+      const cpt = (k, i) => {
+        const [u, r] = CAN[k], th = i / 10 * Math.PI * 2;
+        /* The canoe droops as it goes aft, which is what makes it a canoe
+           rather than a pencil. */
+        return [(w.x + Math.cos(th) * tr * r * 0.85) * sgn,
+                w.le - u * w.ch,
+                under - tr * 0.55 - (u - 0.42) * w.ch * 0.045 + Math.sin(th) * tr * r];
+      };
+      for (let k = 0; k < CAN.length - 1; k++) {
+        for (let i = 0; i < 10; i++) {
+          quad(cpt(k, i), cpt(k, (i + 1) % 10), cpt(k + 1, (i + 1) % 10), cpt(k + 1, i),
+               WING_D);
+        }
+      }
+      /* Closed at both ends, because the fairing is a solid and the wing above
+         it is a separate one -- an open end would be visible from below. Each
+         cap runs round its rim *against* the band that shares it. */
+      const end = (k, u, fwd) => {
+        const tip = [w.x * sgn, w.le - u * w.ch,
+                     under - tr * 0.55 - (u - 0.42) * w.ch * 0.045];
+        for (let i = 0; i < 10; i++) {
+          const j = (i + 1) % 10;
+          tri(fwd ? cpt(k, i) : cpt(k, j), fwd ? cpt(k, j) : cpt(k, i), tip, WING_D);
+        }
+      };
+      end(0, 0.36, false);
+      end(CAN.length - 1, 1.34, true);
+    }
+    part = PART.WING;
   }
 
+  /* ---- wing-root fairing ----
+     The belly fairing over the wing box. Before it the wing came out of the
+     fuselage with no fillet at all, which is the single most obviously
+     un-aeroplane thing left in the silhouette.
+
+     It is a closed lofted blister and nothing is cut away anywhere: where its
+     section is smaller than the fuselage's it simply lies *inside* the hull and
+     the depth buffer hides it, so the blend at each end is free and there is no
+     boolean geometry to get wrong. Both ends taper inside, which is why the
+     fairing appears out of the skin rather than starting at an edge. */
+  part = PART.FAIRING;
+  {
+    const FAIR_N = 22;
+    const fy0 = rootLE + rootC * 0.30, fy1 = rootLE - rootC * 1.42;
+    const fz = -lowerR * 0.30;
+    const bulge = (f, lo, hi, k) => lowerR * (lo + hi * Math.pow(Math.sin(Math.PI * f), k));
+    const fpt = (f, i) => {
+      const th = i / FAIR_N * Math.PI * 2;
+      return [Math.cos(th) * bulge(f, 0.66, 0.62, 1.25),
+              fy0 + (fy1 - fy0) * f,
+              fz + Math.sin(th) * bulge(f, 0.40, 0.78, 1.05)];
+    };
+    const FF = [0, 0.05, 0.12, 0.21, 0.32, 0.44, 0.56, 0.68, 0.79, 0.89, 0.96, 1.0];
+    for (let k = 0; k < FF.length - 1; k++) {
+      for (let i = 0; i < FAIR_N; i++) {
+        const j = (i + 1) % FAIR_N;
+        quad(fpt(FF[k], i), fpt(FF[k], j), fpt(FF[k+1], j), fpt(FF[k+1], i), FUS_D);
+      }
+    }
+    /* The two caps close opposite ends, so they run round their rims opposite
+       ways -- and each has to run against the loft band that shares the rim,
+       not with it. */
+    for (const [f, fwd] of [[0, false], [1, true]]) {
+      const mid = [0, fy0 + (fy1 - fy0) * f, fz];
+      for (let i = 0; i < FAIR_N; i++) {
+        const j = (i + 1) % FAIR_N;
+        tri(fwd ? fpt(f, i) : fpt(f, j), fwd ? fpt(f, j) : fpt(f, i), mid, FUS_D);
+      }
+    }
+  }
+
+  part = PART.PANEL;
   /* ---- control surfaces ----
      Wedges filling the last quarter of the chord, each hinged on the wing box
      it hangs off. Flaps inboard, ailerons outboard, spoilers on the upper
@@ -4875,6 +5205,7 @@ function buildModel(a) {
   };
   spoiler(1, SURF.SPOIL_R); spoiler(-1, SURF.SPOIL_L);
 
+  part = PART.TAIL;
   /* ---- tailplane and fin ----
      Flat, so one hinge line serves both elevators. */
   const tpB = B * 0.36, tpY = tailY + L * 0.26, tpC = L * 0.20, tpZ = lowerR * 0.30;
@@ -4887,7 +5218,8 @@ function buildModel(a) {
     return [s.x * sgn, s.le - u * s.ch, s.z + (up ? half : -half)];
   };
   const TCS = 0.68;
-  const TVS = [0, 0.35, 0.7, 1.0], TUS = [0, 0.08, 0.24, 0.46, TCS];
+  const TVS = [0, 0.2, 0.4, 0.6, 0.8, 1.0],
+        TUS = [0, 0.02, 0.06, 0.13, 0.24, 0.38, 0.53, TCS];
   for (const sgn of [1, -1]) {
     for (let i = 0; i < TVS.length - 1; i++) {
       for (let j = 0; j < TUS.length - 1; j++) {
@@ -4926,7 +5258,8 @@ function buildModel(a) {
     return [half * sgn, s.le - u * s.ch, s.z];
   };
   const RCS = 0.64;
-  const FWS = [0, 0.3, 0.62, 0.86, 1.0], FUS_U = [0, 0.09, 0.26, 0.48, RCS];
+  const FWS = [0, 0.18, 0.36, 0.54, 0.72, 0.87, 1.0],
+        FUS_U = [0, 0.02, 0.07, 0.15, 0.27, 0.41, RCS];
   for (let i = 0; i < FWS.length - 1; i++) {
     for (let j = 0; j < FUS_U.length - 1; j++) {
       const [w0, w1] = [FWS[i], FWS[i+1]], [u0, u1] = [FUS_U[j], FUS_U[j+1]];
@@ -4952,15 +5285,15 @@ function buildModel(a) {
     hinges[SURF.RUDDER] = { p: [0, h[1], h[2]], axis: [0, d[1]/m, d[2]/m] };
   }
 
+  part = PART.COWL;
   /* ---- nacelles and pylons ----
      The cowl is as fat as the published fan plus a cowl's thickness, which is
      the same `fanDia` the engine's note comes from. An open tube was the old
      shape and you could see straight through it; this one has an inlet lip, a
      fan to look at and a core plug behind. */
-  const NAC_N = 14;
+  const NAC_N = 24;
   const widest = Math.max(...a.arms.map(Math.abs));
-  for (const arm of a.arms) {
-    const outboard = Math.abs(arm) / widest;
+  a.arms.forEach((arm, ei) => {
     const v = Math.min(0.95, (Math.abs(arm) - rootX) / Math.max(B - rootX, 1e-3));
     const w = wingSec(Math.max(v, 0));
     /* As fat as the published fan plus a cowl, and as long as such a cowl is.
@@ -4976,48 +5309,141 @@ function buildModel(a) {
     const wingUnder = w.z - naca(0.3, w.tc) * w.ch;
     const pylonGap = cowlR * 0.42;   // the same figure the leg was solved for
     const ez = wingUnder - pylonGap - cowlR;
-    /* Cowl profile: lip, maximum diameter a third back, tapering to the nozzle. */
-    const PROF = [[0.00, 0.80], [0.05, 0.99], [0.18, 1.06], [0.34, 1.05],
-                  [0.62, 0.97], [0.85, 0.88], [1.00, 0.78]];
+
+    /* `t` runs aft from the inlet highlight as a fraction of `nacL`, and `r` is
+       a multiple of the cowl radius. A point on the nacelle is (t, r, i). */
     const npt = (t, r, i) => {
       const th = i / NAC_N * Math.PI * 2;
       return [arm + Math.cos(th) * cowlR * r, ey - t * nacL, ez + Math.sin(th) * cowlR * r];
     };
-    for (let s = 0; s < PROF.length - 1; s++) {
+    /* `rev` is for a band that is the *inside* of the nacelle rather than the
+       outside. It matters because the inlet duct shares its front rim with the
+       outer cowl: wound the same way, the two run round that rim in the same
+       direction, which means the surface doubles back on itself there. Nothing
+       shows, because nothing here is back-face culled -- which is exactly why
+       the guard asks the question instead of the picture. */
+    const ring = (t0, r0, t1, r1, c, rev) => {
       for (let i = 0; i < NAC_N; i++) {
         const j = (i + 1) % NAC_N;
-        quad(npt(PROF[s][0], PROF[s][1], i), npt(PROF[s][0], PROF[s][1], j),
-             npt(PROF[s+1][0], PROF[s+1][1], j), npt(PROF[s+1][0], PROF[s+1][1], i),
-             s < 4 ? ENG : ENG_D);
+        if (rev) quad(npt(t0, r0, j), npt(t0, r0, i), npt(t1, r1, i), npt(t1, r1, j), c);
+        else     quad(npt(t0, r0, i), npt(t0, r0, j), npt(t1, r1, j), npt(t1, r1, i), c);
       }
+    };
+    const cap = (t, r, tip, c) => {
+      for (let i = 0; i < NAC_N; i++) {
+        tri(npt(t, r, i), npt(t, r, (i + 1) % NAC_N), [arm, ey - tip * nacL, ez], c);
+      }
+    };
+
+    /* ---- the fan cowl ----
+       Lip, maximum diameter a third back, then tapering to the bypass nozzle.
+       It stops at the nozzle rather than running the whole length: behind it
+       the engine necks down twice, and those two steps are what makes a
+       turbofan look like a turbofan rather than like a pipe. */
+    const FAN_COWL = [[0.00, 0.80], [0.02, 0.92], [0.05, 0.99], [0.10, 1.035],
+                      [0.18, 1.06], [0.26, 1.062], [0.34, 1.05], [0.44, 1.025],
+                      [0.54, 0.985], [0.62, 0.935], [0.68, 0.885]];
+    for (let k = 0; k < FAN_COWL.length - 1; k++) {
+      ring(FAN_COWL[k][0], FAN_COWL[k][1], FAN_COWL[k+1][0], FAN_COWL[k+1][1],
+           k < 4 ? ENG : ENG_D);
     }
-    /* Inlet lip turning inward, and the fan behind it. */
+    /* Bypass nozzle: the fan cowl turning in onto the core. */
+    ring(0.68, 0.885, 0.72, 0.505, ENG_D);
+    /* Core cowl, and the core nozzle turning in onto the plug. */
+    ring(0.72, 0.505, 0.86, 0.475, ENG_D);
+    ring(0.86, 0.475, 1.00, 0.430, ENG_D);
+    ring(1.00, 0.430, 1.03, 0.305, LIP);
+    /* The plug: the cone you see up the back of a running engine. */
+    cap(1.03, 0.305, 1.24, ENG_D);
+
+    /* ---- the inlet ----
+       The lip turns inward and the duct carries on to the fan face, so looking
+       into the intake finds an engine rather than the sky on the far side.
+       Dark, because a real inlet lip is the anti-ice skin and not paint. */
+    const FAN_T = 0.145, hubF = fanR / cowlR;
+    ring(0.00, 0.80, 0.045, hubF * 1.035, LIP, true);
+    ring(0.045, hubF * 1.035, FAN_T, hubF, LIP, true);
+
+    /* ---- the fan ----
+       The face behind the blades, the spinner in front of them, and
+       `fanBlades` real blades between -- the published count, the same field
+       the engine's note is derived from, so the fan you see has as many blades
+       as the fan you hear. All of it turns: the fan is a rotation about a point
+       and a line, which is what a hinge already is, so it reuses the machinery
+       the control surfaces run on rather than growing a second copy of it. */
+    const fanY = ey - FAN_T * nacL, hubR = fanR * 0.20;
+    const fanSid = SURF.FAN0 + ei;
+    hinges[fanSid] = { p: [arm, fanY, ez], axis: [0, 1, 0] };
+
+    part = PART.FAN;
+    /* The face. It is the colour a spooled-up fan blurs *to*, which is what
+       lets the blades disappear into it without any blending: at full power
+       the blades are painted this and the disc reads as solid, which is what
+       you actually see looking into a running engine. */
     for (let i = 0; i < NAC_N; i++) {
       const j = (i + 1) % NAC_N;
-      /* The lip is dark on a real engine -- it is the anti-ice skin, not paint. */
-      quad(npt(0, 0.80, i), npt(0, 0.80, j),
-           npt(0.09, fanR / cowlR, j), npt(0.09, fanR / cowlR, i), LIP);
-      tri(npt(0.10, fanR / cowlR, i), npt(0.10, fanR / cowlR, j),
-          [arm, ey - nacL * 0.10, ez], FAN);
-      /* Core plug: the cone you see up the back of a running engine. */
-      tri(npt(1.0, 0.78, i), npt(1.0, 0.78, j),
-          [arm, ey - nacL * 1.10, ez], ENG_D);
+      quad(npt(FAN_T, hubF, i), npt(FAN_T, hubF, j),
+           npt(FAN_T, hubR / cowlR, j), npt(FAN_T, hubR / cowlR, i), FAN_BLUR, fanSid);
     }
-    /* The pylon. Without it the engines hang in space beside the aeroplane,
-       which was the most obviously wrong thing in the old model. */
+    /* Spinner, nose forward. */
+    for (let i = 0; i < NAC_N; i++) {
+      tri(npt(FAN_T, hubR / cowlR, i), npt(FAN_T, hubR / cowlR, (i + 1) % NAC_N),
+          [arm, fanY + hubR * 2.2, ez], SPIN, fanSid);
+    }
+
+    part = PART.BLADE;
+    /* One blade, at angle `th`. Stagger grows with radius -- a fan blade is
+       nearly axial at the root and close to tangential at the tip, which is
+       why a real one looks twisted -- and the chord narrows toward the tip. */
+    for (let b = 0; b < a.fanBlades; b++) {
+      const th = b / a.fanBlades * Math.PI * 2;
+      const rad_ = [Math.cos(th), 0, Math.sin(th)], tan_ = [-Math.sin(th), 0, Math.cos(th)];
+      const bp = (u, c) => {
+        const r = hubR + (fanR * 0.985 - hubR) * u;
+        const sig = rad(20 + 46 * u), ch = fanR * (0.42 - 0.13 * u) * c;
+        return [arm + rad_[0] * r + tan_[0] * ch * Math.sin(sig),
+                fanY + ch * Math.cos(sig),
+                ez + rad_[2] * r + tan_[2] * ch * Math.sin(sig)];
+      };
+      quad(bp(0, 0.5), bp(0, -0.5), bp(1, -0.5), bp(1, 0.5), BLADE, fanSid);
+    }
+
+    /* ---- thrust reverser cascades ----
+       A band of them round the cowl where the translating sleeve splits. They
+       are panels, so they keep flat normals and read as a row of hard-edged
+       vanes rather than melting into the curve they sit on. */
+    part = PART.PANEL;
+    for (let i = 0; i < NAC_N; i += 2) {
+      const j = (i + 1) % NAC_N;
+      quad(npt(0.46, 1.028, i), npt(0.46, 1.028, j),
+           npt(0.58, 0.985, j), npt(0.58, 0.985, i), CASC);
+    }
+    part = PART.COWL;
+
+    /* ---- the pylon ----
+       Without it the engines hang in space beside the aeroplane, which was the
+       most obviously wrong thing in the old model. */
+    part = PART.PYLON;
     const pw = cowlR * 0.13;
     const py0 = w.le - w.ch * 0.18, py1 = ey - nacL * 0.55;
     const pzTop = wingUnder + cowlR * 0.05, pzBot = ez + cowlR * 0.88;
+    /* The two flanks are mirror images, so emitting both in the same corner
+       order points their normals the same way and one of them is inside-out --
+       the nose cap's mistake on a smaller part. */
     for (const o of [pw, -pw]) {
-      quad([arm + o, py0, pzTop], [arm + o, py1, pzBot],
-           [arm + o, ey - nacL * 0.05, pzBot], [arm + o, py0 + w.ch * 0.26, pzTop], PYL);
+      const f = [[arm + o, py0, pzTop], [arm + o, py1, pzBot],
+                 [arm + o, ey - nacL * 0.05, pzBot], [arm + o, py0 + w.ch * 0.26, pzTop]];
+      if (o < 0) f.reverse();
+      quad(f[0], f[1], f[2], f[3], PYL);
     }
-    quad([arm + pw, py1, pzBot], [arm - pw, py1, pzBot],
-         [arm - pw, py0, pzTop], [arm + pw, py0, pzTop], PYL);
     quad([arm + pw, py0, pzTop], [arm - pw, py0, pzTop],
-         [arm - pw, py0 + w.ch * 0.26, pzTop], [arm + pw, py0 + w.ch * 0.26, pzTop], PYL);
-  }
+         [arm - pw, py1, pzBot], [arm + pw, py1, pzBot], PYL);
+    quad([arm + pw, py0 + w.ch * 0.26, pzTop], [arm - pw, py0 + w.ch * 0.26, pzTop],
+         [arm - pw, py0, pzTop], [arm + pw, py0, pzTop], PYL);
+    part = PART.COWL;
+  });
 
+  part = PART.GEAR;
   /* ---- landing gear ----
      Drawn when it is down, and the bogie count is `artwork.py`'s: pavement
      loading decides it, so one leg a side on a narrowbody, two on a widebody
@@ -5026,10 +5452,11 @@ function buildModel(a) {
   const gearGroups = a.mtow < 150000 ? 1 : (a.mtow < 400000 ? 2 : 3);
   const axles = a.mtow < 150000 ? 1 : 2;
   const legR = Math.max(0.21, lowerR * 0.115), tyreR = gearLeg * 0.42;
+  const TYRE_N = 14;
   const leg = (x, y, n) => {
     /* Strut. */
-    for (let i = 0; i < 8; i++) {
-      const t0 = i / 8 * Math.PI * 2, t1 = (i + 1) / 8 * Math.PI * 2;
+    for (let i = 0; i < 12; i++) {
+      const t0 = i / 12 * Math.PI * 2, t1 = (i + 1) / 12 * Math.PI * 2;
       const p = (t, z, r) => [x + Math.cos(t) * r, y + Math.sin(t) * r, z];
       /* Fatter at the top, where the oleo is. */
       quad(p(t0, -lowerR * 0.55, legR * 1.5), p(t1, -lowerR * 0.55, legR * 1.5),
@@ -5047,15 +5474,30 @@ function buildModel(a) {
     for (let k = 0; k < n; k++) {
       const wy = y + (k - (n - 1) / 2) * tyreR * 2.3;
       for (const sx of (n > 1 || gearGroups > 1 ? [tyreR * 0.8, -tyreR * 0.8] : [0])) {
-        for (let i = 0; i < 8; i++) {
-          const t0 = i / 8 * Math.PI * 2, t1 = (i + 1) / 8 * Math.PI * 2;
+        part = PART.TYRE;
+        /* Phased so that i = 0 lands on the *bottom* of the wheel. A polygon
+           inscribed in a circle only touches it at its vertices, so a ring
+           whose vertices straddle the lowest point stands the aeroplane
+           `tyreR * (1 - cos(pi/N))` proud of the runway -- which is what
+           raising this from 8 segments to 14 did, and what the guard caught:
+           the whole fleet two centimetres in the air and every published
+           height short by the same amount. */
+        for (let i = 0; i < TYRE_N; i++) {
+          const t0 = i / TYRE_N * Math.PI * 2 - Math.PI / 2,
+                t1 = (i + 1) / TYRE_N * Math.PI * 2 - Math.PI / 2;
           const p = (t, o) => [x + sx + o, wy + Math.cos(t) * tyreR,
                                groundZ + tyreR + Math.sin(t) * tyreR];
           quad(p(t0, tyreR * 0.32), p(t1, tyreR * 0.32),
                p(t1, -tyreR * 0.32), p(t0, -tyreR * 0.32), TYRE, SURF.GEAR);
-          tri(p(t0, tyreR * 0.32), p(t1, tyreR * 0.32),
+          /* Both sidewalls, and each wound against the tread it meets rather
+             than with it. One was missing entirely, so a wheel seen from
+             inboard was an open hoop. */
+          tri(p(t1, tyreR * 0.32), p(t0, tyreR * 0.32),
               [x + sx + tyreR * 0.32, wy, groundZ + tyreR], TYRE, SURF.GEAR);
+          tri(p(t0, -tyreR * 0.32), p(t1, -tyreR * 0.32),
+              [x + sx - tyreR * 0.32, wy, groundZ + tyreR], TYRE, SURF.GEAR);
         }
+        part = PART.GEAR;
       }
     }
   };
@@ -5069,6 +5511,7 @@ function buildModel(a) {
   /* Everything on the gear collapses to this point when it is up. */
   hinges[SURF.GEAR] = { p: [0, mainY, -lowerR * 0.5], axis: [1, 0, 0] };
 
+  part = PART.LAMP;
   /* ---- lights ----
      Red to port, green to starboard, white astern: the oldest convention in
      navigation and the one thing about an aeroplane at dusk you can actually
@@ -5103,7 +5546,7 @@ function buildModel(a) {
   lamp([ Wf * 1.1, rootLE + rootC * 0.1, rootZ], "#fff6d8", 4, L * 0.010);
   lamp([-Wf * 1.1, rootLE + rootC * 0.1, rootZ], "#fff6d8", 4, L * 0.010);
 
-  return { tris, hinges, groundZ, gearGroups, axles, lamps,
+  return { tris, hinges, groundZ, gearGroups, axles, lamps, PART, SOLID_PARTS,
            span: B * 2, length: L, height: a.height, pods: a.arms.length };
 }
 const modelCache = {};
@@ -5137,6 +5580,40 @@ function surfaceAngles(a, s, out) {
   out[SURF.SPOIL_L] = out[SURF.SPOIL_R] = -sp;
   return out;
 }
+
+/* ---- the fan ----
+
+   How fast it turns is not a number anyone chose: `fanShaftHz` is the shaft
+   speed the published diameter implies at 100%, and the fan is at whatever
+   fraction of that N1 is. The same figure makes the note, which is the point --
+   an aeroplane whose fan span at one speed and sang at another would be two
+   engines.
+
+   The phase is *accumulated* rather than computed as `omega * clock`. Written
+   the second way, every change in N1 rewrites the whole history and the fan
+   jumps -- by more and more as the clock grows, so it looks fine for the first
+   minute and is a strobe light by the twentieth. This is the float-truncation
+   family one step along: an expression that is right instantaneously and wrong
+   integrated. */
+const fanPhase = {};
+function fanAngle(a, i, n1Frac, clockS) {
+  const k = a.key + "|" + i;
+  const st = fanPhase[k] || (fanPhase[k] = { ang: 0, at: clockS });
+  const dt = Math.max(0, Math.min(clockS - st.at, 0.5));
+  st.at = clockS;
+  st.ang = (st.ang + 2 * Math.PI * fanShaftHz(a) * n1Frac * dt) % (2 * Math.PI);
+  return st.ang;
+}
+
+/* A fan at speed is a *blur*, not a wheel with spokes: at three thousand rpm
+   sampled sixty times a second the blades alias into a strobing mess, which is
+   both ugly and a lie about what you would see. Fading them into the disc they
+   sit in front of is what a camera and an eye both do. */
+function fanBlur(n1Frac) { return clamp((n1Frac - 0.28) / 0.42, 0, 0.94); }
+/* What a contact's engines are doing. Not a guess at its throttle setting: at
+   any range where a fan blade is resolvable the aeroplane fills the windscreen,
+   and the only claim being made is that the engines are turning. */
+const TRAFFIC_N1 = 0.85;
 
 /* Lamp brightness by kind: 1 steady, 2 strobe, 3 beacon, 4 with the gear.
    The flash rates are the real ones -- a strobe about once a second, a beacon
@@ -5201,8 +5678,25 @@ const HINGE_A = new Float32Array(SURF_COUNT * 3);
 const HINGE_ANG = new Float32Array(SURF_COUNT);
 const LAMP_GAIN = new Float32Array(5);
 const SURF_ANGLES = new Float32Array(SURF_COUNT);
+const FAN_BLUR_U = new Float32Array(4);
+const FAN_BLUR_RGB = hex(FAN_BLUR_HEX).map(v => v / 255);
 
-function setModelHinges(a, angles, gearDown, clockS) {
+/* Everything the metal needs to reflect the sky it is in. The sky pass sets
+   the same three from the same places, which is the point. */
+function setModelSky(haze, zen, tint, day, sunVisible, gloss) {
+  gl.uniform3fv(progModel.u.uHaze, haze);
+  gl.uniform3fv(progModel.u.uZenith, zen);
+  gl.uniform3fv(progModel.u.uSunTint, tint);
+  gl.uniform1f(progModel.u.uDay, day);
+  gl.uniform1f(progModel.u.uSunVisible, sunVisible);
+  gl.uniform1f(progModel.u.uGloss, gloss);
+}
+
+/* `n1` is per-engine fractions, one number for all of them, or null for an
+   engine that is not running. The fan has one owner and it is here rather than
+   in `surfaceAngles`, because a spinning fan is a function of the clock as well
+   as of the aeroplane -- the same reason the strobe's gain is. */
+function setModelHinges(a, angles, gearDown, clockS, n1) {
   const hinges = modelFor(a).hinges;
   for (let i = 0; i < SURF_COUNT; i++) {
     const h = hinges[i];
@@ -5210,12 +5704,19 @@ function setModelHinges(a, angles, gearDown, clockS) {
     HINGE_A[i*3] = h.axis[0]; HINGE_A[i*3+1] = h.axis[1]; HINGE_A[i*3+2] = h.axis[2];
     HINGE_ANG[i] = angles ? angles[i] : 0;
   }
+  for (let i = 0; i < 4; i++) {
+    const f = n1 == null ? 0 : (typeof n1 === "number" ? n1 : (n1[i] || 0));
+    FAN_BLUR_U[i] = fanBlur(f);
+    if (i < a.arms.length) HINGE_ANG[SURF.FAN0 + i] = fanAngle(a, i, f, clockS);
+  }
   LAMP_GAIN[0] = 0;
   for (let k = 1; k < 5; k++) LAMP_GAIN[k] = lampGain(k, clockS, gearDown);
   gl.uniform3fv(progModel.u.uHingeP, HINGE_P);
   gl.uniform3fv(progModel.u.uHingeA, HINGE_A);
   gl.uniform1fv(progModel.u.uHingeAng, HINGE_ANG);
   gl.uniform1fv(progModel.u.uLamp, LAMP_GAIN);
+  gl.uniform1fv(progModel.u.uFanBlur, FAN_BLUR_U);
+  gl.uniform3fv(progModel.u.uFanBlurCol, FAN_BLUR_RGB);
   gl.uniform1f(progModel.u.uGearDown, gearDown ? 1 : 0);
 }
 
@@ -5264,6 +5765,10 @@ function render() {
                   && weather.deckFt < 30000;
   if (inCloud) fogDist = Math.min(fogDist, 260);
 
+  /* One value, read by the sky and by everything that reflects it. */
+  const skySunVisible =
+    weather.key === "stormy" || weather.key === "foggy" ? 0.08 : 1.0;
+
   gl.viewport(0, 0, VW, VH);
   gl.clearColor(haze[0], haze[1], haze[2], 1);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -5280,8 +5785,7 @@ function render() {
   gl.uniform3fv(progSky.u.uSun, sun);
   gl.uniform3fv(progSky.u.uHaze, haze);
   gl.uniform3fv(progSky.u.uZenith, zen);
-  gl.uniform1f(progSky.u.uSunVisible,
-               weather.key === "stormy" || weather.key === "foggy" ? 0.08 : 1.0);
+  gl.uniform1f(progSky.u.uSunVisible, skySunVisible);
   gl.uniform1f(progSky.u.uDay, day);
   gl.uniform3fv(progSky.u.uSunTint, tint);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -5369,16 +5873,14 @@ function render() {
     const m = modelBuffers(a);
     gl.useProgram(progModel);
     gl.bindVertexArray(m.vao);
-    setModelHinges(a, surfaceAngles(a, s, SURF_ANGLES), s.gear, s.t);
+    setModelHinges(a, surfaceAngles(a, s, SURF_ANGLES), s.gear, s.t, s.n1);
     gl.uniformMatrix4fv(progModel.u.uVP, false, VP);
     gl.uniformMatrix4fv(progModel.u.uModel, false, MODELM);
     gl.uniformMatrix3fv(progModel.u.uNormalM, false, NORMALM);
     gl.uniform3fv(progModel.u.uCam, cam);
     gl.uniform3fv(progModel.u.uSun, sun);
-    gl.uniform3fv(progModel.u.uHaze, haze);
     gl.uniform1f(progModel.u.uFogDist, fogDist);
-    gl.uniform1f(progModel.u.uDay, day);
-    gl.uniform3fv(progModel.u.uSunTint, tint);
+    setModelSky(haze, zen, tint, day, skySunVisible, 1.0);
     gl.drawArrays(gl.TRIANGLES, 0, m.count);
   }
 
@@ -5398,10 +5900,8 @@ function render() {
     gl.uniformMatrix4fv(progModel.u.uVP, false, VP);
     gl.uniform3fv(progModel.u.uCam, cam);
     gl.uniform3fv(progModel.u.uSun, sun);
-    gl.uniform3fv(progModel.u.uHaze, haze);
     gl.uniform1f(progModel.u.uFogDist, fogDist);
-    gl.uniform1f(progModel.u.uDay, day);
-    gl.uniform3fv(progModel.u.uSunTint, tint);
+    setModelSky(haze, zen, tint, day, skySunVisible, 1.0);
     for (const t of seen) {
       const other = FLEET_BY_KEY[t.key];
       if (!other) continue;
@@ -5424,7 +5924,12 @@ function render() {
          its own and its surfaces sit where a trimmed aeroplane's do. Its gear
          follows its phase, which the profile does know. */
       const low = t.phase !== "cruise" && t.alt - elevation(t.x, t.y) < 2500;
-      setModelHinges(other, null, low, s.t);
+      /* Traffic's surfaces are trimmed -- nobody is flying it -- but its
+         engines are running, which is the only thing a fan at that range can
+         say. TRAFFIC_N1 is above the blur threshold, so what you see is a disc
+         rather than a wheel with spokes, which is what a fan at any range you
+         could resolve one from looks like. */
+      setModelHinges(other, null, low, s.t, TRAFFIC_N1);
       gl.uniformMatrix4fv(progModel.u.uModel, false, MODELM);
       gl.uniformMatrix3fv(progModel.u.uNormalM, false, NORMALM);
       gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
@@ -7394,12 +7899,23 @@ const H_PROJ = new Float32Array(16), H_VIEW = new Float32Array(16),
       H_VP = new Float32Array(16), H_MODEL = new Float32Array(16),
       H_NORMAL = new Float32Array(9);
 const HANGAR_LIGHT = [0.42, -0.36, 0.83];      // fixed, so every type is lit alike
+/* The hangar's *environment*, which is what the metal reflects -- not the
+   colour the frame is cleared to. Painted metal at a grazing angle is nearly a
+   mirror, so a shed lit only by the void behind the camera turns every nose and
+   every leading edge black. A real hangar has a lit roof and a pale floor, and
+   those two are what these are. Less glossy than outdoors, because there is no
+   sun in here to make a highlight and the reflection is doing all the work.
+
+   It is a parameter of `drawAircraftPreview` rather than a literal inside it so
+   that `model_check` can draw the same aeroplane under two different skies and
+   check that the pixels differ -- a reflection nobody can move is not one. */
+const HANGAR_ENV = { haze: [0.23, 0.25, 0.28], zen: [0.42, 0.45, 0.50], gloss: 0.55 };
 
 /* Draw one aeroplane, filling a viewport of the given size, seen from `yawDeg`
    round and a little above. Shared by the live preview and by the card
    pictures, so a card cannot come out looking like a different aeroplane from
    the one it selects. */
-function drawAircraftPreview(a, yawDeg, w, h, clockS, fill) {
+function drawAircraftPreview(a, yawDeg, w, h, clockS, fill, env) {
   const m = modelBuffers(a);
   /* Framed off the type's own length, the way the chase camera is: that is
      what makes an A380 and an A319neo both fill the frame. A card is a smaller
@@ -7423,24 +7939,29 @@ function drawAircraftPreview(a, yawDeg, w, h, clockS, fill) {
   H_MODEL[0] = 1; H_MODEL[5] = 1; H_MODEL[10] = 1; H_MODEL[15] = 1;
   H_NORMAL.set([1, 0, 0, 0, 1, 0, 0, 0, 1]);
 
-  const tint = [1, 1, 1], haze = [0.10, 0.13, 0.16];
+  /* A hangar is a room, so the "sky" it reflects is a dim even one. Same
+     function, different light -- which is the whole point of having one. */
+  const E = env || HANGAR_ENV;
+  const tint = [1, 1, 1], haze = E.haze, zen = E.zen;
   gl.enable(gl.DEPTH_TEST);
   gl.useProgram(progModel);
   gl.bindVertexArray(m.vao);
   /* Gear down, because it is standing on the ground; surfaces trimmed, because
      nobody is flying it -- `null` is what traffic passes for the same reason. */
-  setModelHinges(a, null, true, clockS);
+  /* Parked, so the fan is stopped and you can count the blades -- which is
+     most of the reason to stand in front of one. */
+  setModelHinges(a, null, true, clockS, 0);
   gl.uniformMatrix4fv(progModel.u.uVP, false, H_VP);
   gl.uniformMatrix4fv(progModel.u.uModel, false, H_MODEL);
   gl.uniformMatrix3fv(progModel.u.uNormalM, false, H_NORMAL);
   gl.uniform3fv(progModel.u.uCam, cam);
   gl.uniform3fv(progModel.u.uSun, HANGAR_LIGHT);
-  gl.uniform3fv(progModel.u.uHaze, haze);
   /* Far enough that nothing fades: the fog term exists to put an aeroplane in
      weather, and this one is indoors. */
   gl.uniform1f(progModel.u.uFogDist, 1e6);
-  gl.uniform1f(progModel.u.uDay, 1);
-  gl.uniform3fv(progModel.u.uSunTint, tint);
+  /* Less glossy than outdoors, because a hangar has no sun in it to make a
+     highlight and the reflection is doing all the work on its own. */
+  setModelSky(haze, zen, tint, 1, 0.0, E.gloss);
   gl.drawArrays(gl.TRIANGLES, 0, m.count);
 }
 
