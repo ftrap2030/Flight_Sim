@@ -70,7 +70,11 @@ const TONE_TOLERANCE = 0.13;
   const p = await browser.newPage({ viewport: { width: 800, height: 600 } });
   const errs = [];
   p.on('pageerror', e => errs.push(e.message));
-  await p.goto('file://' + page);
+  /* `?fly=1` skips the hangar and boots straight onto the runway. Every
+     tool here reaches for `S`, `craft` or `render()` as soon as the page
+     settles, and the menu would otherwise leave all of them waiting on a
+     flight that has not started. */
+  await p.goto('file://' + page + '?fly=1');
   await p.waitForTimeout(6000);
 
   const rows = await p.evaluate(async ([types, n1s, RENDER_S]) => {

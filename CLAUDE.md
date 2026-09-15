@@ -46,7 +46,8 @@ flight_sim/
 web/
   anfell.html      The whole browser build. One file, no build step.
   tools/           Playwright checks: cruise flow, model parity, the engines'
-                   spectrum, the aeroplanes' shape, screenshots.
+                   spectrum, the aeroplanes' shape and the hangar, screenshots.
+                   All of them open the page with `?fly=1`.
 ```
 
 ## Conventions
@@ -248,6 +249,68 @@ the whole fleet 25% higher satisfies *every published figure*, because they all
 measure from the ground the wheels are on. What catches it is the vacuity guard
 — the engine-clearance solve has to be what decides the leg on at least one
 type, or it is decorative.
+
+## The build opens in a hangar, and the loading screen is load-bearing
+
+`web/anfell.html` used to drop you on the runway with no ceremony, after a
+blank page. The blank was not nothing happening: the whole script is one
+synchronous block, and `makeProgram` queries `LINK_STATUS` six times with two
+of those shaders carrying the entire terrain noise function.
+
+Three things about the way it is built now.
+
+**The loading screen is in the markup, not built by script.** The script is what
+it is waiting for, so anything created in JavaScript would appear *after* the
+wait it exists to cover. It is `class="show"` in the HTML and the boot takes the
+class off.
+
+**The boot is staged, one stage per frame.** Five of them, each named for the
+work it is actually doing, because a bar that counts to a hundred while nothing
+happens is the thing this is not. The measured timeline is about 1.3 s here:
+shaders 440 ms, airfields 120, the eleven models 130, the timetable 60, and the
+fleet cards 570. Nothing may be added to a stage without its name still being
+true.
+
+The timetable stage is a fix as well as a stage. `traffic.buildTrafficProfiles`
+is lazy, but `render()` calls `trafficNear` unconditionally — so fourteen
+climb-cruise-descent integrations were being paid inside the *first frame*,
+where nothing could show it happening. `warmTraffic()` pays for it deliberately,
+under a bar that says so.
+
+**`screen` owns which of the three you are looking at**, and `frame` branches on
+it and nothing else. This matters more than it looks: **`S` is null until
+`newFlight` has run**, and every readout, panel and display dereferences it. So
+the hangar builds its own camera rather than borrowing `render`'s, uses its own
+matrices rather than the `PROJ`/`VIEW`/`VP` that `render` owns, and passes
+`null` to `setModelHinges` — which is what traffic passes, and means an aeroplane
+can be drawn with no flight state at all.
+
+The aeroplane in the hangar is the model, and so are the cards: rendered once at
+startup and read back with `readPixels`, which is the navigation display's
+terrain bake done in the *default* framebuffer — no new render target, and no
+depth attachment to add, which is the one thing neither existing target has.
+
+### `?fly=1` exists because five tools depend on it
+
+`cruise_check`, `parity_check`, `sound_check`, `model_check` and `shots` each
+open the file and then reach straight for `S`, `craft` or `render()`. A page
+that stops at a menu breaks all five and CI with them. The parameter skips the
+hangar and boots onto the runway, and **`model_check` asserts that it still
+does** — because a guard that silently stopped reaching a flight would report
+nothing wrong right up until it reported nothing at all.
+
+The hangar's own guard is the coverage one, `cruise_check`'s lesson in a new
+place: a type added to `FLEET` that the menu forgets can be flown by nobody, and
+nothing else in the build would notice. Every type has a card, every card names
+the aeroplane it is a picture of, and no card is blank — measured as the spread
+of light in the thumbnail, because a card that rendered an empty frame looks
+exactly like a card.
+
+### And the audio prompt is gone
+
+`armAudio` already fired on any `pointerdown`, so the "press any key for sound"
+hint existed only because there was never a click to hang it on. The Fly button
+is that click.
 
 ## The sound is derived from the fan, the same way the drawing is
 

@@ -687,6 +687,24 @@ There is no voice, no frequency, no handoff between sectors and no phraseology
 to learn. Those would be scenery. What is here is the clearances that change
 what the aeroplane may do.
 
+## Starting up
+
+The browser build opens on a loading screen, then a hangar, then the runway.
+
+The loading screen is doing real work and says which: compiling shaders,
+surveying the airfields, building the fleet, costing the timetable, preparing
+the hangar. About a second and a third, most of it the shaders — which is why
+the page used to sit blank, since the whole script is one synchronous block and
+nothing can paint until it returns.
+
+The hangar is where the fleet lives. Each of the eleven turns slowly on a
+turntable — the actual model, not a picture of one, with its gear down and its
+beacon going — beside its name, its engines and the figures it is built from.
+Pick one, set the weather, the time of day and where you would like to begin,
+and fly. The Hangar button in the corner brings you back.
+
+`?fly=1` on the URL skips it and puts you straight on the runway.
+
 ## What they look like
 
 The aeroplanes are built from the same published dimensions the spec cards are:

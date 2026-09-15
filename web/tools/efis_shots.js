@@ -15,7 +15,7 @@ const { chromium } = require(PW);
   const b = await chromium.launch(launch);
   const p = await b.newPage({ viewport:{width:1440,height:900} });
   const errs=[]; p.on('pageerror',e=>errs.push(e.message));
-  await p.goto('file://'+process.argv[2]);
+  await p.goto('file://'+process.argv[2]+'?fly=1');
   await p.waitForTimeout(6500);
   const out = process.argv[3];
 

@@ -311,6 +311,129 @@
   #ending .lb-note { color: var(--ink-dim); }
   #ending .lb-note b { color: var(--efis-green); font-weight: 600; }
 
+  /* ---- the loading screen ----
+     Above everything, including the debrief card, because it covers the moment
+     before any of them exist. */
+  #loading {
+    position: fixed; inset: 0; z-index: 30;
+    display: none; place-items: center;
+    background: var(--ground);
+  }
+  #loading.show { display: grid; }
+  .load-card { text-align: center; display: grid; gap: 6px; min-width: 280px; }
+  .load-brand {
+    margin: 0; font-family: var(--font-inst);
+    font-size: 34px; font-weight: 700; letter-spacing: .34em;
+    color: var(--efis-green); text-indent: .34em;
+  }
+  .load-sub {
+    margin: 0 0 14px; font-family: var(--font-inst);
+    font-size: 11px; letter-spacing: .3em; text-transform: uppercase;
+    color: var(--ink-faint); text-indent: .3em;
+  }
+  .load-bar { height: 2px; background: var(--edge); overflow: hidden; }
+  .load-bar > i {
+    display: block; height: 100%; width: 0;
+    background: var(--efis-green); transition: width .18s linear;
+  }
+  #load-stage {
+    margin: 10px 0 0; font-family: var(--font-inst);
+    font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ink-dim); font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- the hangar ----
+     The container passes clicks through to nothing; only its own panels take
+     them, so the aeroplane behind is never covered by an invisible sheet. */
+  #hangar {
+    position: fixed; inset: 0; z-index: 18;
+    display: none; pointer-events: none;
+    grid-template-columns: 1fr auto; grid-template-rows: auto 1fr auto;
+  }
+  #hangar.show { display: grid; }
+  #hangar > * { pointer-events: auto; }
+  .hangar-head {
+    grid-column: 1; grid-row: 1; align-self: start;
+    padding: 20px 24px; max-width: 420px;
+    background: linear-gradient(180deg, rgba(8,13,16,.88), rgba(8,13,16,0));
+  }
+  .hangar-head h1 {
+    margin: 2px 0 2px; font-family: var(--font-inst);
+    font-size: 30px; font-weight: 700; letter-spacing: .02em; color: var(--ink);
+  }
+  #hangar-engines {
+    margin: 0 0 10px; font-size: 12.5px; color: var(--efis-cyan);
+    letter-spacing: .02em;
+  }
+  #hangar-figs {
+    margin: 0; display: grid; grid-template-columns: auto auto; gap: 1px 18px;
+    justify-content: start;
+    font-family: var(--font-inst); font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  #hangar-figs dt { color: var(--ink-faint); }
+  #hangar-figs dd { margin: 0; color: var(--ink); }
+  .hangar-opts {
+    grid-column: 2; grid-row: 1; align-self: start; justify-self: end;
+    margin: 14px; padding: 12px 14px; display: grid; gap: 9px; min-width: 210px;
+    background: rgba(8,13,16,.82); border: 1px solid var(--edge);
+    backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px);
+  }
+  #hangar-fly {
+    margin-top: 2px; padding: 9px 4px; font-size: 13px; letter-spacing: .16em;
+    background: var(--efis-green); border-color: var(--efis-green);
+    color: #05141a;
+  }
+  #hangar-fly:hover { filter: brightness(1.12); }
+
+  /* The fleet. A card is a rendered picture of the aeroplane plus the three
+     figures that separate it from the one beside it. */
+  #fleet-strip {
+    grid-column: 1 / -1; grid-row: 3;
+    display: flex; gap: 8px; padding: 12px 14px; overflow-x: auto;
+    background: linear-gradient(0deg, rgba(8,13,16,.92), rgba(8,13,16,.34));
+    border-top: 1px solid var(--edge);
+  }
+  .fleet-card {
+    flex: none; width: 168px; cursor: pointer; text-align: left;
+    padding: 0 0 7px; background: var(--panel); color: var(--ink);
+    border: 1px solid var(--edge); text-transform: none; letter-spacing: 0;
+  }
+  .fleet-card:hover { border-color: var(--ink-faint); background: var(--panel-hi); }
+  .fleet-card.on { border-color: var(--efis-green); background: var(--panel-hi); }
+  .fleet-card canvas { display: block; width: 100%; height: auto; }
+  .fleet-card b {
+    display: block; margin: 6px 8px 1px; font-family: var(--font-inst);
+    font-size: 12.5px; font-weight: 600; letter-spacing: .02em;
+  }
+  .fleet-card .fc-eng {
+    display: block; margin: 0 8px 3px; font-size: 10px; color: var(--ink-dim);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .fleet-card .fc-figs {
+    display: block; margin: 0 8px; font-family: var(--font-inst);
+    font-size: 10px; color: var(--ink-faint); font-variant-numeric: tabular-nums;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .fleet-card.on b { color: var(--efis-green); }
+
+  /* In the hangar the windscreen is the whole window: the glass, the mode
+     panel and the gauges have nothing to say about an aeroplane on the
+     ground with nobody in it. */
+  #deck[data-screen="hangar"] { grid-template-rows: 1fr; }
+  #deck[data-screen="hangar"] #efis-wrap,
+  #deck[data-screen="hangar"] #fcu,
+  #deck[data-screen="hangar"] #panel,
+  #deck[data-screen="hangar"] #setup,
+  #deck[data-screen="hangar"] #legend,
+  #deck[data-screen="hangar"] #radio,
+  #deck[data-screen="hangar"] #vignette { display: none; }
+
+  #setup-type {
+    margin: 0 0 2px; font-family: var(--font-inst);
+    font-size: 13px; font-weight: 600; color: var(--efis-green);
+  }
+
   @media (max-width: 900px) {
     #legend { display: none; }
     .gauge .val { font-size: 18px; }
@@ -373,32 +496,7 @@
 
     <div id="setup" class="float">
       <p class="float-title">Aircraft</p>
-      <label class="field">
-        <span>Type</span>
-        <select id="sel-type"></select>
-      </label>
-      <label class="field">
-        <span>Conditions</span>
-        <select id="sel-wx"></select>
-      </label>
-      <label class="field">
-        <span>Time of day</span>
-        <select id="sel-time">
-          <option value="6.6">Dawn — 06:36</option>
-          <option value="10.0" selected>Morning — 10:00</option>
-          <option value="13.0">Midday — 13:00</option>
-          <option value="17.5">Dusk — 17:30</option>
-          <option value="22.0">Night — 22:00</option>
-        </select>
-      </label>
-      <label class="field">
-        <span>Start</span>
-        <select id="sel-start">
-          <option value="runway">On the runway — ANFL 07</option>
-          <option value="approach">On the ILS — 17 nm out</option>
-          <option value="airborne">Airborne — 5,000 ft</option>
-        </select>
-      </label>
+      <p id="setup-type">—</p>
       <label class="field">
         <span>Flight plan</span>
         <select id="sel-dest"></select>
@@ -413,7 +511,9 @@
         <button id="btn-view" type="button">Chase</button>
         <button id="btn-reset" type="button">Reset</button>
       </div>
-      <p id="audio-hint">Press any key for sound</p>
+      <div class="btn-row">
+        <button id="btn-hangar" type="button">Hangar</button>
+      </div>
     </div>
 
     <div id="legend" class="float">
@@ -493,6 +593,56 @@
     <div class="gauge"><span class="lbl">Config</span><span class="val small white" id="g-cfg">—</span></div>
     <div class="gauge"><span class="lbl">Flight controls</span><span class="val law cyan" id="g-law">—</span></div>
   </div>
+</div>
+
+<!-- The loading screen is *in the markup* rather than built by script, because
+     the script is what it is waiting for: one synchronous block that compiles
+     six shaders before it returns. Anything created in JavaScript would appear
+     after the wait it exists to cover. -->
+<div id="loading" class="show">
+  <div class="load-card">
+    <p class="load-brand">ANFELL</p>
+    <p class="load-sub">Flight Deck</p>
+    <div class="load-bar"><i id="load-fill"></i></div>
+    <p id="load-stage">Starting up</p>
+  </div>
+</div>
+
+<!-- The hangar. Transparent through the middle: the aeroplane behind it is the
+     real model on the real canvas, not a picture of one. -->
+<div id="hangar">
+  <div class="hangar-head">
+    <p class="float-title">Anfell Flight Deck</p>
+    <h1 id="hangar-name">—</h1>
+    <p id="hangar-engines">—</p>
+    <dl id="hangar-figs"></dl>
+  </div>
+  <div class="hangar-opts">
+    <label class="field">
+      <span>Conditions</span>
+      <select id="sel-wx"></select>
+    </label>
+    <label class="field">
+      <span>Time of day</span>
+      <select id="sel-time">
+        <option value="6.6">Dawn — 06:36</option>
+        <option value="10.0" selected>Morning — 10:00</option>
+        <option value="13.0">Midday — 13:00</option>
+        <option value="17.5">Dusk — 17:30</option>
+        <option value="22.0">Night — 22:00</option>
+      </select>
+    </label>
+    <label class="field">
+      <span>Start</span>
+      <select id="sel-start">
+        <option value="runway">On the runway — ANFL 07</option>
+        <option value="approach">On the ILS — 17 nm out</option>
+        <option value="airborne">Airborne — 5,000 ft</option>
+      </select>
+    </label>
+    <button id="hangar-fly" type="button">Fly</button>
+  </div>
+  <div id="fleet-strip"></div>
 </div>
 
 <script>
@@ -2302,6 +2452,14 @@ function trafficBand(rangeNm, relativeFt) {
 }
 
 let trafficProfiles = null;
+/* Pay for the timetable deliberately, under the loading bar, rather than
+   letting the first `render()` trip the guard below and stall the first frame
+   by a third of a second with nothing on screen to explain it. */
+function warmTraffic() {
+  if (trafficProfiles === null) {
+    trafficProfiles = buildTrafficProfiles(WORLD_SEED, buildAuthored());
+  }
+}
 function trafficNear(s, radiusNm = 40) {
   if (trafficProfiles === null) trafficProfiles = buildTrafficProfiles(WORLD_SEED, buildAuthored());
   const out = [];
@@ -7059,13 +7217,10 @@ function setView(v) {
   btn.classList.toggle("on", v === "chase");
 }
 
-/* ---------- selectors ---------- */
-const selType = el("sel-type"), selWx = el("sel-wx");
-FLEET.forEach(a => {
-  const o = document.createElement("option");
-  o.value = a.key; o.textContent = `${a.name} · ${a.icao}`;
-  selType.appendChild(o);
-});
+/* ---------- selectors ----------
+   The type is chosen in the hangar now, not from a dropdown over the
+   windscreen; `selectAircraft` is its one writer. */
+const selWx = el("sel-wx");
 WEATHER.forEach(w => {
   const o = document.createElement("option");
   o.value = w.key; o.textContent = w.name;
@@ -7074,7 +7229,12 @@ WEATHER.forEach(w => {
 const selTime = el("sel-time");
 selTime.addEventListener("change", () => { timeOfDay = parseFloat(selTime.value); });
 const selStart = el("sel-start");
-selStart.addEventListener("change", () => { startMode = selStart.value; newFlight(true); });
+/* In the hangar there is no flight to restart -- `startFlight` reads these
+   three once, when there is. */
+selStart.addEventListener("change", () => {
+  startMode = selStart.value;
+  if (screen === "flying") newFlight(true);
+});
 
 /* Somewhere to go. One waypoint is not a flight plan, but it is what
    `direct to KEBR` builds in the Python and it is enough for NAV to fly and
@@ -7167,13 +7327,14 @@ selDest.addEventListener("change", () => {
   selDest.value = "";
   renderPlan(); updateFcu();
 });
-selType.value = "a350"; selWx.value = "clear"; selStart.value = "runway";
-selType.addEventListener("change", () => { craft = FLEET_BY_KEY[selType.value]; newFlight(true); });
+selWx.value = "clear"; selStart.value = "runway";
 selWx.addEventListener("change", () => {
   weather = new WeatherState(WEATHER_BY_KEY[selWx.value], WORLD_SEED, S ? S.t : 0);
 });
 el("btn-view").addEventListener("click", () => setView(view === "cockpit" ? "chase" : "cockpit"));
 el("btn-reset").addEventListener("click", () => newFlight(true));
+el("btn-hangar").addEventListener("click", () => showHangar());
+el("hangar-fly").addEventListener("click", () => startFlight());
 el("end-again").addEventListener("click", () => newFlight(true));
 
 /* ---------- main loop ---------- */
@@ -7186,9 +7347,245 @@ let lastReadout = { ias: 0, agl: 0, vs: 0, mach: 0, alpha: 0, stalled: false,
                     gsKt: 0, trackDeg: 0, driftDeg: 0, speeds: null,
                     stallKt: 0, load: 1 };
 
+/* ---------- the three screens ----------
+
+   `screen` is the one owner of which of them you are looking at. Three screens
+   sharing one canvas and one frame loop is exactly the situation that grows a
+   second source of truth if nobody owns it -- `frame` branches on this and
+   nothing else decides.
+
+   `S` is null until `newFlight` has run, so nothing on the loading screen or in
+   the hangar may touch it. That is why `renderHangar` builds its own camera
+   rather than borrowing `render`'s, and why `setModelHinges` is passed null. */
+let screen = "loading";
+
+/* The aeroplane has one writer. It used to have two -- a hardcoded default and
+   the old type dropdown -- and a menu would have made three. */
+function selectAircraft(key) {
+  const next = FLEET_BY_KEY[key];
+  if (!next) return;
+  craft = next;
+  el("setup-type").textContent = `${craft.name} · ${craft.icao}`;
+  el("hangar-name").textContent = craft.name;
+  el("hangar-engines").textContent = craft.engines;
+  /* Published figures only, and only ones the fleet table actually carries:
+     there is no seat count or range in it, and inventing one to fill a card
+     would be the opposite of what every number in this build is for. */
+  el("hangar-figs").innerHTML =
+    `<dt>Span</dt><dd>${craft.span.toFixed(1)} m</dd>` +
+    `<dt>Length</dt><dd>${craft.length.toFixed(2)} m</dd>` +
+    `<dt>Height</dt><dd>${craft.height.toFixed(2)} m</dd>` +
+    `<dt>MTOW</dt><dd>${Math.round(craft.mtow / 1000)} t</dd>` +
+    `<dt>Ceiling</dt><dd>${craft.ceiling.toLocaleString()} ft</dd>` +
+    `<dt>Cruise</dt><dd>M${craft.cruiseMach.toFixed(2)}</dd>` +
+    `<dt>Fan</dt><dd>${craft.fanDia.toFixed(2)} m · ${craft.fanBlades} blades</dd>` +
+    `<dt>Cabin</dt><dd>${craft.pax ? (craft.decks > 1 ? "two decks" : "one deck")
+                                   : "freighter"}</dd>`;
+  for (const card of document.querySelectorAll(".fleet-card")) {
+    card.classList.toggle("on", card.dataset.key === key);
+  }
+}
+
+/* ---------- the hangar's own view ----------
+   Its own matrices, because PROJ/VIEW/VP belong to `render` and clobbering
+   them from a second camera is the kind of bug that only shows up one frame in
+   a hundred. */
+const H_PROJ = new Float32Array(16), H_VIEW = new Float32Array(16),
+      H_VP = new Float32Array(16), H_MODEL = new Float32Array(16),
+      H_NORMAL = new Float32Array(9);
+const HANGAR_LIGHT = [0.42, -0.36, 0.83];      // fixed, so every type is lit alike
+
+/* Draw one aeroplane, filling a viewport of the given size, seen from `yawDeg`
+   round and a little above. Shared by the live preview and by the card
+   pictures, so a card cannot come out looking like a different aeroplane from
+   the one it selects. */
+function drawAircraftPreview(a, yawDeg, w, h, clockS, fill) {
+  const m = modelBuffers(a);
+  /* Framed off the type's own length, the way the chase camera is: that is
+     what makes an A380 and an A319neo both fill the frame. A card is a smaller
+     window on the same aeroplane, so it sits closer rather than being scaled. */
+  const dist = a.length * (fill || 1.35), up = a.length * 0.26;
+  const yaw = rad(yawDeg);
+  const cam = [Math.sin(yaw) * dist, -Math.cos(yaw) * dist, up];
+  const F = [-cam[0], -cam[1], -cam[2]];
+  const fl = Math.hypot(F[0], F[1], F[2]) || 1;
+  F[0] /= fl; F[1] /= fl; F[2] /= fl;
+  const R = [F[1], -F[0], 0];
+  const rl = Math.hypot(R[0], R[1]) || 1;
+  R[0] /= rl; R[1] /= rl;
+  const U = [R[1]*F[2] - R[2]*F[1], R[2]*F[0] - R[0]*F[2], R[0]*F[1] - R[1]*F[0]];
+
+  mat4Perspective(H_PROJ, FOV_V * 0.78, w / h, 1, 4000);
+  mat4View(H_VIEW, cam, R, U, F);
+  mat4Mul(H_VP, H_PROJ, H_VIEW);
+
+  H_MODEL.fill(0);
+  H_MODEL[0] = 1; H_MODEL[5] = 1; H_MODEL[10] = 1; H_MODEL[15] = 1;
+  H_NORMAL.set([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+
+  const tint = [1, 1, 1], haze = [0.10, 0.13, 0.16];
+  gl.enable(gl.DEPTH_TEST);
+  gl.useProgram(progModel);
+  gl.bindVertexArray(m.vao);
+  /* Gear down, because it is standing on the ground; surfaces trimmed, because
+     nobody is flying it -- `null` is what traffic passes for the same reason. */
+  setModelHinges(a, null, true, clockS);
+  gl.uniformMatrix4fv(progModel.u.uVP, false, H_VP);
+  gl.uniformMatrix4fv(progModel.u.uModel, false, H_MODEL);
+  gl.uniformMatrix3fv(progModel.u.uNormalM, false, H_NORMAL);
+  gl.uniform3fv(progModel.u.uCam, cam);
+  gl.uniform3fv(progModel.u.uSun, HANGAR_LIGHT);
+  gl.uniform3fv(progModel.u.uHaze, haze);
+  /* Far enough that nothing fades: the fog term exists to put an aeroplane in
+     weather, and this one is indoors. */
+  gl.uniform1f(progModel.u.uFogDist, 1e6);
+  gl.uniform1f(progModel.u.uDay, 1);
+  gl.uniform3fv(progModel.u.uSunTint, tint);
+  gl.drawArrays(gl.TRIANGLES, 0, m.count);
+}
+
+function renderHangar(clockS) {
+  gl.viewport(0, 0, VW, VH);
+  gl.clearColor(0.043, 0.055, 0.067, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  drawAircraftPreview(craft, (clockS * 9) % 360, VW, VH, clockS, 1.35);
+}
+
+/* ---------- the fleet strip ----------
+   Each card's picture is the model, rendered once into the corner of the main
+   canvas and read back -- the navigation display's terrain bake does exactly
+   this (draw, `readPixels`, flip the rows, `putImageData`), and doing it in the
+   default framebuffer means no new render target and no depth attachment to
+   add, which is the one thing neither existing target has. */
+const CARD_W = 168, CARD_H = 92;
+function buildFleetCards() {
+  const strip = el("fleet-strip");
+  strip.innerHTML = "";
+  const w = Math.min(CARD_W * 2, VW), h = Math.min(CARD_H * 2, VH);
+  const px = new Uint8Array(w * h * 4);
+
+  for (const a of FLEET) {
+    gl.viewport(0, 0, w, h);
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(0, 0, w, h);
+    gl.clearColor(0.066, 0.086, 0.102, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    drawAircraftPreview(a, 214, w, h, 0.02, 0.92);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+
+    const cv = document.createElement("canvas");
+    cv.width = w; cv.height = h;
+    const cx = cv.getContext("2d");
+    const img = cx.createImageData(w, h);
+    /* GL counts rows from the bottom and a canvas counts them from the top. */
+    for (let y = 0; y < h; y++) {
+      const src = (h - 1 - y) * w * 4, dst = y * w * 4;
+      img.data.set(px.subarray(src, src + w * 4), dst);
+    }
+    cx.putImageData(img, 0, 0);
+
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "fleet-card";
+    card.dataset.key = a.key;
+    card.appendChild(cv);
+    const name = document.createElement("b");
+    name.textContent = `${a.name} · ${a.icao}`;
+    const eng = document.createElement("span");
+    eng.className = "fc-eng"; eng.textContent = a.engines;
+    const figs = document.createElement("span");
+    figs.className = "fc-figs";
+    figs.textContent = `${a.span.toFixed(1)} / ${a.length.toFixed(1)} m `
+                     + `· ${Math.round(a.mtow / 1000)} t`;
+    card.append(name, eng, figs);
+    card.addEventListener("click", () => selectAircraft(a.key));
+    strip.appendChild(card);
+  }
+}
+
+/* ---------- moving between them ---------- */
+function showHangar() {
+  screen = "hangar";
+  el("deck").dataset.screen = "hangar";
+  el("hangar").classList.add("show");
+  resize();
+  selectAircraft(craft.key);
+}
+
+function startFlight() {
+  /* The hangar's three selects are read here rather than each writing through
+     on change: nothing exists to change until there is a flight. */
+  timeOfDay = parseFloat(el("sel-time").value);
+  startMode = el("sel-start").value;
+  weather = new WeatherState(WEATHER_BY_KEY[el("sel-wx").value], WORLD_SEED, 0);
+  screen = "flying";
+  el("hangar").classList.remove("show");
+  el("deck").dataset.screen = "flying";
+  resize();
+  newFlight(false);
+  /* The Fly button is the gesture browsers require before audio may start,
+     which is why the "press any key for sound" prompt is gone. */
+  armAudio();
+}
+
+/* ---------- the staged boot ----------
+   Five stages, each on its own frame so the bar can paint between them, and
+   each named for the work it is actually doing. The first one is the reason
+   any of this exists: `makeProgram` queries LINK_STATUS synchronously, six
+   times, and two of those shaders carry the whole terrain noise block. */
+const BOOT = [
+  ["Compiling shaders", () => { initGL(); initNdTerrain(); resize(); }],
+  ["Surveying the airfields", () => { buildAuthored(); airfieldsNear(0, 0, 90); }],
+  ["Building the fleet", () => { for (const a of FLEET) modelBuffers(a); }],
+  /* Lazy in name only: `render` calls `trafficNear` unconditionally, so all
+     fourteen climb-cruise-descent integrations were being paid inside the
+     first frame, where nothing could show it happening. */
+  ["Costing the timetable", () => warmTraffic()],
+  ["Preparing the hangar", () => buildFleetCards()],
+];
+
+function setLoading(stage, done) {
+  el("load-stage").textContent = stage;
+  el("load-fill").style.width = Math.round(done * 100) + "%";
+}
+
+function boot() {
+  let i = 0;
+  const step = () => {
+    if (i >= BOOT.length) {
+      setLoading("Ready", 1);
+      el("loading").classList.remove("show");
+      /* `?fly=1` skips the hangar. Every tool in `web/tools/` opens this file
+         and then reaches straight for `S`, `craft` or `render()`, so without
+         this the menu would break all five of them and CI with them. */
+      if (new URLSearchParams(location.search).has("fly")) startFlight();
+      else showHangar();
+      return;
+    }
+    /* Name the stage, let it paint, *then* do the work -- a stage that labels
+       itself after finishing labels the wrong one. */
+    setLoading(BOOT[i][0], i / BOOT.length);
+    requestAnimationFrame(() => {
+      BOOT[i][1]();
+      i++;
+      requestAnimationFrame(step);
+    });
+  };
+  step();
+}
+
 function frame(now) {
   let dt = Math.min((now - last) / 1000, 0.1);
   last = now;
+
+  /* Nothing below this may run before there is a flight: `S` is null until
+     `newFlight` has built one, and every readout dereferences it. */
+  if (screen !== "flying") {
+    if (screen === "hangar") renderHangar(now / 1000);
+    requestAnimationFrame(frame);
+    return;
+  }
 
   if (!paused && (S.status === "flying" || S.status === "rollout")) {
     readControls(dt);
@@ -7252,10 +7649,10 @@ if (!gl) {
   el("end-again").style.display = "none";
   el("ending").classList.add("show");
 } else {
-  initGL();
-  initNdTerrain();
-  resize();
-  newFlight(false);
+  el("deck").dataset.screen = "flying";
+  /* The frame loop starts before the work does, so the loading screen animates
+     while the shaders compile. It draws nothing until `screen` says to. */
   requestAnimationFrame(frame);
+  boot();
 }
 </script>

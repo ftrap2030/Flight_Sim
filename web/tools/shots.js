@@ -38,7 +38,11 @@ const place = (p, o) => p.evaluate(o => {
      relax. It is how long the picture takes to draw. */
   p.setDefaultTimeout(150000);
   const errs = []; p.on('pageerror', e => errs.push('PAGEERROR: ' + e.message));
-  await p.goto('file://' + process.argv[2]);
+  /* `?fly=1` skips the hangar and boots straight onto the runway. Every
+     tool here reaches for `S`, `craft` or `render()` as soon as the page
+     settles, and the menu would otherwise leave all of them waiting on a
+     flight that has not started. */
+  await p.goto('file://' + process.argv[2] + '?fly=1');
   await p.waitForTimeout(7000);
   console.log('ERRORS: ' + JSON.stringify(errs.slice(0, 3)));
   const out = process.argv[3];

@@ -127,7 +127,7 @@ const PROBE = () => {
       sig = (sig ^ q) >>> 0; sig = (sig * 16777619) >>> 0;
     }
     return {
-      key: a.key, span: a.span, length: a.length, height: a.height,
+      key: a.key, name: a.name, span: a.span, length: a.length, height: a.height,
       mtow: a.mtow, arms: a.arms.length, pax: a.pax, decks: a.decks,
       fusW: a.fusW, fusH: a.fusH, fanDia: a.fanDia,
       size: all.size, groundZ: m.groundZ, gearGroups: m.gearGroups,
@@ -138,6 +138,36 @@ const PROBE = () => {
       tris: m.tris.length
     };
   });
+};
+
+/* The hangar, which is the one place the whole fleet is on show at once.
+
+   The failure this exists for is the quiet one: a type is added to `FLEET` and
+   the menu does not list it, so it can be flown by nobody and nothing else in
+   the build would ever notice. That is `cruise_check`'s coverage guard in a new
+   place. The thumbnails are checked for being *pictures of something* as well
+   as present, because a card that rendered an empty frame looks exactly like a
+   card until you go looking. */
+const HANGAR = () => {
+  showHangar();
+  const cards = Array.from(document.querySelectorAll(".fleet-card"));
+  return {
+    screen: screen,
+    keys: cards.map(c => c.dataset.key),
+    named: cards.map(c => (c.querySelector("b") || {}).textContent || ""),
+    /* How much variation is in each thumbnail. A blank card is one colour. */
+    spread: cards.map(c => {
+      const cv = c.querySelector("canvas");
+      if (!cv) return -1;
+      const d = cv.getContext("2d").getImageData(0, 0, cv.width, cv.height).data;
+      let lo = 255, hi = 0, n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const v = (d[i] + d[i + 1] + d[i + 2]) / 3;
+        lo = Math.min(lo, v); hi = Math.max(hi, v); n++;
+      }
+      return n ? hi - lo : -1;
+    })
+  };
 };
 
 /* Does a surface actually move, and which way?
@@ -199,7 +229,11 @@ const DEFLECT = () => {
   const p = await b.newPage({ viewport: { width: 900, height: 600 } });
   const pageErrs = [];
   p.on('pageerror', e => pageErrs.push(e.message));
-  await p.goto('file://' + process.argv[2]);
+  /* `?fly=1` skips the hangar and boots straight onto the runway. Every
+     tool here reaches for `S`, `craft` or `render()` as soon as the page
+     settles, and the menu would otherwise leave all of them waiting on a
+     flight that has not started. */
+  await p.goto('file://' + process.argv[2] + '?fly=1');
   await p.waitForTimeout(6000);
   if (pageErrs.length) {
     console.error('page errors:', pageErrs.slice(0, 3));
@@ -207,6 +241,10 @@ const DEFLECT = () => {
   }
   const rows = await p.evaluate(PROBE);
   const defl = await p.evaluate(DEFLECT);
+  /* The page was booted with `?fly=1`, so it is on the runway: reaching the
+     hangar from here also proves the two screens can be moved between. */
+  const flyingFirst = await p.evaluate(() => screen);
+  const hangar = await p.evaluate(HANGAR);
   await b.close();
 
   const bad = [];
@@ -376,6 +414,34 @@ const DEFLECT = () => {
     if (!(D.spoilersGround[sid].dz > MOVE)) surf('the ' + n + ' spoiler does not rise');
   }
 
+  /* 10. Every type is in the hangar, named, with a picture of itself. */
+  if (flyingFirst !== "flying") {
+    bad.push('hangar    `?fly=1` did not reach the runway (screen was "'
+             + flyingFirst + '") -- every tool here depends on it');
+  }
+  if (hangar.screen !== "hangar") {
+    bad.push('hangar    the hangar could not be opened from a flight');
+  }
+  for (const r of rows) {
+    const i = hangar.keys.indexOf(r.key);
+    if (i < 0) { say(r.key, 'is in the fleet and not in the hangar'); continue; }
+    /* The card's name is the fleet table's own, so a card cannot end up
+       labelled as an aeroplane it is not a picture of. */
+    if (!hangar.named[i].includes(r.name)) {
+      say(r.key, `has a hangar card labelled ${JSON.stringify(hangar.named[i])}, `
+                 + `which does not name the ${r.name}`);
+    }
+    if (!(hangar.spread[i] > 40)) {
+      say(r.key, `has a blank hangar card (only ${hangar.spread[i]} levels of `
+                 + `light in it -- nothing was drawn)`);
+    }
+  }
+  for (const key of hangar.keys) {
+    if (!rows.some(r => r.key === key)) {
+      say(key, 'is in the hangar and not in the fleet');
+    }
+  }
+
   /* The vacuity guard, the fifth of its kind here: a run that checked nothing
      passes just as quietly as one that checked everything. */
   if (rows.length < 11) bad.push('coverage      the fleet did not all get measured');
@@ -393,6 +459,10 @@ const DEFLECT = () => {
      every published figure still holds, because they all measure from the
      ground the wheels are on. */
   const clearances = rows.map(r => r.nacLowest - r.groundZ);
+  if (hangar.keys.length !== rows.length) {
+    bad.push('coverage      the hangar shows ' + hangar.keys.length
+             + ' types and the fleet has ' + rows.length);
+  }
   if (!clearances.some(c => Math.abs(c - 0.50) < 0.08)) {
     bad.push('coverage      no type stands on the engine-clearance solve -- '
       + 'the closest is ' + Math.min(...clearances).toFixed(2) + ' m');

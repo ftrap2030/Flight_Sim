@@ -15,6 +15,20 @@ nothing in it is fetched.
 A WebGL2 renderer over the same flight model as the Python simulator, with a
 takeoff, an ILS approach, a landing and synthesised sound.
 
+It opens on a **loading screen**, then a **hangar** where the fleet is on show,
+and only then the runway. The loading screen is in the markup rather than built
+by script, because the script is what it is waiting for: one synchronous block
+that compiles six shaders before it returns, and anything created in JavaScript
+would appear after the wait it exists to cover. Its five stages are named for
+the work they are doing and take about 1.3 seconds here, the largest being the
+shaders and the second largest rendering the eleven fleet cards.
+
+The hangar's aeroplane is the real model on the real canvas, not a picture of
+one, and so are the cards -- rendered once at startup and read back, which is
+the navigation display's terrain bake done in the default framebuffer. `?fly=1`
+in the URL skips it and boots straight onto the runway, which is how every tool
+in `tools/` gets to a flight.
+
 * **Terrain** — a geometry clipmap: seven nested squares centred on the
   aircraft, each with twice the spacing of the one inside it, 29 ft between
   vertices where you are looking and 1,830 ft at the horizon. 714k triangles.
@@ -192,7 +206,12 @@ phases while it synthesised a propeller:
 node web/tools/model_check.js "$PWD/web/anfell.html"
 ```
 
-It is `tests/test_artwork.py` in three dimensions. Every type's model is
+It is `tests/test_artwork.py` in three dimensions, and it also guards the
+hangar: every type in `FLEET` has a card, each card names the aeroplane it is a
+picture of, and no card is blank -- measured as the spread of light in it,
+because a card that rendered an empty frame looks exactly like a card until you
+go looking. It checks `?fly=1` reaches the runway too, since all five tools
+depend on that and nothing else asserts it. Every type's model is
 measured against the span, length and height it publishes -- to two
 centimetres, because the model is *generated* from those numbers and either
 equals them or has a bug. One pod per engine on its published arm, with a pylon
