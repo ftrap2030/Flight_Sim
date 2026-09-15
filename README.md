@@ -687,6 +687,30 @@ There is no voice, no frequency, no handoff between sectors and no phraseology
 to learn. Those would be scenery. What is here is the clearances that change
 what the aeroplane may do.
 
+## What they look like
+
+The aeroplanes are built from the same published dimensions the spec cards are:
+the fuselage is `length` long and `fusW` by `fusH` round, the wing spans `span`
+and is swept by the published quarter-chord angle, and each engine is as fat as
+its published fan — the same figure the engine's note is synthesised from, so
+the engine you hear is the engine you see.
+
+Which means the fleet is *visibly* a fleet. The A380 has four engines and two
+rows of windows; the BelugaXL has a cargo lobe standing three metres proud of
+the A330 fuselage it is built on, and no cabin windows at all, because it is not
+carrying anybody. Nothing is drawn by hand and nothing is drawn per type.
+
+The control surfaces move, and they move from the flight model's own state —
+the ailerons from the roll the law is asking for, the rudder from the pedals,
+the flaps from the detent, the spoilers from the speedbrake. Put the gear down
+and the gear comes down, with the right number of bogies for the weight. At
+dusk the navigation lights are red to port and green to starboard, the strobes
+fire about once a second and the beacon turns over more slowly.
+
+`web/tools/model_check.js` is what keeps all of that honest: it measures every
+model against its published span, length and height, counts the pods and the
+bogies, and deflects each surface to check which way the metal actually went.
+
 ## Tests
 
 ```bash

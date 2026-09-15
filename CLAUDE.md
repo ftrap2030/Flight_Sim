@@ -46,7 +46,7 @@ flight_sim/
 web/
   anfell.html      The whole browser build. One file, no build step.
   tools/           Playwright checks: cruise flow, model parity, the engines'
-                   spectrum, screenshots.
+                   spectrum, the aeroplanes' shape, screenshots.
 ```
 
 ## Conventions
@@ -162,6 +162,92 @@ glazing and no window rows. Three fleet-wide assertions turned out to be about
 *airliners* rather than about aircraft — `seats_max > seats_typical`, one window
 row per deck, and the roll-rate-follows-mass monotonicity — and each is now
 scoped rather than weakened.
+
+## The aeroplane you see is generated too, and by the same rule
+
+`buildModel` in `web/anfell.html` is `artwork.py` in three dimensions, and it
+answers to the same law: **if two types look identical, they are identical.**
+The fuselage is `length` long and `fusW` by `fusH` round, the wing spans `span`
+and is swept by the published quarter-chord angle, the fin reaches `height`,
+and there is one nacelle per entry in `engine_arms_m`, as fat as the published
+`fanDia` — the same number the engine's note is derived from, so **the engine
+you hear is the engine you see**.
+
+It was 164 triangles before this: flat plates for wings, open tubes for engines
+joined to nothing, no gear, no moving surface, no lights. It is about two
+thousand now, which is still nothing against 714k of terrain.
+
+Four things in it are load-bearing.
+
+**The cargo lobe collapses arithmetically, with no branch at all.** The lower
+lobe is as tall as it is wide because a circular section is; the roof reaches
+`fusH - Wf` above centre. On every airliner that expression *is* `Wf`, so the
+whole lobe vanishes into the circle that was always there — the same property
+`artwork.py` gets from `deck_top` and `fus_top` landing on one row for ten
+types and apart for the eleventh. There is no `if (beluga)` anywhere, and there
+must not be.
+
+**Control surfaces hinge in the vertex shader, on one convention.** Each vertex
+carries the index of the surface it belongs to; the hinge line is a property of
+the type and the deflection is a uniform, so the geometry stays a static buffer
+that traffic shares and moving a rudder costs one float. The convention is that
+**every hinge axis points to starboard**, including the port wing's. Left as
+built, the two wings' axes point *outboard* — opposite ways — and the same
+signed angle lowers one flap and raises the other. That is not hypothetical: it
+is what shipped for an hour, and what the guard caught.
+
+**What the surfaces are driven by is the flight model's own state.** Ailerons
+from the roll demand `fbw` is already computing, elevator from commanded pitch,
+rudder from `rudder_deg`, flaps from the detent, spoilers from `spoilers`. A
+rudder drawn from anything else would be a second aeroplane, which is the rule
+the speed tape and the FMA each exist to keep. The sign matters and is
+recoverable: `cn_rudder = rudder_power * rudder_deg` drives `sideslip_deg`
+positive, and positive sideslip is the nose right of the flight path — so
+positive rudder puts the trailing edge to starboard.
+
+**The gear length is solved, not chosen.** Where the engine hangs is already
+decided by the wing and the published fan; the only free variable is how high
+the aeroplane stands, so the leg is whatever puts half a metre under the lowest
+cowl. The type it binds on is the A321 — an A320 stretched and made heavier,
+with the least room underneath — which is why the real one has longer main gear
+than the aeroplane it is stretched from. Guessing a leg length instead left the
+A320neo's engines a tenth of a metre off the runway.
+
+The bogie count is `artwork.py`'s rule repeated rather than shared, because
+there is no way to share it across two languages: one leg a side under 150 t,
+two under 400, three above. The guard asserts both builds still agree.
+
+### Rendering was the last output with no guard on it
+
+`shots.js` made pictures and nobody asserted on them, and it did not run in CI.
+That is the position the sound was in for five phases while it synthesised a
+propeller. `web/tools/model_check.js` closes it, and it is
+`tests/test_artwork.py` in three dimensions: span, length and height measured
+against the published figures to two centimetres, one pod per engine on its
+published arm, the bogie count by the rule above, wheels on the ground, a red
+light to port and a green one to starboard.
+
+Two things it taught, both worth keeping:
+
+- **Assert on where the metal ends up, not on the sign of an angle.** A hinge
+  axis points somewhere, and whether +20° is up or down depends on which way —
+  so a test written in signs passes a model whose port flap goes up while its
+  starboard flap goes down. Rotating the surface and asking which way its
+  trailing edge went cannot be fooled like that, and it is what found the
+  mirrored-axis bug above.
+- **A part that must exist needs its own identity.** The first attempt looked
+  for a vertical *gap* between engine and wing, and there is none to find: on a
+  narrowbody the cowl crown sits above the wing's lower surface, because the
+  engine is slung ahead of the leading edge rather than below it. Taking the
+  pylons off entirely sailed straight through. The pylon has its own colour
+  now, and the question is whether there is one and whether it is a real one —
+  which also caught that the pylon shipped as a four-centimetre sliver.
+
+Ten deliberate breakages, ten catches. The tenth is the interesting one: standing
+the whole fleet 25% higher satisfies *every published figure*, because they all
+measure from the ground the wheels are on. What catches it is the vacuity guard
+— the engine-clearance solve has to be what decides the leg on at least one
+type, or it is decorative.
 
 ## The sound is derived from the fan, the same way the drawing is
 

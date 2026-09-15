@@ -87,3 +87,18 @@ jobs:
       # where a turbofan's does rather than where a propeller's does.
       - name: The engines sound like turbofans
         run: node web/tools/sound_check.js "$PWD/web/anfell.html"
+
+      # And what it looks like, which until now nothing checked at all: the
+      # renderer was the last output in the repository with no guard on it.
+      # Every type's model is measured against the span, length and height it
+      # publishes, one pod per engine on its published arm, the bogie count by
+      # `artwork.py`'s own rule, and the control surfaces are deflected and
+      # asked which way the metal went.
+      - name: The aeroplanes are the shape they say they are
+        run: node web/tools/model_check.js "$PWD/web/anfell.html"
+
+      # The pictures themselves. Nothing asserts on them, but a run that
+      # crashes the renderer or fills the frame with sky fails here rather
+      # than in somebody's browser.
+      - name: The renderer draws the world
+        run: node web/tools/shots.js "$PWD/web/anfell.html" /tmp/shots

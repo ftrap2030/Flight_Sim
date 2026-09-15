@@ -27,6 +27,14 @@ takeoff, an ILS approach, a landing and synthesised sound.
   the broadband roar of the exhaust. The fan tone comes from the *published*
   fan diameter and blade count in `aircraft.py`, so each type sounds like its
   own engine. Radio-altitude callouts use the browser's speech synthesiser.
+* **The aeroplanes** — built from each type's published dimensions, not drawn
+  by hand: a lofted wing section, engines as fat as the published fan on real
+  pylons, gear whose bogie count follows `artwork.py`'s own rule, a cabin that
+  a freighter does not get, and navigation lights, strobes and a beacon. The
+  control surfaces are hinged in the vertex shader and deflected from the
+  flight model's own state — the ailerons from the roll demand, the rudder from
+  `rudder_deg`, the flaps from the detent — so an aeroplane out of the window
+  is doing what it looks like it is doing.
 * **Traffic** — fourteen scheduled services between the five home airfields,
   drawn as TCAS symbols on the navigation display and as aeroplanes out of the
   window within fifteen miles. Evaluated rather than simulated: a contact is an
@@ -175,6 +183,36 @@ Splicing the old synthesis back in fails all fifteen cases, which is the only
 reason to believe the guard. The A320-200 measures 2,874 Hz against a derived
 2,807; the A350 1,016 against 992.
 
+`tools/model_check.js` is the fourth guard, and the newest, because rendering
+was the last output here with no guard at all -- `shots.js` made pictures and
+nothing asserted on them, which is the position the sound was in for five
+phases while it synthesised a propeller:
+
+```bash
+node web/tools/model_check.js "$PWD/web/anfell.html"
+```
+
+It is `tests/test_artwork.py` in three dimensions. Every type's model is
+measured against the span, length and height it publishes -- to two
+centimetres, because the model is *generated* from those numbers and either
+equals them or has a bug. One pod per engine on its published arm, with a pylon
+actually joining it to the wing. The bogie count by `artwork.py`'s rule: one leg
+a side under 150 tonnes, two under 400, three above. Wheels on the ground. Red
+to port and green to starboard. And the cargo lobe from the two published
+cross-sections differenced, with the BelugaXL the only type shaped like that.
+
+The control surfaces are asserted on **where the metal ends up**, not on the
+sign of an angle -- a hinge axis points somewhere, and whether +20 degrees is up
+or down depends on which way, so a test written in signs passes a model whose
+port flap goes up while its starboard flap goes down. That is exactly what this
+file caught on its first run.
+
+Ten deliberate breakages fail it ten times. The last one is the interesting
+one: standing the whole fleet 25% higher satisfies every published figure,
+because they all measure from the ground the wheels stand on. What catches it is
+that the gear length is *solved* for the clearance the engines need, and that
+solve has to be what decides the leg on at least one type or it is decorative.
+
 `tools/shots.js` puts the aircraft at fixed places in the world and photographs
 them, which is how the renderer is checked:
 
@@ -182,7 +220,8 @@ them, which is how the renderer is checked:
 node web/tools/shots.js "$PWD/web/anfell.html" /tmp/shots
 ```
 
-Both need Playwright and a Chromium; both take the paths as arguments because
+All of them need Playwright and a Chromium; they take the paths as arguments
+because
 where those live is a property of the machine, not of the simulator. **Both also
 run in CI on every push** -- until they did, they ran when somebody remembered,
 which is how the weather came to differ on all four profiles and an EGT
