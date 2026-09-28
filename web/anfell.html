@@ -379,6 +379,15 @@
     background: rgba(8,13,16,.82); border: 1px solid var(--edge);
     backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px);
   }
+  /* The departure check. Green when it fits, amber when it does not -- the
+     Airbus grammar the E/WD already uses, so the colour means what it means
+     everywhere else in this build. */
+  #hangar-perf {
+    margin: 2px 0 0; padding-top: 8px; border-top: 1px solid var(--edge);
+    font-size: 11px; line-height: 1.45; color: var(--ink-faint);
+  }
+  #hangar-perf b { color: var(--efis-green); font-weight: 600; }
+  #hangar-perf b.short { color: var(--efis-amber); }
   #hangar-fly {
     margin-top: 2px; padding: 9px 4px; font-size: 13px; letter-spacing: .16em;
     background: var(--efis-green); border-color: var(--efis-green);
@@ -640,6 +649,11 @@
         <option value="airborne">Airborne — 5,000 ft</option>
       </select>
     </label>
+    <!-- The departure check, computed rather than captioned: two hypothetical
+         ground rolls in the conditions selected above, against ANFL's runway.
+         A hangar that lets you take an A321XLR onto a strip it cannot leave is
+         a hangar that knows less than the aeroplane does. -->
+    <p id="hangar-perf">—</p>
     <button id="hangar-fly" type="button">Fly</button>
   </div>
   <div id="fleet-strip"></div>
@@ -1744,6 +1758,31 @@ function groundWindMs(s, headingDeg) {
           speedKt * Math.sin(angle) * MS_PER_KT];
 }
 
+/* (thrust, drag, friction) on the runway, in newtons, and the lift behind
+   them. One place, because the takeoff roll, the landing rollout and the
+   performance solve are the same physics read three ways, and three copies of
+   it would drift. (landing.ground_forces)
+
+   Friction acts on the weight the *wheels* are carrying, not on the weight of
+   the aeroplane. At touchdown the wing is still doing most of the work and the
+   brakes have very little to bite on; the load transfers to the wheels as the
+   speed decays and lift falls with the square of it. That is why you cannot
+   stop a fast aeroplane on the brakes alone, and why the spoilers come out
+   first -- they destroy the lift, which is what puts the weight where the
+   brakes can use it. See GROUND_SPOILER_LIFT_FACTOR in aeroState. */
+function groundForces(a, s) {
+  const aero = aeroState(a, s);
+  const braking = BRAKING_FRICTION * brakingFactor(s);
+  const mu = ROLLING_FRICTION + (braking - ROLLING_FRICTION) * s.brakes;
+  const onWheels = Math.max(0, s.mass * G0 - aero.lift);
+  return {
+    thrust: s.reverse ? -REVERSE_FRACTION * aero.thrust : aero.thrust,
+    drag: aero.drag,
+    friction: mu * onWheels,
+    lift: aero.lift
+  };
+}
+
 /* Ground mode, used for both the takeoff roll and the landing rollout. It is
    the same physics either way -- thrust against friction and drag, with the
    wing taking more of the weight the faster it goes -- which is why there is
@@ -1768,21 +1807,10 @@ function groundSubstep(a, s, dt) {
                  -MAX_SIDESLIP, MAX_SIDESLIP);
 
   const iasKt = tasToIas(Math.max(s.tas, 0), s.alt) * KT_PER_MS;
-  const aero = aeroState(a, s);
-  const thrust = s.reverse ? -REVERSE_FRACTION * aero.thrust : aero.thrust;
-
-  /* Weight on wheels falls as the wing starts carrying the aircraft, so
-     braking fades out exactly as it does in reality -- which is why you cannot
-     stop a fast aeroplane with the brakes alone. The spoilers are what fix
-     that, and they fix it by destroying the lift rather than by multiplying
-     the friction: see GROUND_SPOILER_LIFT_FACTOR in aeroState. */
+  const { thrust, drag, friction, lift } = groundForces(a, s);
   const weight = s.mass * G0;
-  const onWheels = Math.max(0, weight - aero.lift);
-  const braking = BRAKING_FRICTION * brakingFactor(s);
-  const mu = ROLLING_FRICTION + (braking - ROLLING_FRICTION) * s.brakes;
-  const friction = mu * onWheels;
 
-  const accel = (thrust - aero.drag - friction) / s.mass;
+  const accel = (thrust - drag - friction) / s.mass;
   /* The floor is the headwind, not zero: it says the wheels cannot turn
      backwards. Flooring the airspeed instead would let a parked aeroplane in a
      tailwind taxi itself downwind. */
@@ -1820,7 +1848,7 @@ function groundSubstep(a, s, dt) {
   }
   s.cmdBank = 0; s.bank = 0; s.gamma = 0;
 
-  if (aero.lift > weight && s.pitch > 0.5 && !s.touchdown) {
+  if (lift > weight && s.pitch > 0.5 && !s.touchdown) {
     s.onGround = false;                       // flying, because the wing says so
     s.status = "flying";
     s.alt = groundFt + 1;
@@ -1840,8 +1868,12 @@ function groundSubstep(a, s, dt) {
   s.maxIas = Math.max(s.maxIas, iasKt);
   s.maxMach = Math.max(s.maxMach, machOf(s.tas, s.alt));
 
-  if (aero.thrust > 0 && !s.reverse) {
-    const burn = Math.min(a.tsfc * aero.thrust * dt, s.fuel);
+  /* The gross thrust, not the reversed one groundForces hands back: fuel is
+     burned by an engine running, whichever way the buckets are pointing.
+     (Simulator._thrust_n, read the same way on the other side.) */
+  const gross = thrustN(a, s);
+  if (gross > 0 && !s.reverse) {
+    const burn = Math.min(a.tsfc * gross * dt, s.fuel);
     s.fuel -= burn; s.mass -= burn;
   }
 
@@ -1862,6 +1894,410 @@ function groundSubstep(a, s, dt) {
 const fieldByIdent = ident =>
   buildAuthored().find(f => f.ident === ident) ||
   airfieldsNear(S ? S.x : 0, S ? S.y : 0, 40).find(f => f.ident === ident) || null;
+
+/* ==========================================================================
+   TAKEOFF AND LANDING PERFORMANCE  (performance.py)
+
+   A port, number for number. Nothing here owns a force: every step calls
+   groundForces, which is the call groundSubstep makes -- one force model read
+   by two integrators, which is the relationship planRoute has with aeroState.
+   A performance chart with its own friction model would be a second aeroplane,
+   and the runway you are told you need would not be the runway you use.
+
+   V1 stops being 1.09 x the stall speed -- a number that had never once looked
+   at the runway -- and becomes the speed at which the distance to stop and the
+   distance to go are the same.
+   ========================================================================== */
+
+/* The certification allowance between reaching V1 and the first stopping
+   action: a distance equivalent to two seconds at V1, flown at V1. Not reaction
+   time -- a regulatory number, and leaving it out shortens every
+   accelerate-stop distance by a couple of hundred feet. */
+const RECOGNITION_S = 2.0;
+const ROTATION_S = 3.0;            // VR to the wheels leaving the ground
+const SCREEN_HEIGHT_FT = 35.0;     // what the takeoff distance is measured to
+const ALL_ENGINES_MARGIN = 1.15;   // see takeoffFieldLengthFt
+const PERF_STEP_S = 0.25, PERF_MAX_ROLL_S = 180.0, V1_TOLERANCE_KT = 0.1;
+const PERF_BALANCED = "balanced", PERF_FLOOR = "minimum V1", PERF_VR = "VR";
+/* Not a limit on V1 at all: the aeroplane cannot reach the screen height on the
+   remaining engine at this weight and flap, so there is no V1 that works. */
+const PERF_UNFLYABLE = "cannot climb";
+/* Factored landing distance: a despatch calculation requires 1/0.6 times the
+   demonstrated distance on a dry runway. The regulator's number. */
+const LANDING_FACTOR = 1 / 0.6;
+const THRESHOLD_HEIGHT_FT = 50.0;
+/* FULL is a landing configuration -- its drag would ruin the climb-out the
+   screen height is measured to -- so it is not offered as a takeoff setting. */
+const TAKEOFF_FLAPS = [1, 2, 3];
+const VMCG_SEARCH_KT = [40, 200];
+
+/* Everything a hypothetical roll disturbs, put back afterwards, so that the
+   solve is invisible to the aeroplane it was run on. */
+const PERF_FIELDS = [
+  "tas", "alt", "mass", "pitch", "cmdPitch", "gamma", "bank", "flaps", "gear",
+  "spoilers", "throttle", "n1", "beta", "rudder", "onGround", "brakes",
+  "reverse", "enginesFailed", "enginesRunning"
+];
+const perfSave = s => {
+  const out = {};
+  for (const k of PERF_FIELDS) out[k] = Array.isArray(s[k]) ? s[k].slice() : s[k];
+  return out;
+};
+const perfRestore = (s, saved) => { for (const k of PERF_FIELDS) s[k] = saved[k]; };
+
+/* A ground roll flown somewhere the aeroplane is not. */
+class PerfRoll {
+  constructor(a, s, flaps, headMs, elevFt, mass) {
+    this.a = a; this.s = s; this.headMs = headMs; this.distanceFt = 0;
+    s.alt = elevFt; s.mass = mass; s.flaps = flaps;
+    s.gear = true; s.spoilers = false; s.brakes = 0; s.reverse = false;
+    s.enginesFailed = []; s.enginesRunning = true; s.onGround = true;
+    s.bank = 0; s.gamma = 0; s.beta = 0; s.rudder = 0;
+    s.pitch = 0; s.cmdPitch = 0; s.throttle = 100;
+    /* A chart assumes the engines are standing at the takeoff rating when the
+       brakes come off, which is also what a real crew does and why. Spooling
+       from idle inside the solve would price a different takeoff. */
+    settleEngines(a, s);
+    /* Airspeed at rest is the headwind, not zero -- the currency
+       groundSubstep keeps, and the reason a headwind shortens the roll. */
+    s.tas = headMs;
+  }
+  get groundMs() { return Math.max(0, this.s.tas - this.headMs); }
+  get iasKt() { return tasToIas(Math.max(this.s.tas, 0), this.s.alt) * KT_PER_MS; }
+
+  /* `ceilingMs` shortens the step so a roll finishes *at* a speed rather than
+     at the first step past it -- see runToSpeed. Returns the time flown. */
+  step(dt, ceilingMs) {
+    const s = this.s;
+    const { thrust, drag, friction } = groundForces(this.a, s);
+    const accel = (thrust - drag - friction) / s.mass;
+    if (ceilingMs !== undefined && accel > 0) {
+      dt = Math.min(dt, Math.max(0, (ceilingMs - s.tas) / accel));
+    }
+    s.tas = Math.max(this.headMs, s.tas + accel * dt);
+    this.distanceFt += this.groundMs * dt / M_PER_FT;
+    return dt;
+  }
+
+  /* The last step is shortened to land exactly on the target, and that is
+     load-bearing rather than tidy: left to run in whole quarter-seconds the
+     roll stops about a knot past V1, so the distance is a staircase in V1 with
+     a tread far wider than the tenth of a knot the bisection converges to, and
+     the solve ends up bisecting a step function. The symptom is a "balanced"
+     V1 whose two distances are a hundred and fifty feet apart. */
+  runToSpeed(targetKt, dt = PERF_STEP_S) {
+    const targetMs = iasToTas(targetKt * MS_PER_KT, this.s.alt);
+    let flown = 0;
+    while (this.s.tas < targetMs) {
+      const before = this.s.tas;
+      flown += this.step(dt, targetMs);
+      if (flown > PERF_MAX_ROLL_S || this.s.tas - before <= 1e-6) return false;
+    }
+    return true;
+  }
+  runFor(seconds, dt = PERF_STEP_S) {
+    let flown = 0;
+    while (flown < seconds) { this.step(Math.min(dt, seconds - flown)); flown += dt; }
+  }
+  runToStop(dt = PERF_STEP_S) {
+    let flown = 0;
+    while (this.groundMs > 0.5) {
+      this.step(dt); flown += dt;
+      if (flown > PERF_MAX_ROLL_S) break;
+    }
+  }
+}
+
+/* The slowest speed the rudder can still hold the aeroplane straight at, with
+   the critical engine gone. Not a number typed in: updateSideslip normalises
+   the dead engine's yaw moment by dynamic pressure, so as the speed falls the
+   same engine demands ever more rudder while maxRudderDeg gives ever less, and
+   somewhere the two cross. (performance.vmcg_kt) */
+function vmcgKt(a, s, elevFt, mass, flaps) {
+  const saved = perfSave(s);
+  try {
+    s.alt = elevFt; s.mass = mass; s.flaps = flaps;
+    s.gear = true; s.spoilers = false; s.brakes = 0; s.reverse = false;
+    s.onGround = false; s.enginesFailed = [0]; s.enginesRunning = true;
+    s.throttle = 100;
+    s.bank = 0; s.gamma = 0; s.beta = 0; s.rudder = 0;
+    s.pitch = 0; s.cmdPitch = 0;
+    settleEngines(a, s);
+
+    const shortOfRudder = iasKt => {
+      s.tas = iasToTas(iasKt * MS_PER_KT, elevFt);
+      const v = Math.max(s.tas, 25);
+      const ref = 0.5 * density(elevFt) * v * v * a.wingArea * a.span;
+      const liveArm = a.arms.reduce(
+        (sum, arm, i) => s.enginesFailed.includes(i) ? sum : sum + arm, 0);
+      const moment = -(thrustN(a, s)
+        / Math.max(a.arms.length - s.enginesFailed.length, 1)) * liveArm;
+      const needed = Math.abs(moment / Math.max(ref, 1) / a.rudderPower);
+      return needed > maxRudderDeg(a, s);
+    };
+
+    let [lo, hi] = VMCG_SEARCH_KT;
+    if (!shortOfRudder(lo)) return lo;
+    if (shortOfRudder(hi)) return hi;
+    while (hi - lo > V1_TOLERANCE_KT) {
+      const mid = 0.5 * (lo + hi);
+      if (shortOfRudder(mid)) lo = mid; else hi = mid;
+    }
+    return 0.5 * (lo + hi);
+  } finally { perfRestore(s, saved); }
+}
+
+/* Lift-off to the thirty-five foot screen, in feet of ground covered. The
+   gradient is whatever the excess thrust buys at V2 with the gear still down,
+   so an aeroplane that cannot climb on the remaining engine reports that it
+   cannot rather than quietly covering the distance anyway. */
+function climbOutFt(a, s, v2Ms, enginesOut) {
+  const saved = perfSave(s);
+  try {
+    s.onGround = false; s.tas = v2Ms; s.spoilers = false; s.brakes = 0;
+    s.enginesFailed = enginesOut.slice(); s.gamma = 0;
+    s.pitch = s.cmdPitch = levelFlightPitch(a, s);
+    s.throttle = 100;
+    settleEngines(a, s);
+    const aero = aeroState(a, s);
+    const excess = aero.thrust - aero.drag;
+    if (excess <= 0) return null;
+    const gamma = Math.asin(Math.min(1, excess / (s.mass * G0)));
+    if (gamma <= 1e-6) return null;
+    return SCREEN_HEIGHT_FT / Math.tan(gamma);
+  } finally { perfRestore(s, saved); }
+}
+
+/* Accelerate to V1, then stop. No reverse thrust: a dry-runway accelerate-stop
+   distance may not take credit for it, because a reverser is not guaranteed to
+   deploy. That is the rule, and it is also why this distance is so long. */
+function accelerateStopFt(a, s, v1Kt, headMs, elevFt, mass, flaps) {
+  const saved = perfSave(s);
+  try {
+    const roll = new PerfRoll(a, s, flaps, headMs, elevFt, mass);
+    if (!roll.runToSpeed(v1Kt)) return null;
+    roll.distanceFt += roll.groundMs * RECOGNITION_S / M_PER_FT;
+    s.throttle = 0;
+    settleEngines(a, s);
+    s.spoilers = true; s.brakes = 1;
+    roll.runToStop();
+    return roll.distanceFt;
+  } finally { perfRestore(s, saved); }
+}
+
+/* Accelerate to V1, lose the critical engine, and go anyway. Engine 0 is the
+   most outboard on every type -- `arms` runs port to starboard -- so it is the
+   critical one, and the yaw it makes is the yaw the model already computes. */
+function accelerateGoFt(a, s, v1Kt, vrKt, v2Kt, headMs, elevFt, mass, flaps) {
+  const saved = perfSave(s);
+  try {
+    const roll = new PerfRoll(a, s, flaps, headMs, elevFt, mass);
+    if (!roll.runToSpeed(v1Kt)) return null;
+    s.enginesFailed = [0];
+    if (!roll.runToSpeed(vrKt)) return null;
+    roll.runFor(ROTATION_S);
+    const airFt = climbOutFt(a, s, v2Kt * MS_PER_KT, [0]);
+    if (airFt === null) return null;
+    return roll.distanceFt + airFt;
+  } finally { perfRestore(s, saved); }
+}
+
+/* The takeoff nothing goes wrong on, to the same screen height. */
+function allEnginesFt(a, s, vrKt, v2Kt, headMs, elevFt, mass, flaps) {
+  const saved = perfSave(s);
+  try {
+    const roll = new PerfRoll(a, s, flaps, headMs, elevFt, mass);
+    if (!roll.runToSpeed(vrKt)) return null;
+    roll.runFor(ROTATION_S);
+    const airFt = climbOutFt(a, s, v2Kt * MS_PER_KT, []);
+    if (airFt === null) return null;
+    return roll.distanceFt + airFt;
+  } finally { perfRestore(s, saved); }
+}
+
+/* The published figure is not the balanced field length: it is the greatest of
+   the accelerate-stop distance, the engine-out distance to the screen, and the
+   all-engines distance with 15% added -- and on a long runway it is that last
+   one that wins, which is why a balanced field length alone comes out short of
+   every published number. */
+const takeoffFieldLengthFt = (stopFt, goFt, cleanFt) =>
+  Math.max(stopFt, goFt, cleanFt * ALL_ENGINES_MARGIN);
+
+/* (V1 floor, VR, V2) at a weight and flap the aeroplane may not currently be
+   in. VR and V2 stay exactly what vSpeeds has always made them: certification
+   defines both as minima against the stall speed, so they are honest as stall
+   relationships and there is nothing here for a runway to say about them. Only
+   V1 was pretending. */
+function speedsAt(a, s, mass, flaps) {
+  const savedMass = s.mass, savedFlaps = s.flaps;
+  try { s.mass = mass; s.flaps = flaps; return vSpeeds(a, s); }
+  finally { s.mass = savedMass; s.flaps = savedFlaps; }
+}
+
+/* No V1 works -- the aeroplane cannot make the screen height at all. Reported
+   as an infinite field length rather than thrown, so a display can say "this
+   does not fit" in the same words it uses for a runway that is merely short.
+   A real answer and not an error: an A380 at maximum weight with flaps 3 has
+   too much drag to climb away on three engines, and the right response is to
+   choose a different flap -- which bestFlapPerformance does, since an infinity
+   sorts last on its own. */
+const perfUnflyable = (runwayFt, v1, vr, v2, flaps) => ({
+  v1Kt: v1, vrKt: vr, v2Kt: v2, flaps,
+  accelerateStopFt: Infinity, accelerateGoFt: Infinity, allEnginesFt: Infinity,
+  fieldLengthFt: Infinity, runwayFt, limitedBy: PERF_UNFLYABLE,
+  marginFt: -Infinity, legal: false
+});
+
+/* Where the two distances meet, at one flap setting. V1 lives inside a window
+   and the solve never leaves it: the floor is Vmcg, below which the rudder
+   cannot hold the aeroplane straight on the remaining engine; the ceiling is
+   VR, because a decision taken after the nose has come up is not a decision.
+   Outside the window the two never cross and V1 clamps to whichever end.
+
+   limitedBy is read off where V1 landed rather than chosen by a branch, and
+   that is deliberate: only one of the two clamps is reachable, because
+   stopping from the minimum control speed is always far shorter than
+   accelerating from it to VR on one engine and then climbing. Written as an
+   `if` the floor branch would be code that cannot run; derived from the answer
+   it is a label that tells the truth if the numbers ever move. */
+function takeoffAtFlap(a, s, field, mass, flaps) {
+  const elevFt = field ? field.elev : s.alt;
+  const runwayFt = field ? field.lengthFt : 0;
+  const dir = s.rollDirection !== null && s.rollDirection !== undefined
+    ? s.rollDirection
+    : (field ? field.directionForHeading(s.hdg) : s.hdg);
+  const [headMs] = groundWindMs(s, dir);
+
+  const v = speedsAt(a, s, mass, flaps);
+  const vrKt = v.vr, v2Kt = v.v2;
+  /* The floor is Vmcg, not vSpeeds' 1.09 x Vs. That factor was a balanced-V1
+     approximation standing in for the whole chart, so using it here would be
+     the chart bounding itself -- and it sits so far above the real minimum
+     control speed that every case clamps to it and the solve never runs. */
+  const floorKt = Math.min(vmcgKt(a, s, elevFt, mass, flaps), vrKt);
+
+  const stop = v1 => accelerateStopFt(a, s, v1, headMs, elevFt, mass, flaps);
+  const go = v1 => accelerateGoFt(a, s, v1, vrKt, v2Kt, headMs, elevFt, mass, flaps);
+
+  /* The difference is increasing in V1: a later decision means more runway used
+     getting there and more to shed afterwards, while the go case gets more of
+     its acceleration on all engines and shortens. So it crosses zero at most
+     once, and bisection is the whole solve.
+
+     Tested at VR rather than at the floor because neither null case depends on
+     V1 -- an engine-out climb that cannot make the screen height cannot make it
+     from any decision speed -- so one probe answers both and saves two
+     integrations. */
+  let lo = floorKt, hi = vrKt, v1;
+  const sHi = stop(hi), gHi = go(hi);
+  if (sHi === null || gHi === null) {
+    return perfUnflyable(runwayFt, floorKt, vrKt, v2Kt, flaps);
+  }
+  if (sHi <= gHi) v1 = hi;
+  else {
+    while (hi - lo > V1_TOLERANCE_KT) {
+      const mid = 0.5 * (lo + hi);
+      if (stop(mid) < go(mid)) lo = mid; else hi = mid;
+    }
+    v1 = 0.5 * (lo + hi);
+  }
+
+  const stopFt = stop(v1), goFt = go(v1);
+  const cleanFt = allEnginesFt(a, s, vrKt, v2Kt, headMs, elevFt, mass, flaps);
+  if (stopFt === null || goFt === null || cleanFt === null) {
+    return perfUnflyable(runwayFt, floorKt, vrKt, v2Kt, flaps);
+  }
+  const limitedBy =
+    v1 >= vrKt - V1_TOLERANCE_KT ? PERF_VR
+    : v1 <= floorKt + V1_TOLERANCE_KT ? PERF_FLOOR
+    : PERF_BALANCED;
+  const fieldLengthFt = takeoffFieldLengthFt(stopFt, goFt, cleanFt);
+  return {
+    v1Kt: v1, vrKt, v2Kt, flaps,
+    accelerateStopFt: stopFt, accelerateGoFt: goFt, allEnginesFt: cleanFt,
+    fieldLengthFt, runwayFt, limitedBy,
+    marginFt: runwayFt - fieldLengthFt,
+    legal: runwayFt - fieldLengthFt >= 0
+  };
+}
+
+/* What the takeoff *being made* needs, in the configuration it is in -- not the
+   best available one. The aeroplane rotates at the VR for the flap the lever is
+   on, so a card quoting a different flap's VR would be the display and the
+   model disagreeing about the same aeroplane. bestFlap is the separate
+   question, and a display asks it separately. */
+function takeoffPerformance(a, s, field, mass) {
+  field = field || fieldByIdent(s.landingField);
+  mass = mass === undefined ? s.mass : mass;
+  /* Nobody departs with a clean wing, and quoting the clean stall speed would
+     put every V-speed some thirty knots high. */
+  return takeoffAtFlap(a, s, field, mass, Math.max(s.flaps, 1));
+}
+
+/* Which takeoff setting needs least runway, and its card. A real data card has
+   a FLAP line on it because the setting is *chosen*: more flap is more lift and
+   a slower, shorter roll, but more drag and a worse climb-out afterwards, and
+   which wins depends on the weight and the elevation. */
+function bestFlapPerformance(a, s, field, mass) {
+  field = field || fieldByIdent(s.landingField);
+  mass = mass === undefined ? s.mass : mass;
+  let best = null;
+  for (const setting of TAKEOFF_FLAPS) {
+    const candidate = takeoffAtFlap(a, s, field, mass, setting);
+    if (!best || candidate.fieldLengthFt < best.fieldLengthFt) best = candidate;
+  }
+  return best;
+}
+
+/* The other end of the same integrator: over the threshold at fifty feet and
+   Vref, touch down, spoilers out, full braking and reverse -- reverse is
+   allowed here, where the accelerate-stop case may not have it. */
+function landingPerformance(a, s, field, mass, arrivalTrackDeg) {
+  field = field || fieldByIdent(s.landingField);
+  mass = mass === undefined ? s.mass : mass;
+  const flaps = FLAP_CL.length - 1;      // full flap, what a landing is quoted at
+  const elevFt = field ? field.elev : s.alt;
+  const runwayFt = field ? field.lengthFt : 0;
+  /* Which end of the runway you arrive on is decided by where you are coming
+     from, and it decides whether the wind helps or hurts. A caller that leaves
+     `arrivalTrackDeg` out gets the aeroplane's own heading, which is right when
+     it is on or near the field and meaningless three hundred miles away -- so
+     planRoute passes the final leg's track rather than letting the answer
+     depend on where the nose happens to be pointing when the plan is filed. */
+  const dir =
+    (arrivalTrackDeg !== undefined && arrivalTrackDeg !== null && field)
+      ? field.directionForHeading(arrivalTrackDeg)
+      : (s.rollDirection !== null && s.rollDirection !== undefined)
+        ? s.rollDirection
+        : (field ? field.directionForHeading(s.hdg) : s.hdg);
+  const [headMs] = groundWindMs(s, dir);
+
+  const savedMass = s.mass, savedFlaps = s.flaps;
+  let vref;
+  try { s.mass = mass; s.flaps = flaps; vref = characteristicSpeeds(a, s).vref; }
+  finally { s.mass = savedMass; s.flaps = savedFlaps; }
+
+  const saved = perfSave(s);
+  let groundRollFt;
+  try {
+    const roll = new PerfRoll(a, s, flaps, headMs, elevFt, mass);
+    s.tas = iasToTas(vref * MS_PER_KT, elevFt);
+    s.throttle = 0;
+    settleEngines(a, s);
+    s.spoilers = true; s.brakes = 1; s.reverse = true;
+    roll.runToStop();
+    groundRollFt = roll.distanceFt;
+  } finally { perfRestore(s, saved); }
+
+  /* The air distance from the threshold: fifty feet down a three-degree path. */
+  const airFt = THRESHOLD_HEIGHT_FT / Math.tan(rad(GLIDESLOPE_DEG));
+  const total = groundRollFt + airFt;
+  const requiredFt = total * LANDING_FACTOR;
+  return {
+    vrefKt: vref, groundRollFt, landingDistanceFt: total, requiredFt, runwayFt,
+    marginFt: runwayFt - requiredFt, legal: runwayFt - requiredFt >= 0
+  };
+}
 
 /* ---------- the route (navigation.py) ----------
    A waypoint carries its own position rather than a reference to the airfield
@@ -2182,6 +2618,22 @@ function planRoute(a, s, cruiseFtWanted) {
   const reserveKg = holdingFlowKgh(a, s, HOLDING_ALTITUDE_FT, mass) *
                     (RESERVE_MINUTES / 60);
   const blockFuelKg = climbFuel + cruiseFuel + descentFuel;
+
+  /* Whether the far end will hold you, asked of landingPerformance rather than
+     answered here: a plan with its own idea of a landing distance would be a
+     second aeroplane, the same fault a planner with its own drag polar would
+     be. `mass` is the arrival mass, which is the whole reason this belongs in
+     the plan and not on the runway you are still standing on. */
+  let landingRequiredFt = 0, destinationRunwayFt = 0;
+  const destField = (dest && dest.isAirfield) ? fieldByIdent(dest.ident) : null;
+  if (destField) {
+    /* The final leg's track, not the aeroplane's heading. */
+    const arrival = landingPerformance(
+      a, s, destField, mass, spans.length ? spans[spans.length - 1].trackDeg : null);
+    landingRequiredFt = arrival.requiredFt;
+    destinationRunwayFt = arrival.runwayFt;
+  }
+
   return {
     legs: attributeToLegs(spans, climbNm, climbFuel, climbTime,
                           cruiseNm, cruiseFuel, cruiseTime,
@@ -2196,8 +2648,18 @@ function planRoute(a, s, cruiseFtWanted) {
     timeS: climbTime + cruiseTime + descentTime,
     blockFuelKg,
     requiredKg: blockFuelKg + reserveKg,
+    arrivalMassKg: mass, landingRequiredFt, destinationRunwayFt,
     get enough() { return this.fuelOnBoardKg >= this.requiredKg; },
-    get spareKg() { return this.fuelOnBoardKg - this.requiredKg; }
+    get spareKg() { return this.fuelOnBoardKg - this.requiredKg; },
+    /* A route with no airfield at the end of it has nothing to be short of, so
+       it fits by default rather than failing for lack of a runway. */
+    get fitsDestination() {
+      return this.destinationRunwayFt <= 0
+          || this.landingRequiredFt <= this.destinationRunwayFt;
+    },
+    get landingMarginFt() {
+      return this.destinationRunwayFt - this.landingRequiredFt;
+    }
   };
 }
 
@@ -2383,7 +2845,15 @@ function buildTrafficProfiles(seed, fields) {
       tas: profileTasMs(a, flight.origin.elev), gamma: 0, bank: 0, pitch: 0,
       cmdPitch: 0, flaps: 0, gear: false, spoilers: false, beta: 0, rudder: 0,
       throttle: 60, onGround: false, n1: [], enginesFailed: [],
-      enginesRunning: true, route: new Route(waypoints)
+      enginesRunning: true, route: new Route(waypoints),
+      /* The plan asks whether the destination will hold the aeroplane, and
+         that is a ground roll, and a ground roll reads the surface wind --
+         which is sampled through the turbulence filter. A state costed for
+         traffic is as complete as the one the Python throws away for the same
+         job, or the wind reads off the end of an array that is not there.
+         Which runway end it uses comes from the arrival track, so there is
+         nothing here for a heading to decide. */
+      turb: [0, 0, 0]
     };
     settleEngines(a, probeState);
     const plan = planRoute(a, probeState);
@@ -7813,7 +8283,16 @@ function renderPlanCost() {
     `Block <b>${kg(cost.blockFuelKg)} kg</b> + ${kg(cost.reserveKg)} reserve<br>` +
     (cost.enough
       ? `${kg(cost.spareKg)} kg spare`
-      : `<span class="short">short by ${kg(-cost.spareKg)} kg</span>`);
+      : `<span class="short">short by ${kg(-cost.spareKg)} kg</span>`) +
+    /* The other half of "can I get there". Quoted at the arrival weight,
+       which is the only weight the landing happens at. */
+    (cost.destinationRunwayFt <= 0 ? ""
+      : cost.fitsDestination
+        ? `<br>Stops in ${kg(cost.landingRequiredFt)} ft of ` +
+          `${kg(cost.destinationRunwayFt)}`
+        : `<br><span class="short">${S.route.destination.label} is too ` +
+          `short: needs ${kg(cost.landingRequiredFt)} ft, has ` +
+          `${kg(cost.destinationRunwayFt)}</span>`);
 }
 
 planList.addEventListener("click", ev => {
@@ -7835,7 +8314,11 @@ selDest.addEventListener("change", () => {
 selWx.value = "clear"; selStart.value = "runway";
 selWx.addEventListener("change", () => {
   weather = new WeatherState(WEATHER_BY_KEY[selWx.value], WORLD_SEED, S ? S.t : 0);
+  updateHangarPerformance();
 });
+/* The departure check follows the two selects that can change it. The wind is
+   not decoration on a takeoff card and neither is whether there is a takeoff. */
+selStart.addEventListener("change", () => updateHangarPerformance());
 el("btn-view").addEventListener("click", () => setView(view === "cockpit" ? "chase" : "cockpit"));
 el("btn-reset").addEventListener("click", () => newFlight(true));
 el("btn-hangar").addEventListener("click", () => showHangar());
@@ -7889,6 +8372,72 @@ function selectAircraft(key) {
   for (const card of document.querySelectorAll(".fleet-card")) {
     card.classList.toggle("on", card.dataset.key === key);
   }
+  updateHangarPerformance();
+}
+
+/* A state to ask a performance question of, with no flight in progress.
+
+   `S` is null until newFlight has run and every readout dereferences it, so the
+   hangar builds its own -- the same rule its camera follows, and the reason
+   setModelHinges takes a null flight state. The card is a property of the type,
+   the runway and the air rather than of a flight, so there is nothing here a
+   flight would have supplied. */
+function perfProbeState(a, field) {
+  return {
+    x: field.x, y: field.y, alt: field.elev, tas: 0,
+    pitch: 0, cmdPitch: 0, bank: 0, gamma: 0, hdg: field.heading,
+    throttle: 0, beta: 0, rudder: 0,
+    flaps: 1, gear: true, spoilers: false, brakes: 1, reverse: false,
+    fuel: a.startFuel, mass: a.oew + a.payload + a.startFuel,
+    enginesRunning: true, enginesFailed: [], enginesOnFire: [], n1: [],
+    failures: [], jammedFlaps: null, jammedGear: null,
+    turb: [0, 0, 0], onGround: true, status: "rollout", touchdown: null,
+    landingField: field.ident, rollDirection: field.heading
+  };
+}
+
+/* Whether the departure selected in the hangar actually fits, in the conditions
+   selected in the hangar. Both numbers are the solver's; this picks the words
+   and the colour, which is the whole of a display's job.
+
+   It runs on the weather select too, because the wind is not decoration here:
+   twenty-five knots down the runway is several hundred feet of ANFL. */
+function updateHangarPerformance() {
+  const node = el("hangar-perf");
+  if (!node || !craft) return;
+  if (el("sel-start").value !== "runway") {
+    node.innerHTML = "Airborne start — no takeoff to compute.";
+    return;
+  }
+  const field = buildAuthored()[0];                            // ANFL
+  const probe = perfProbeState(craft, field);
+  const savedWeather = weather;
+  /* The air the Fly button is about to hand the flight, not whatever the last
+     one left behind. Held, because a card that drifts while you read it is a
+     card about a moment that has passed. */
+  weather = new WeatherState(
+    WEATHER_BY_KEY[el("sel-wx").value], WORLD_SEED, 0).hold({});
+  let card;
+  try {
+    probe.tas = groundWindMs(probe, field.heading)[0];
+    card = bestFlapPerformance(craft, probe, field, probe.mass);
+  } finally { weather = savedWeather; }
+
+  const ft = v => Math.round(v).toLocaleString();
+  if (!Number.isFinite(card.fieldLengthFt)) {
+    node.innerHTML = `At ${ft(probe.mass / 1000)} t it will not reach the ` +
+      `screen height on one engine at any takeoff flap. ` +
+      `<b class="short">Cannot depart.</b>`;
+    return;
+  }
+  const verdict = card.legal
+    ? `<b>${ft(card.marginFt)} ft to spare.</b>`
+    : `<b class="short">${ft(-card.marginFt)} ft short.</b>`;
+  node.innerHTML =
+    `FLAP ${card.flaps} · V1 ${Math.round(card.v1Kt)} · ` +
+    `VR ${Math.round(card.vrKt)} · V2 ${Math.round(card.v2Kt)}<br>` +
+    `Needs ${ft(card.fieldLengthFt)} ft of ${field.ident}'s ` +
+    `${ft(card.runwayFt)}. ${verdict}`;
 }
 
 /* ---------- the hangar's own view ----------

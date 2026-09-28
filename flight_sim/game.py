@@ -13,6 +13,7 @@ from . import commands as cmd
 from . import dashboard
 from . import mapview
 from . import navigation
+from . import performance
 from . import physics
 from . import weather as wx
 from .narrator import Narrator
@@ -281,7 +282,90 @@ class Session:
                 "{:,.0f} kg** — and that is before the reserve is touched."
                 .format(state.fuel_kg, costing.required_kg, -costing.spare_kg)
             )
+        # The other half of "can I get there". Quoted at the arrival weight,
+        # which is the only weight the landing happens at.
+        if costing.destination_runway_ft > 0.0:
+            destination = self.sim.route.destination
+            if costing.fits_destination:
+                lines.append(
+                    "{} needs {:,.0f} ft to stop at {:,.0f} kg and has "
+                    "{:,.0f} — {:,.0f} ft in hand.".format(
+                        destination.ident or destination.name,
+                        costing.landing_required_ft, costing.arrival_mass_kg,
+                        costing.destination_runway_ft,
+                        costing.landing_margin_ft)
+                )
+            else:
+                lines.append(
+                    "**{} is too short**: {:,.0f} ft of runway against the "
+                    "{:,.0f} ft needed to stop there at {:,.0f} kg.".format(
+                        destination.ident or destination.name,
+                        costing.destination_runway_ft,
+                        costing.landing_required_ft, costing.arrival_mass_kg)
+                )
         return "\n".join(lines)
+
+    def performance_text(self):
+        """The takeoff data card on the ground, the landing one in the air.
+
+        Which of the two you get is which question you can still do anything
+        about: sitting on a runway the number that matters is whether this
+        takeoff fits, and once airborne it is whether the far end will hold
+        you. Both are `performance`'s; this picks the words.
+        """
+        sim = self.sim
+        state = sim.state
+        if state.on_ground and state.touchdown is None:
+            card = sim.takeoff_performance(force=True)
+            if card is None:
+                return "No runway underneath — there is nothing to compute against."
+            lines = [dashboard.performance_block(card), ""]
+            best = performance.best_flap(sim)
+            if best.flaps != card.flaps:
+                lines.append(
+                    "Flaps {} would want {:,.0f} ft instead — {:,.0f} less."
+                    .format(best.flaps, best.field_length_ft,
+                            card.field_length_ft - best.field_length_ft)
+                )
+            else:
+                lines.append(
+                    "Flaps {} is the shortest of the three takeoff settings "
+                    "at this weight.".format(card.flaps)
+                )
+            return "\n".join(lines)
+
+        destination = sim.route.destination
+        field = None
+        if destination is not None and destination.is_airfield:
+            field = sim.airfields.by_ident(
+                destination.ident, state.x_nm, state.y_nm, radius_nm=400.0
+            )
+        if field is None:
+            return (
+                "No destination filed, so there is no runway to ask about. "
+                "`direct to <ident>` picks one."
+            )
+        landing_card = sim.landing_performance(field, force=True)
+        verdict = (
+            "**{:,.0f} ft to spare**".format(landing_card.margin_ft)
+            if landing_card.legal
+            else "**{:,.0f} ft SHORT** — this will not fit."
+            .format(-landing_card.margin_ft)
+        )
+        return "\n".join([
+            "**Landing performance**",
+            "",
+            "| | |",
+            "|---|---|",
+            "| Vref, full flap | {:.0f} kt |".format(landing_card.vref_kt),
+            "| Ground roll | {:,.0f} ft |".format(landing_card.ground_roll_ft),
+            "| Landing distance | {:,.0f} ft |".format(
+                landing_card.landing_distance_ft),
+            "| **Required, factored** | **{:,.0f} ft** |".format(
+                landing_card.required_ft),
+            "| Runway available | {:,.0f} ft |".format(landing_card.runway_ft),
+            "| | {} |".format(verdict),
+        ])
 
     def report(self, readout, title=None):
         blocks = [dashboard.render(self.sim, readout, title=title), ""]
@@ -359,6 +443,9 @@ class Session:
 
         if command.kind == "show_atc":
             return (dashboard.atc_block(self.sim), False)
+
+        if command.kind == "show_performance":
+            return (self.performance_text(), False)
 
         if command.kind == "clear_route":
             self.sim.route.clear()

@@ -29,6 +29,17 @@ the navigation display's terrain bake done in the default framebuffer. `?fly=1`
 in the URL skips it and boots straight onto the runway, which is how every tool
 in `tools/` gets to a flight.
 
+Under the three selects is a **departure check**, and it is computed rather than
+captioned: two hypothetical ground rolls and a bisection for V1, against ANFL's
+runway, at the weight and in the air the Fly button is about to hand you. It
+follows the conditions select as well as the type, because the wind is not
+decoration on a takeoff card -- twenty-five knots down the centreline is several
+hundred feet. A hangar that let you take an A321XLR onto a strip it cannot leave
+would know less than the aeroplane does; this one names the flap that fits, or
+says the takeoff does not exist at all when no flap will climb away on one
+engine. It has no `S` to read -- that is null until `newFlight` has run -- so it
+builds a state of its own, the same rule its camera follows.
+
 * **Terrain** — a geometry clipmap: seven nested squares centred on the
   aircraft, each with twice the spacing of the one inside it, 29 ft between
   vertices where you are looking and 1,830 ft at the horizon. 714k triangles.
@@ -141,6 +152,23 @@ level on purpose, because every other case files a level low enough that the
 climb and descent fill the distance, and two miles of cruise cannot tell a mass
 model from a constant; a Python-side assertion fails the run if none of them
 genuinely cruises.
+
+And **twenty takeoff cards**, which are the worst of the three: a field length
+is a single number with nothing beside it to contradict it. Both hypothetical
+distances, the all-engines case behind them, Vmcg, the wind components, which
+limit bit, the best flap and the landing distance at the other end. The cases
+straddle their thresholds — four pairs sit fifteen hundred kilogrammes either
+side of the weight at which the field length equals the runway, which is two to
+three hundred feet of margin each way, so a build whose distances were three
+percent out flips one of every pair.
+
+Its vacuity guards are the sixth and seventh of their kind here, and the seventh
+was earned: deleting the 15% all-engines margin from this build changed no
+number in nineteen cases and the run passed, because on every twinjet the
+balanced pair dominates. It binds on the A380 at flaps 1 — four engines means
+losing one costs a quarter of the thrust rather than half, so the engine-out
+case barely exceeds the clean one. There is an A380 case now, and the run fails
+if none of its cases is all-engines-limited.
 
 The debrief rows are compared on the rendered *string* as well as the numbers,
 which is how the guard found that Python rounds halves to even and JavaScript
@@ -319,7 +347,9 @@ The takeoff used to be on the first list; `flight_sim/` has one now, and
 
 ## What the Python has that this does not
 
-The narrator, saving and loading a flight in progress, and the command parser.
+The narrator, saving and loading a flight in progress, and the command parser —
+and with it `perf`, so the takeoff card in this build lives in the hangar and
+the landing one in the flight plan panel rather than being asked for by name.
 The route, the flight plan and its cost, and the debrief used to be on this
 list — this was a cockpit and that was a flight. Both are flights now, from one
 set of numbers, and `tools/parity_check` is what says so.

@@ -7,7 +7,7 @@ and one freighter.
 
 ```bash
 python main.py                                  # play it
-python -m unittest discover -s tests -t .       # 606 tests, ~167 s
+python -m unittest discover -s tests -t .       # 629 tests, ~190 s
 python main.py --list                           # fleet and weather menus
 python main.py --spec a350-1000                 # one type's card and drawing
 open web/anfell.html                            # the browser build
@@ -28,6 +28,9 @@ flight_sim/
   weather.py       Immutable profiles + a mutable WeatherState.
   airfield.py      Airfield geometry; procedural and authored sources.
   landing.py       Approach guidance, touchdown grading, ground forces.
+  performance.py   V1 where the two distances cross, the field length,
+                   and what it takes to stop. A second integrator over
+                   `landing.ground_forces`, never a second force model.
   navigation.py    Routes, the flight plan and its cost, the managed
                    descent, the debrief.
   autopilot.py     ALT / V/S / HDG / SPD / NAV / APPR / DES, and the FMA.
@@ -551,7 +554,7 @@ has an owner.
 
 ## Testing patterns
 
-- One test file per module, named for it. 606 tests, ~167 s.
+- One test file per module, named for it. 629 tests, ~190 s.
 - Assert against **published figures** where they exist: ISA density tables,
   cruise fuel flow, service ceilings, Vmca. These catch calibration drift that
   self-consistent tests never would.
@@ -587,7 +590,16 @@ VLS, which is the right way round — VLS is a floor and Vref is a target.
 `engines.readouts` and `failures.ecam` join them: N1, N2, EGT and fuel flow per
 engine, and every warning line with its colour. The E/WD picks the font.
 
-`navigation.debrief_data` is the newest, and it was added because both front
+`performance.takeoff` is the newest, and it is the one where a display working
+a number out for itself would be worst: a field length is a single number with
+nothing beside it to contradict it, so a front end that computed its own would
+never be caught by looking. Both builds render the card and neither works out
+how much runway an aeroplane needs. The takeoff card quotes the flap the lever
+is **on**, not the best available one, because the aeroplane rotates at the VR
+for the configuration it is in — `best_flap` is the separate question and a
+display asks it separately.
+
+`navigation.debrief_data` came before it, and it was added because both front
 ends had already drifted: each had grown an end-of-flight card by hand, over
 the same flight, with different rounding and a different set of rows. It owns
 which rows exist, in what order, with what units and to how many digits;
@@ -740,9 +752,10 @@ is the guard; run it after touching `aircraft.py` or `physics.py`.
 the glass cockpit puts on the glass: the speed marks, the V-speeds, the five
 Flight Mode Annunciator columns, the per-engine N1/N2/EGT/fuel flow with its
 band, and every ECAM line with its colour, across a hundred and twenty-five
-states and five types — plus the flight plan and the debrief, which are worse
-than the rest: a block fuel figure that is 6% out looks exactly like a block
-fuel figure, and there is nothing on the screen to check it against. That is the easier half to get wrong — a speed tape with its marks in the
+states and five types — plus the flight plan, the debrief and the takeoff card,
+which are worse than the rest: a block fuel figure that is 6% out looks exactly
+like a block fuel figure, a field length that is 3% out looks exactly like a
+field length, and there is nothing on the screen to check either against. That is the easier half to get wrong — a speed tape with its marks in the
 wrong place still looks exactly like a speed tape, and an E/WD announcing the
 failure of the engine that is still running still looks exactly like an E/WD.
 
@@ -922,6 +935,168 @@ narrowbody rule — the A320 family manages 2.9 to 3.3, the widebodies 3.6, and
 the BelugaXL, draggy enough that its L/D is 12.9, is the steepest of the fleet
 at 2.6.
 
+## V1 is a runway number, and the runway is a constraint you can fail
+
+`fbw.takeoff_speeds` was honest about what it was, and said so in its own
+comment: these are the stall-speed relationships underneath a performance chart,
+not the chart. `V1_FACTOR = 1.09` meant **V1 had never once looked at the
+runway** — an A350 quoted the same decision speed on Harrow Deep's 5,400 ft as
+on Anfell's 12,200, and "arm an engine failure at V1" fired at a number with no
+runway in it.
+
+`performance.py` is the chart. V1 is now the speed at which the distance to stop
+and the distance to go are the same.
+
+**It owns no forces.** Every step calls `landing.ground_forces`, which is the
+call `Simulator._ground_substep` makes: one force model read by two integrators,
+which is the relationship `navigation.plan` has with `_aero_state` through
+`_probe`. A performance chart with its own friction model would be a second
+aeroplane, and the runway you are told you need would not be the runway you use.
+`tests/test_performance.py` states that as a number — the distance the solver
+says it takes to reach VR against the distance the real integrator covers
+getting there.
+
+The browser needed `groundForces()` factored out of `groundSubstep` before it
+could say the same thing, because the forces were inline there and a port would
+have been a third copy.
+
+**VR and V2 do not move.** Certification defines both as minima against the
+stall speed, so they are honest as stall relationships and there is nothing for
+a runway to say about them. Only V1 was pretending. This is the same shape as
+VLS and Vref living side by side in `fbw.characteristic_speeds`.
+
+### The window, and a label read off the answer rather than branched
+
+V1 lives between **Vmcg** — below which the rudder cannot hold the aeroplane
+straight on the remaining engine — and **VR**, because a decision taken after
+the nose has come up is not a decision. Vmcg is not typed in: `_update_sideslip`
+normalises the dead engine's yaw moment by dynamic pressure, so as the speed
+falls the same engine demands ever more rudder while `max_rudder_deg` gives ever
+less, and `vmcg_kt` bisects the crossing. `tests/test_yaw.py` has held that
+crossing to the engine arm and the dynamic pressure for several phases, which is
+exactly what makes it usable as a floor.
+
+Using `fbw`'s 1.09 · Vs as the floor instead — the first attempt — was the chart
+bounding itself, and it sits so far above the real minimum control speed that
+every type clamped to it and the solve never ran.
+
+**`limited_by` is derived from where V1 landed, not chosen by a branch.** Only
+one of the two clamps is reachable: stopping from the minimum control speed is
+always far shorter than accelerating from it to VR on one engine and then
+climbing, so the floor never binds — the narrowest margin anywhere in the fleet,
+an A319neo at maximum weight with the brakes degraded, still leaves twenty-six
+knots. Written as an `if`, the floor branch would be code that cannot run;
+derived from the answer it is a label that tells the truth if the numbers move.
+
+**`UNFLYABLE` is a real answer, not an error.** An A380 at maximum weight with
+flaps 3 cannot reach the thirty-five-foot screen on three engines, and the right
+response is to choose a different flap — which `best_flap` does, since an
+infinity sorts last on its own. It used to be reported as VR-limited, which is a
+lie about which limit bit.
+
+### The field length is three terms, and the third one needs an A380
+
+`takeoff_field_length_ft` is `max(stop, go, clean × 1.15)`, which is the
+certification definition rather than the balanced field length — a balanced
+field alone comes out short of every published number.
+
+The third term binds on exactly one shape of aeroplane, and the reason is the
+physics: **with four engines, losing one costs a quarter of the thrust rather
+than half**, so the engine-out distance barely exceeds the clean one and the
+regulator's fifteen percent overtakes both. The A380 at flaps 1 is the type
+whose takeoff is limited by the case where nothing goes wrong. On every twinjet
+in the fleet the balanced pair dominates at every weight and flap.
+
+That was found the honest way. Deleting `ALL_ENGINES_MARGIN` from the browser
+changed no number in nineteen parity cases and the whole run passed — the
+constant was in the arithmetic and in nobody's test. There is an A380 case now,
+`parity_check.py` fails the run if none of its cases is all-engines-limited, and
+`tests/test_performance.py` asserts both halves of the claim so the test is
+about the number of engines rather than about the A380.
+
+### A roll that stops *at* a speed, not past it
+
+`_Roll.run_to_speed` shortens its last step to land exactly on the target, and
+that is load-bearing rather than tidy. Left to run in whole quarter-seconds the
+roll stops at the first step *past* V1, which at takeoff acceleration is about a
+knot beyond it — so the distance is a staircase in V1 whose tread is ten times
+the tenth of a knot the bisection converges to, and the solve ends up bisecting
+a step function. The symptom was a "balanced" V1 whose two distances were a
+hundred and fifty feet apart, which is not balanced.
+
+**This is the float-truncation family one step along**, beside `dashboard._clock`
+and `navigation.debrief`: an expression that is right at every sample and wrong
+between them.
+
+Two other definitions in there are the regulator's and not anyone's choice: the
+accelerate-stop distance includes a distance equivalent to **two seconds at V1**
+before any stopping action, and it **may not take reverse-thrust credit** on a
+dry runway, because a reverser is not guaranteed to deploy. Landing distance may.
+
+### What the numbers are, and what they are not
+
+Absolute field lengths run about **25% long** against published TOFL — an
+A320neo wants 7,191 ft at flaps 3 and 71 t where the real figure is nearer
+5,900. The cause is known and is not in this module: `FLAP_CL`'s increments are
+conservative enough that every V-speed comes out some 10% high, and distance
+goes as V². Re-solving `FLAP_CL` would move VLS, Vref, the touchdown grader and
+a hundred and twenty-five parity states, so it is a phase of its own — and
+tuning a calibrated coefficient to make a *different* number come out is the
+mistake this file already warns about twice.
+
+So there is no `TAKEOFF_TARGETS` table, and that is deliberate rather than an
+omission. The guard is anchored where it can be anchored honestly: the solver
+against the real integrator, V1 against the crossing it claims to be, and
+relative properties everywhere else — a headwind shortens and a tailwind
+stretches, weight costs more than its share, more flap is a shorter roll and a
+worse climb, and the fleet's order matches `traffic.takeoff_length_ft`'s
+estimate, which is the first time that 2.1 factor has been answerable to
+anything. **The same treatment the BelugaXL's missing fuel figure gets**: say
+which anchor does not exist, and anchor on the ones that do.
+
+The consequence to keep in mind when reading a card: the *shape* of every answer
+is right and the absolute number is conservative, in the same direction, for
+every type.
+
+### The landing end, and a field you may leave but not file into
+
+`landing_performance` is the same integrator read the other way — over the
+threshold at fifty feet and Vref, spoilers, brakes, reverse — with the
+regulator's 1/0.6 despatch factor on the result. `navigation.plan` calls it at
+the **arrival** mass, which the plan is the only thing that knows because it has
+just integrated the fuel away; a landing check made at the departure weight is a
+check on a landing nobody makes.
+
+`arrival_track_deg` exists because which end of the runway you arrive on decides
+whether the wind helps or hurts, and a plan filed three hundred miles out would
+otherwise choose its runway from whichever way the nose happened to be pointing.
+The Python grew that argument and the browser did not, for about a day — the
+parity section caught it as a 413-foot disagreement on one plan.
+
+The consequence is worth knowing: **Harrow Deep is a field this fleet may leave
+and may not be filed into.** 5,400 ft is short of the factored despatch distance
+for every type, though all of them physically stop in well under it — an A380
+rolls 3,361 ft. That is what a 1/0.6 factor means on a short runway, and the
+card prints the demonstrated distance beside the factored one so the difference
+is visible rather than implied.
+
+### What it costs, and where it is cached
+
+A card is two hypothetical ground rolls plus a bisection — a few thousand force
+evaluations, and far too expensive for a per-frame readout. `Simulator.
+takeoff_performance` caches it beside `descent_guidance` and for the same
+reason, with **coarse keys**: a hundred kilogrammes of mass, two metres a second
+of wind, five degrees of direction. Keyed finely it would miss on every substep
+of a roll, because the mass falls as fuel burns and the gust moves the headwind.
+`force=True` for a state that was placed rather than flown into, exactly as the
+descent does.
+
+One knock-on: the plan now reads the surface wind, so **every state the plan is
+asked of needs a turbulence filter on it**. The browser's traffic probe had no
+`turb`, and fourteen costings threw inside the boot's fourth stage — which left
+`S` null and took `?fly=1` with it, so every browser tool stopped reaching a
+flight at all.
+
 ## The sky is evaluated, not simulated
 
 There are other aeroplanes now, and none of them is a Simulator. Every contact's
@@ -974,6 +1149,12 @@ Two mistakes it is worth not making again:
   carries a 2.1 factor turning a ground roll into a field length; multiplying by
   a further 1.25 double-counted and left four of eleven types able to work
   between any two of these five runways.
+
+The estimate stays, because fourteen real solves would cost seconds where the
+timetable costs 360 ms and it only has to *rank* the fleet. But it is answerable
+to something now: `tests/test_performance.py` asserts it ranks the fleet the way
+`performance.takeoff` does, which is the first check that 2.1 factor has ever
+had.
 
 The **type is chosen before the airfields**, which is the way round that matters.
 Picking the pair first and then something that could use it gave a sky that was

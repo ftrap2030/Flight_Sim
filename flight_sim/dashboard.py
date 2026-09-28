@@ -98,6 +98,58 @@ def speed_tape(readout, on_ground=False):
     return "  SPD |{}|{}".format("".join(cells), tail)
 
 
+def performance_block(card):
+    """The takeoff data card, when there is a runway to compute one against.
+
+    Takes the card rather than the readout that carries it: a block that needs
+    one field of a twenty-nine-field dataclass cannot be called with anything
+    but a whole flight, and the `perf` command has a card and no readout.
+
+    Every number here is `performance.takeoff`'s. This picks the layout and
+    nothing else -- the same division `fbw.characteristic_speeds` has with the
+    speed tape above it, and for the same reason: there are two front ends and
+    they must not be able to disagree about how much runway an aeroplane needs.
+    """
+    if card is None:
+        return ""
+    if card.field_length_ft == float("inf"):
+        needed = "more than this aeroplane has"
+        verdict = "**cannot depart** — it will not reach the screen height"
+    else:
+        needed = "{:,.0f} ft".format(card.field_length_ft)
+        verdict = (
+            "{:,.0f} ft to spare".format(card.margin_ft)
+            if card.legal
+            else "**{:,.0f} ft SHORT**".format(-card.margin_ft)
+        )
+    lines = [
+        "**Takeoff performance**",
+        "",
+        "| | |",
+        "|---|---|",
+        "| Configuration | FLAP {} |".format(card.flaps),
+        "| V1 / VR / V2 | {:.0f} / {:.0f} / {:.0f} kt |".format(
+            card.v1_kt, card.vr_kt, card.v2_kt
+        ),
+        "| V1 decided by | {} |".format(card.limited_by),
+        "| Accelerate-stop | {} |".format(
+            _ft(card.accelerate_stop_ft)
+        ),
+        "| Accelerate-go | {} |".format(_ft(card.accelerate_go_ft)),
+        "| All engines, +15% | {} |".format(
+            _ft(card.all_engines_ft * 1.15)
+        ),
+        "| **Field length needed** | **{}** |".format(needed),
+        "| Runway available | {:,.0f} ft |".format(card.runway_ft),
+        "| | {} |".format(verdict),
+    ]
+    return "\n".join(lines)
+
+
+def _ft(value):
+    return "—" if value == float("inf") else "{:,.0f} ft".format(value)
+
+
 def attitude_indicator(pitch_deg, bank_deg):
     """A small ASCII artificial horizon: the horizon line tilts with bank."""
     rows = []

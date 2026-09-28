@@ -45,6 +45,7 @@ from flight_sim import engines  # noqa: E402
 from flight_sim import failures as broken  # noqa: E402
 from flight_sim import fbw  # noqa: E402
 from flight_sim import navigation  # noqa: E402
+from flight_sim import performance  # noqa: E402
 from flight_sim import physics  # noqa: E402
 from flight_sim import traffic  # noqa: E402
 from flight_sim import weather as wx  # noqa: E402
@@ -187,6 +188,11 @@ def plan_failures(data):
         "descentDistanceNm": "descent_distance_nm",
         "reserveKg": "reserve_kg", "blockFuelKg": "block_fuel_kg",
         "requiredKg": "required_kg", "spareKg": "spare_kg",
+        # Whether the far end will hold you, at the weight you arrive at.
+        "arrivalMassKg": "arrival_mass_kg",
+        "landingRequiredFt": "landing_required_ft",
+        "destinationRunwayFt": "destination_runway_ft",
+        "landingMarginFt": "landing_margin_ft",
     }
     for case, theirs in zip(data["planCases"], data["plans"]):
         where = "{} / {}".format(case["key"], " ".join(case["route"]))
@@ -217,6 +223,12 @@ def plan_failures(data):
             out.append("{}: `enough` is {} in Python and {} in the browser -- one "
                        "of them is telling a pilot they can make it"
                        .format(where, mine.enough, theirs["enough"]))
+        if mine.fits_destination != theirs["fitsDestination"]:
+            out.append("{}: `fits_destination` is {} in Python and {} in the "
+                       "browser -- one of them is sending a pilot to a runway "
+                       "they cannot stop on".format(
+                           where, mine.fits_destination,
+                           theirs["fitsDestination"]))
 
         if len(mine.legs) != len(theirs["legs"]):
             out.append("{}: {} legs in Python and {} in the browser".format(
@@ -724,6 +736,171 @@ def atc_failures(data):
     return out
 
 
+# Feet. Both builds integrate the same forces with the same quarter-second
+# step, so the distances agree far inside this; it is here for the last bits of
+# a few thousand floating-point additions, not for slack.
+PERF_TOLERANCE_FT = 0.5
+
+
+def perf_failures(data):
+    """Takeoff and landing performance.
+
+    The hardest half of the comparison, for the flight plan's reason one phase
+    on: a field length that is three percent wrong looks exactly like a field
+    length, and unlike a speed tape there is nothing else on the screen to
+    check it against. So every number on the card is compared -- both
+    hypothetical distances, the all-engines case behind them, the field length,
+    the margin, which limit bit, and the landing distance at the other end.
+    """
+    if "perf" not in data:
+        return ["the browser dump has no performance section "
+                "-- re-run parity_check.js"]
+
+    out = []
+    legality, limits, margins = [], [], []
+    all_engines_limited = 0
+    for case, theirs in zip(data["perfCases"], data["perf"]):
+        where = "{} {} {:,.0f} kg flaps {}".format(
+            case["key"], case["ident"], case["massKg"], case["flaps"])
+        if case.get("windKt"):
+            where += " wind {:.0f}/{:+.0f}".format(
+                case["windKt"], case["windOffsetDeg"])
+
+        session = Session.new(case["key"], "clear", seed=SEED)
+        sim = session.sim
+        state = sim.state
+        field = sim.airfields.by_ident(
+            case["ident"], state.x_nm, state.y_nm, radius_nm=400.0)
+        # The air is pinned rather than left wherever the clock drifted it, and
+        # the turbulence sample zeroed, so both builds are asked about the same
+        # wind. The offset is measured from the runway heading.
+        # The gust is left alone rather than pinned: it is a getter on the
+        # browser's profile and a field on this one, so setting it would be the
+        # two builds doing different things. It reaches the ground roll only
+        # through the turbulence sample, and that is zeroed below.
+        sim.weather.hold(
+            wind_speed_kt=case.get("windKt", 0.0), turbulence=0.0,
+            wind_dir_deg=(field.runway_heading_deg
+                          + case.get("windOffsetDeg", 0.0)) % 360.0,
+        )
+        state.turb = [0.0, 0.0, 0.0]
+        state.altitude_ft = field.elevation_ft
+        state.heading_deg = field.runway_heading_deg
+        state.roll_direction_deg = field.runway_heading_deg
+        state.landing_field_ident = field.ident
+        state.mass_kg = case["massKg"]
+        state.flaps = case["flaps"]
+        state.gear_down = True
+        state.on_ground = True
+
+        mine = performance._takeoff_at_flap(
+            sim, field, case["massKg"], case["flaps"])
+        best = performance.best_flap(sim, field, case["massKg"])
+        land = performance.landing_performance(sim, field, case["massKg"])
+        vmcg = performance.vmcg_kt(
+            sim, field.elevation_ft, case["massKg"], case["flaps"])
+        headwind_ms, crosswind_ms = sim.ground_wind_ms(field.runway_heading_deg)
+
+        legality.append(mine.legal)
+        limits.append(mine.limited_by)
+        if mine.field_length_ft != float("inf"):
+            margins.append(abs(mine.margin_ft))
+            # Which of the three terms the field length actually came from.
+            # `ALL_ENGINES_MARGIN` is the one a case has to be chosen for: on
+            # every twinjet here the balanced pair dominates, so the margin
+            # could be deleted outright without moving a single number.
+            if (mine.all_engines_ft * performance.ALL_ENGINES_MARGIN
+                    >= max(mine.accelerate_stop_ft, mine.accelerate_go_ft)):
+                all_engines_limited += 1
+
+        for label, a, b in (
+            ("the headwind", headwind_ms, theirs["headwindMs"]),
+            ("the crosswind", crosswind_ms, theirs["crosswindMs"]),
+        ):
+            if abs(a - b) > 1e-6:
+                out.append("{}: {} is {:.6f} m/s in Python and {:.6f} in the "
+                           "browser".format(where, label, a, b))
+        for label, a, b in (
+            ("Vmcg", vmcg, theirs["vmcgKt"]),
+            ("V1", mine.v1_kt, theirs["v1Kt"]),
+            ("VR", mine.vr_kt, theirs["vrKt"]),
+            ("V2", mine.v2_kt, theirs["v2Kt"]),
+            ("Vref", land.vref_kt, theirs["vrefKt"]),
+        ):
+            if abs(a - b) > TOLERANCE_KT:
+                out.append("{}: {} is {:.3f} kt in Python and {:.3f} in the "
+                           "browser".format(where, label, a, b))
+        for label, a, b in (
+            ("accelerate-stop", mine.accelerate_stop_ft,
+             theirs["accelerateStopFt"]),
+            ("accelerate-go", mine.accelerate_go_ft, theirs["accelerateGoFt"]),
+            ("all-engines", mine.all_engines_ft, theirs["allEnginesFt"]),
+            ("the field length", mine.field_length_ft, theirs["fieldLengthFt"]),
+            ("the margin", mine.margin_ft, theirs["marginFt"]),
+            ("the runway", mine.runway_ft, theirs["runwayFt"]),
+            ("the best flap's field length", best.field_length_ft,
+             theirs["bestFieldLengthFt"]),
+            ("the landing ground roll", land.ground_roll_ft,
+             theirs["groundRollFt"]),
+            ("the landing distance", land.landing_distance_ft,
+             theirs["landingDistanceFt"]),
+            ("the required landing distance", land.required_ft,
+             theirs["landingRequiredFt"]),
+        ):
+            # An infinity is a real answer here -- the aeroplane cannot climb
+            # away -- so the two builds have to agree on it as they do on a
+            # number, rather than on the subtraction of two of them. It arrives
+            # as a string because JSON has no infinity and would otherwise turn
+            # a definite answer into a null.
+            b = float(b)
+            if math.isinf(a) or math.isinf(b):
+                if a != b:
+                    out.append("{}: {} is {} in Python and {} in the browser"
+                               .format(where, label, a, b))
+            elif abs(a - b) > PERF_TOLERANCE_FT:
+                out.append("{}: {} is {:,.2f} ft in Python and {:,.2f} in the "
+                           "browser".format(where, label, a, b))
+        for label, a, b in (
+            ("the takeoff flap", mine.flaps, theirs["flaps"]),
+            ("the best flap", best.flaps, theirs["bestFlaps"]),
+            ("which limit bit", mine.limited_by, theirs["limitedBy"]),
+            ("whether it is legal", mine.legal, theirs["legal"]),
+            ("whether it can land", land.legal, theirs["landingLegal"]),
+        ):
+            if a != b:
+                out.append("{}: {} is {!r} in Python and {!r} in the browser"
+                           .format(where, label, a, b))
+
+    # The vacuity guards, the sixth of their kind. A suite where every case
+    # fits, or where none of them does, compares two builds that both did the
+    # easy thing -- and one where every case balances would pass with the
+    # bisection replaced by its own floor.
+    if not any(legality) or all(legality):
+        out.append("every performance case comes out the same way on `legal` "
+                   "-- the runway is not being asked about")
+    for wanted in (performance.BALANCED, performance.VR_LIMITED,
+                   performance.UNFLYABLE):
+        if wanted not in limits:
+            out.append("no performance case is {!r} -- that branch is "
+                       "compared by nobody".format(wanted))
+    # And the thresholds themselves. A pair a thousand feet either side of
+    # fitting would not notice a build whose distances were five percent out,
+    # which is the lesson the ATC section had to learn last phase.
+    if not any(m <= 400.0 for m in margins):
+        out.append("no performance case sits within four hundred feet of its "
+                   "runway -- a distance a few percent out would not be seen")
+    # And the third term of the field-length definition, which is the one a
+    # suite of twinjets never reaches. Found the honest way: deleting
+    # ALL_ENGINES_MARGIN from the browser changed no number in nineteen cases
+    # and the run passed. It binds on the A380 at flaps 1, because four engines
+    # make the engine-out case nearly the clean one.
+    if not all_engines_limited:
+        out.append("no performance case is limited by the all-engines "
+                   "distance -- ALL_ENGINES_MARGIN could be deleted from "
+                   "either build and nothing here would move")
+    return out
+
+
 def main():
     if len(sys.argv) < 2:
         print("usage: parity_check.py <json from parity_check.js>", file=sys.stderr)
@@ -733,7 +910,8 @@ def main():
 
     failures = (weather_failures(data) + plan_failures(data)
                 + debrief_failures(data) + descent_failures(data)
-                + traffic_failures(data) + atc_failures(data))
+                + traffic_failures(data) + atc_failures(data)
+                + perf_failures(data))
     for row in data["rows"]:
         case = by_name[row["case"]]
         where = "{} / {}".format(row["key"], row["case"])
@@ -819,11 +997,13 @@ def main():
             )
 
     print("{} states, {} types, {} weather cases, {} flight plans, "
-          "{} debriefs, {} descents, {} skies, {} clearances".format(
+          "{} debriefs, {} descents, {} skies, {} clearances, "
+          "{} takeoff cards".format(
               len(data["rows"]), len({r["key"] for r in data["rows"]}),
               len(data.get("weather", ())), len(data.get("plans", ())),
               len(data.get("debriefs", ())), len(data.get("descents", ())),
-              len(data.get("trafficTimes", ())), len(data.get("atcCases", ()))))
+              len(data.get("trafficTimes", ())), len(data.get("atcCases", ())),
+              len(data.get("perfCases", ()))))
     if failures:
         print("\nDISAGREEMENTS ({}):".format(len(failures)))
         for line in failures[:40]:
@@ -832,8 +1012,8 @@ def main():
             print("  ... and {} more".format(len(failures) - 40))
         return 1
     print("the two builds agree on every speed, engine parameter, flight mode, "
-          "ECAM line,\nweather sample, flight-plan figure, debrief row and top of descent -- "
-          "and on every gust, exactly")
+          "ECAM line,\nweather sample, flight-plan figure, debrief row, top of descent "
+          "and field length --\nand on every gust, exactly")
     return 0
 
 

@@ -22,6 +22,7 @@ from . import failures
 from . import fbw
 from . import landing
 from . import navigation
+from . import performance as performance_module
 from . import traffic as traffic_module
 from . import weather as wx
 from . import airfield
@@ -300,6 +301,10 @@ class Readout:
     # V1, VR and V2. Meaningful on the ground, and computed there rather than
     # in a display so that both front ends bug the same speeds.
     takeoff: object = None
+    # The whole takeoff data card -- distances, the chosen flap, the margin --
+    # on the ground and None in the air. `takeoff` above carries the three
+    # speeds off it, so a display that only wants those need not know.
+    performance: object = None
     # One entry per engine: N1, N2, EGT, fuel flow, thrust, failed, fire.
     engines: list = field(default_factory=list)
     leg: object = None
@@ -846,6 +851,61 @@ class Simulator:
             self._descent_guidance = navigation.descent_guidance(self)
             self._descent_guidance_s = now
         return getattr(self, "_descent_guidance", None)
+
+    def takeoff_performance(self, force=False):
+        """What the runway allows, cached against what can change it.
+
+        `descent_guidance` above is the precedent and the reason: a solve is a
+        few thousand force evaluations, the readout that wants it is redrawn
+        sixty times a second, and three callers solving separately would be
+        three different V1s on three parts of the same screen.
+
+        The cache key is every input the answer depends on -- weight, flap,
+        which runway, and the wind along it. None of those changes inside a
+        substep, and all of them change the answer, which is the only honest
+        way to key a cache. `force` re-solves for a state that was placed
+        rather than flown into, exactly as the descent does.
+        """
+        s = self.state
+        field = self.airfields.by_ident(
+            s.landing_field_ident, s.x_nm, s.y_nm, radius_nm=15.0
+        )
+        direction = (
+            s.roll_direction_deg
+            if s.roll_direction_deg is not None
+            else (field.landing_direction_for_heading(s.heading_deg)
+                  if field else s.heading_deg)
+        )
+        headwind_ms, _cross = self.ground_wind_ms(direction)
+        # Coarsely, and deliberately. Keyed finely, this cache would never hit:
+        # the mass falls by a kilogramme a second as the fuel goes and the gust
+        # moves the headwind every substep, so a solve costing a fifth of a
+        # second would be paid every frame of the roll. A hundred kilogrammes
+        # and four knots are both far below what moves a field length by
+        # anything a pilot would act on.
+        key = (
+            round(s.mass_kg / 100.0), s.flaps,
+            field.ident if field else None,
+            round(direction / 5.0), round(headwind_ms / 2.0),
+        )
+        if force or getattr(self, "_takeoff_key", None) != key:
+            self._takeoff_performance = performance_module.takeoff(self, field)
+            self._takeoff_key = key
+        return getattr(self, "_takeoff_performance", None)
+
+    def landing_performance(self, field=None, force=False):
+        """What it takes to stop at `field`, cached the same way."""
+        s = self.state
+        field = field or self.airfields.by_ident(
+            s.landing_field_ident, s.x_nm, s.y_nm, radius_nm=15.0
+        )
+        key = (round(s.mass_kg / 100.0), field.ident if field else None)
+        if force or getattr(self, "_landing_key", None) != key:
+            self._landing_performance = performance_module.landing_performance(
+                self, field
+            )
+            self._landing_key = key
+        return getattr(self, "_landing_performance", None)
 
 
     def _idle_path_at(self, altitude_ft, tas_ms, mass_kg):
@@ -1716,7 +1776,20 @@ class Simulator:
         readout.approach = landing.approach_guidance(self)
         readout.speeds = fbw.characteristic_speeds(self)
         readout.vref_kt = readout.speeds.vref
+        # On the ground the V-speeds are the solved ones, because there is a
+        # runway to solve against; in the air there is not, and `fbw`'s stall
+        # relationships are what remains true. One field decides which, so no
+        # display has to know there are two sources.
         readout.takeoff = fbw.takeoff_speeds(self)
+        readout.performance = (
+            self.takeoff_performance() if s.on_ground else None
+        )
+        if readout.performance is not None:
+            readout.takeoff = fbw.TakeoffSpeeds(
+                v1=readout.performance.v1_kt,
+                vr=readout.performance.vr_kt,
+                v2=readout.performance.v2_kt,
+            )
         readout.engines = engines.readouts(self)
         readout.leg = navigation.leg_for(self, readout)
         readout.warnings = self._warnings(readout)

@@ -466,6 +466,9 @@ def _match_navigation(text, raw):
         return Command("show_traffic", text=raw, advances_time=False)
     if text in ("atc", "radio", "clearance", "say again"):
         return Command("show_atc", text=raw, advances_time=False)
+    if text in ("perf", "performance", "takeoff data", "takeoff performance",
+                "tow", "takeoff card", "v speeds", "v-speeds"):
+        return Command("show_performance", text=raw, advances_time=False)
     if re.match(r"^(?:debrief|summary|how did i do)$", text):
         return Command("debrief", text=raw, advances_time=False)
     return None
@@ -601,7 +604,8 @@ def apply(sim, command):
             s.alpha_floor_latched = False
     elif kind in ("hold", "status", "map", "airfields", "help", "quit",
                   "direct_to", "set_route", "add_waypoint", "remove_waypoint",
-                  "show_plan", "show_traffic", "show_atc", "clear_route", "debrief",
+                  "show_plan", "show_traffic", "show_atc", "show_performance",
+                  "clear_route", "debrief",
                   "spec", "fleet", "show_law", "show_failures"):
         pass
     elif kind == "time_of_day":

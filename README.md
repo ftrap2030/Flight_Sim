@@ -414,6 +414,87 @@ announces itself.
 
 Anything broken can be un-broken: `fix hydraulics`, `fix engine 2`, or `fix all`.
 
+## Will it fit?
+
+`perf` asks the aeroplane, rather than a table. Sitting on a runway you get the
+takeoff data card; airborne with a destination filed you get the landing one.
+
+```
+> perf
+
+**Takeoff performance**
+
+| Configuration       | FLAP 1               |
+| V1 / VR / V2        | 168 / 182 / 190 kt   |
+| V1 decided by       | balanced             |
+| Accelerate-stop     | 12,364 ft            |
+| Accelerate-go       | 12,361 ft            |
+| All engines, +15%   | 10,696 ft            |
+| Field length needed | 12,364 ft            |
+| Runway available    | 12,200 ft            |
+|                     | 164 ft SHORT         |
+
+Flaps 3 would want 10,823 ft instead — 1,542 less.
+```
+
+That is an A321XLR at Anfell, and it is the whole point of the thing: at flaps 1
+the longest runway in the region is 164 feet too short, and the card knows that
+flaps 3 fixes it. **V1 used to be 1.09 × the stall speed** — a number that had
+never once looked at the runway, so an A350 quoted the same decision speed on
+Harrow Deep's 5,400 ft as on Anfell's 12,200.
+
+It is now the speed at which the two distances are equal: accelerate to V1 and
+stop, against accelerate to V1, lose the critical engine, and go anyway to the
+thirty-five-foot screen. Both are flown, at a quarter of a second a step,
+through the same force model the ground roll itself uses — so the runway you are
+told you need is the runway you actually use. V1 sits between Vmcg, where the
+rudder runs out, and VR, because a decision taken after the nose comes up is not
+a decision.
+
+The accelerate-stop case gets the regulator's two seconds at V1 before anything
+happens, and **no reverse-thrust credit** — a reverser is not guaranteed to
+deploy, which is why that distance is so long. The landing case may use reverse,
+and then carries the 1/0.6 despatch factor.
+
+A few things fall out of it that are worth knowing:
+
+- **A headwind is runway.** Twenty-five knots down the centreline is several
+  hundred feet of Anfell; the same wind behind you costs more than it gave.
+- **Flap is a choice, not a convention.** More flap is more lift and a shorter
+  roll, but more drag and a worse climb-out, and which wins depends on the
+  weight and the elevation. The card names the setting the lever is on and tells
+  you what the best one would want.
+- **Some takeoffs do not exist.** An A380 at maximum weight with flaps 3 cannot
+  reach the screen height on three engines at all, and the card says so rather
+  than quoting a distance.
+- **The A380 is the type limited by the takeoff where nothing goes wrong.** With
+  four engines, losing one costs a quarter of the thrust rather than half, so
+  the engine-out case barely exceeds the clean one and the 15% margin on the
+  clean case is what the runway has to hold.
+
+A filed plan reports the other end too, at the weight you will actually arrive
+at — which the plan is the only thing that knows, having just integrated the
+fuel away:
+
+```
+**HRWD is too short**: 5,400 ft of runway against the 7,158 ft needed to
+stop there at 494,037 kg.
+```
+
+Harrow Deep is a field this fleet may leave and may not be filed into. Every
+type stops on it comfortably — an A380 rolls 3,361 feet — but none of them meets
+the factored despatch distance, which is what 1/0.6 means on a short runway.
+
+One honest caveat, in the same spirit as everything else here. The *shape* of
+these answers is right — the wind, the weight, the flap and the runway all move
+them the way they move a real chart — but the absolute distances run about 25%
+long against published field lengths. The cause is known and is not in the
+solver: the flap lift increments in `aircraft.py` are conservative enough that
+every V-speed comes out some 10% high, and distance goes as the square of speed.
+Fixing it means re-solving a calibrated coefficient that also sets VLS, Vref and
+the touchdown grade, so it is a change of its own rather than a thumb on this
+scale. `CLAUDE.md` says the same at more length.
+
 ## Somewhere to go
 
 `route ANFL KEBR CROW HRWD` files a flight plan; `add` and `remove` amend it,
@@ -755,16 +836,17 @@ turns, and that the metal and the sky are reading one definition.
 python -m unittest discover -s tests -t .
 ```
 
-606 tests, no dependencies. They check the atmosphere against published ISA
+629 tests, no dependencies. They check the atmosphere against published ISA
 tables, stall speed against its closed form, cruise fuel flow and service
 ceiling against published figures for every type, terrain determinism,
 save/load fidelity, that every prose template renders against a live context,
 that the artificial horizon is not upside down, that Vmc falls out of the engine
 geometry rather than being asserted, that every authored runway has a clear
 3-degree approach from both ends, that a V1 cut is survivable on the remaining
-engine, and that a stopped aircraft reads zero on the airspeed indicator.
+engine, that the takeoff solver covers the same ground the real integrator
+does, and that a stopped aircraft reads zero on the airspeed indicator.
 
-Two families are worth calling out because they guard things that are easy to
+Three families are worth calling out because they guard things that are easy to
 break silently. Every solved TSFC is checked against its real engine's published
 cruise SFC — the constants were solved against block fuel flow, not looked up, so
 a wrong drag polar shows up as a TSFC that has drifted off its engine rather than
@@ -773,5 +855,13 @@ drawn from: a longer aircraft must be drawn longer, the drawn A380/A319neo lengt
 ratio must match the real one to within 8%, the pod count must equal the engine
 count, and the length in the spec table must be the length in the callout under
 the picture.
+
+And the performance solver is held to the aeroplane rather than to a chart: the
+distance it says a takeoff roll covers has to be the distance the real ground
+roll actually covers, because it calls the same force model rather than keeping
+a copy. Where absolutes would be brittle it asserts relative properties instead
+— a headwind shortens and a tailwind stretches, weight costs more than its
+share, and the fleet's order matches the estimate the timetable ranks by, which
+is the first check that estimate has ever had.
 
 CI runs them on Python 3.9, 3.11 and 3.12.

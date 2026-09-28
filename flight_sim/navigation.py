@@ -13,6 +13,7 @@ import math
 from dataclasses import dataclass, field
 
 from . import atmosphere as atm
+from . import performance
 
 
 @dataclass
@@ -254,6 +255,27 @@ class Plan:
     descent_distance_nm: float
     reserve_kg: float
     fuel_on_board_kg: float
+    # The other half of "can I get there": the destination has to hold you once
+    # you arrive. Computed at the **arrival** mass, which the plan is the only
+    # thing that knows -- it has just integrated the fuel away. A landing check
+    # made at the departure weight is a check on a landing nobody makes.
+    arrival_mass_kg: float = 0.0
+    landing_required_ft: float = 0.0
+    destination_runway_ft: float = 0.0
+
+    @property
+    def fits_destination(self):
+        """Whether the far end is long enough for the aeroplane arriving.
+
+        A route with no airfield at the end of it has nothing to be short of,
+        so it fits by default rather than failing for lack of a runway.
+        """
+        return (self.destination_runway_ft <= 0.0
+                or self.landing_required_ft <= self.destination_runway_ft)
+
+    @property
+    def landing_margin_ft(self):
+        return self.destination_runway_ft - self.landing_required_ft
 
     @property
     def distance_nm(self):
@@ -377,6 +399,29 @@ def plan(sim, cruise_ft=None):
         cruise_nm, cruise_fuel, cruise_time,
         descent_nm, descent_fuel, descent_time,
     )
+
+    # Whether the far end will hold you, asked of `performance` rather than
+    # answered here: a plan with its own idea of a landing distance would be a
+    # second aeroplane, the same fault a planner with its own drag polar would
+    # be. `mass_kg` is the arrival mass, which is the whole reason this belongs
+    # in the plan and not on the runway you are still standing on.
+    landing_required_ft = destination_runway_ft = 0.0
+    field = None
+    if destination is not None and destination.is_airfield:
+        field = sim.airfields.by_ident(
+            destination.ident, state.x_nm, state.y_nm, radius_nm=400.0
+        )
+    if field is not None:
+        # The final leg's track, not the aeroplane's heading: which end of the
+        # runway you arrive on is decided by where you are coming from, and a
+        # plan filed three hundred miles out would otherwise pick its runway
+        # from whichever way the nose was pointing when the pilot typed it.
+        arrival = performance.landing_performance(
+            sim, field, mass_kg, arrival_track_deg=spans[-1][2] if spans else None
+        )
+        landing_required_ft = arrival.required_ft
+        destination_runway_ft = arrival.runway_ft
+
     return Plan(
         legs=legs, cruise_ft=cruise_ft,
         climb_fuel_kg=climb_fuel, climb_time_s=climb_time, climb_distance_nm=climb_nm,
@@ -384,6 +429,9 @@ def plan(sim, cruise_ft=None):
         descent_fuel_kg=descent_fuel, descent_time_s=descent_time,
         descent_distance_nm=descent_nm,
         reserve_kg=reserve_kg, fuel_on_board_kg=state.fuel_kg,
+        arrival_mass_kg=mass_kg,
+        landing_required_ft=landing_required_ft,
+        destination_runway_ft=destination_runway_ft,
     )
 
 

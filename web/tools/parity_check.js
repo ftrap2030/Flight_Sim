@@ -252,6 +252,77 @@ const PLAN_CASES = [
    comparison to mean anything. Asserted on the Python end. */
 const MINIMUM_CRUISE_NM = 60.0;
 
+/* Takeoff and landing performance. A card is two hypothetical ground rolls and
+   a bisection between them, so a build could get the friction, the recognition
+   allowance, the engine-out climb or the field-length definition wrong and the
+   number would still look exactly like a field length -- the flight plan's
+   problem one phase on, and the reason this section exists.
+
+   The cases straddle their thresholds, which is the lesson four sections here
+   each had to learn separately. `limitedBy` does not depend on the runway at
+   all -- where the two distances cross is a property of the aeroplane and the
+   air -- so the runway's own output is `legal`, and each of the first four
+   pairs sits 1,500 kg either side of the weight at which the field length
+   equals the runway. That is about 250 to 330 feet of margin each way: a build
+   that computed the distance three percent long would flip one of every pair
+   and be seen, where a case at half the weight would not notice ten percent. */
+const PERF_CASES = [
+  /* HRWD is 5,400 ft. 65,373 kg is the A319neo's break-even there at flaps 3. */
+  { key: 'a319neo',  ident: 'HRWD', massKg: 63873,  flaps: 3 },
+  { key: 'a319neo',  ident: 'HRWD', massKg: 66873,  flaps: 3 },
+  /* KEBR, 7,600 ft. */
+  { key: 'a320neo',  ident: 'KEBR', massKg: 77027,  flaps: 3 },
+  { key: 'a320neo',  ident: 'KEBR', massKg: 80027,  flaps: 3 },
+  /* CROW, 8,800 ft -- and the A321XLR is the type that needs the most of it. */
+  { key: 'a321xlr',  ident: 'CROW', massKg: 90442,  flaps: 3 },
+  { key: 'a321xlr',  ident: 'CROW', massKg: 93442,  flaps: 3 },
+  /* ANFL, 12,200 ft, at 4,560 ft of elevation, and the only type that needs
+     the whole of it. These two are also the VR-limited pair below. */
+  { key: 'belugaxl', ident: 'ANFL', massKg: 225041, flaps: 2 },
+  { key: 'belugaxl', ident: 'ANFL', massKg: 228041, flaps: 2 },
+
+  /* The two clamps, because a clamp nobody reaches is a clamp nobody is
+     testing. An A319neo at maximum weight with flaps 3 has an engine-out climb
+     poor enough that the two distances never cross below VR; an A380 at
+     maximum weight with the same flap cannot reach the screen height on three
+     engines at all, and reports that rather than a distance. The second used
+     to come back labelled "VR", which was a lie about which limit bit. */
+  { key: 'a319neo',  ident: 'ANFL', massKg: 75500,  flaps: 3 },
+  { key: 'a380',     ident: 'ANFL', massKg: 575000, flaps: 3 },
+
+  /* The all-engines case, which is the term the field length takes from
+     `max(stop, go, clean * 1.15)` and which nothing else here reaches. It binds
+     on exactly one shape of aeroplane and the reason is the physics: with four
+     engines, losing one costs a quarter of the thrust rather than half, so the
+     engine-out distance barely exceeds the clean one and the regulator's 15%
+     overtakes both. So the A380 at flaps 1 is the only case in this table whose
+     field length comes from the takeoff where nothing goes wrong -- and without
+     it, deleting ALL_ENGINES_MARGIN from one build changed no number anywhere
+     and the whole run still passed. */
+  { key: 'a380',     ident: 'ANFL', massKg: 497000, flaps: 1 },
+
+  /* The wind, on the type the two builds are already flown against each other
+     with. The surface wind is 40% of the gradient wind and backed thirty
+     degrees, so a runway-aligned component is a gradient direction thirty
+     degrees the other side -- and getting that convention wrong in one build
+     is exactly the kind of thing that hides inside a plausible distance. */
+  { key: 'a320neo',  ident: 'ANFL', massKg: 71300, flaps: 2,
+    windKt: 25, windOffsetDeg: 30 },
+  { key: 'a320neo',  ident: 'ANFL', massKg: 71300, flaps: 2,
+    windKt: 25, windOffsetDeg: 210 },
+  { key: 'a320neo',  ident: 'ANFL', massKg: 71300, flaps: 2,
+    windKt: 25, windOffsetDeg: 120 },
+
+  /* And one of each remaining type in still air, so that no type's polar,
+     thrust lapse or flap table is outside the comparison. */
+  { key: 'a320',     ident: 'ANFL', massKg: 69600,  flaps: 2 },
+  { key: 'a321',     ident: 'ANFL', massKg: 85100,  flaps: 2 },
+  { key: 'a330-800', ident: 'ANFL', massKg: 224000, flaps: 1 },
+  { key: 'a330neo',  ident: 'ANFL', massKg: 235000, flaps: 2 },
+  { key: 'a350',     ident: 'VSPR', massKg: 252400, flaps: 2 },
+  { key: 'a350k',    ident: 'CROW', massKg: 285000, flaps: 1 }
+];
+
 /* One resting end-of-flight state per outcome, for the debrief rows. Every row
    is compared on its key, its unit, its decimals, its kind and both numbers --
    and on the rendered string, because that is what a pilot actually reads and
@@ -460,6 +531,13 @@ const DEBRIEF_CASES = [
         reserveKg: plan.reserveKg, blockFuelKg: plan.blockFuelKg,
         requiredKg: plan.requiredKg, spareKg: plan.spareKg,
         enough: plan.enough,
+        /* The other half of "can I get there": the destination has to hold you
+           once you arrive, at the weight you arrive at. */
+        arrivalMassKg: plan.arrivalMassKg,
+        landingRequiredFt: plan.landingRequiredFt,
+        destinationRunwayFt: plan.destinationRunwayFt,
+        landingMarginFt: plan.landingMarginFt,
+        fitsDestination: plan.fitsDestination,
         legs: plan.legs.map(l => ({
           label: l.waypoint.label, distanceNm: l.distanceNm,
           trackDeg: l.trackDeg, fuelKg: l.fuelKg, timeS: l.timeS
@@ -602,6 +680,66 @@ const DEBRIEF_CASES = [
     });
   }, DEBRIEF_CASES);
 
+  const perf = await p.evaluate(cases => {
+    paused = true;
+    startMode = "runway";
+    const fields = buildAuthored();
+    const originalWeather = weather;
+    /* JSON has no infinity and `JSON.stringify` turns one into null, which
+       would read as "the browser has no answer" when it has a definite one: an
+       aeroplane that cannot climb away has an infinite field length, and both
+       builds say so. Carried as a string so the two agree on it as they agree
+       on a number. */
+    const num = v => Number.isFinite(v) ? v : (v > 0 ? 'inf' : '-inf');
+    const rows = cases.map(c => {
+      craft = FLEET_BY_KEY[c.key];
+      newFlight(true);
+      const field = fields.find(f => f.ident === c.ident);
+      /* The air is pinned rather than left wherever the clock has drifted it,
+         and the turbulence sample zeroed, so both builds are asked about the
+         same wind. `windOffsetDeg` is measured from the runway heading. */
+      /* `gustKt` is a getter on the profile in this build and a field in the
+         Python's, so it is not set here -- the gust reaches the ground roll
+         only through the turbulence sample, and that is zeroed below. */
+      weather = new WeatherState(WEATHER_BY_KEY.clear, WORLD_SEED, 0).hold({
+        windKt: c.windKt || 0, turbulence: 0,
+        windDir: (field.heading + (c.windOffsetDeg || 0) + 360) % 360
+      });
+      Object.assign(S, {
+        mass: c.massKg, flaps: c.flaps, gear: true, spoilers: false,
+        brakes: 1, reverse: false, onGround: true, status: "rollout",
+        enginesRunning: true, enginesFailed: [], enginesOnFire: [],
+        failures: [], jammedFlaps: null, jammedGear: null, armedFailure: null,
+        alt: field.elev, hdg: field.heading, rollDirection: field.heading,
+        landingField: field.ident, turb: [0, 0, 0], throttle: 0,
+        pitch: 0, cmdPitch: 0, bank: 0, gamma: 0, beta: 0, rudder: 0
+      });
+      settleEngines(craft, S);
+      S.tas = groundWindMs(S, S.rollDirection)[0];
+
+      const t = takeoffAtFlap(craft, S, field, c.massKg, c.flaps);
+      const best = bestFlapPerformance(craft, S, field, c.massKg);
+      const land = landingPerformance(craft, S, field, c.massKg);
+      const vmcg = vmcgKt(craft, S, field.elev, c.massKg, c.flaps);
+      const [headMs, crossMs] = groundWindMs(S, field.heading);
+      return {
+        headwindMs: headMs, crosswindMs: crossMs, vmcgKt: vmcg,
+        v1Kt: t.v1Kt, vrKt: t.vrKt, v2Kt: t.v2Kt, flaps: t.flaps,
+        accelerateStopFt: num(t.accelerateStopFt),
+        accelerateGoFt: num(t.accelerateGoFt),
+        allEnginesFt: num(t.allEnginesFt),
+        fieldLengthFt: num(t.fieldLengthFt), runwayFt: num(t.runwayFt),
+        marginFt: num(t.marginFt), legal: t.legal, limitedBy: t.limitedBy,
+        bestFlaps: best.flaps, bestFieldLengthFt: num(best.fieldLengthFt),
+        vrefKt: land.vrefKt, groundRollFt: land.groundRollFt,
+        landingDistanceFt: land.landingDistanceFt,
+        landingRequiredFt: land.requiredFt, landingLegal: land.legal
+      };
+    });
+    weather = originalWeather;
+    return rows;
+  }, PERF_CASES);
+
   await browser.close();
   if (errs.length) { console.error('page errors:', errs.slice(0, 3)); process.exit(1); }
   console.log(JSON.stringify({
@@ -612,6 +750,7 @@ const DEBRIEF_CASES = [
     descentCases: DESCENT_CASES, descents,
     trafficTimes: TRAFFIC_TIMES, bandCases: BAND_CASES, traffic,
     atcCases: ATC_CASES, levelCases: LEVEL_CASES, atc: atcRows,
+    perfCases: PERF_CASES, perf,
     minimumCruiseNm: MINIMUM_CRUISE_NM
   }, null, 1));
 })();
